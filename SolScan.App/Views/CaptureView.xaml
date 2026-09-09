@@ -4,11 +4,200 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d">
-    <Grid>
-        <TextBlock Text="{Binding StatusText}"
-                   FontSize="18"
-                   Margin="24"
-                   HorizontalAlignment="Left"
-                   VerticalAlignment="Top" />
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="12"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Top bar: title on the left, camera picker + connect/play + disconnect top-right -->
+        <DockPanel Grid.Row="0">
+            <TextBlock Text="Capture" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ComboBox Width="220" Margin="0,0,8,0"
+                          ItemsSource="{Binding AvailableCameras}"
+                          SelectedItem="{Binding SelectedCamera}"
+                          DisplayMemberPath="Name"/>
+                <Button Content="Refresh" Width="70" Margin="0,0,8,0"
+                        Command="{Binding RefreshCamerasCommand}"/>
+                <Button Width="70" Margin="0,0,8,0" Command="{Binding ToggleLiveViewCommand}">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Content" Value="▶ Play"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                    <Setter Property="Content" Value="⏹ Stop"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="Disconnect" Width="80" Command="{Binding DisconnectCommand}"/>
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Live preview (left, large) + SharpCap-style controls (right) -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="260"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
+                <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
+                     (see FramePreview's class doc comment) and then magnified back up to fill this
+                     area, so a smooth scale looks right where NearestNeighbor would look blocky. -->
+                <Image Source="{Binding PreviewBitmap}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+            </Border>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- Colour space + binning: reconfigured together, and not safe to change
+                         mid-recording (see CaptureViewModel.ApplyOutputFormatChange) - disabled
+                         here too so it's obvious why, rather than a change silently reverting. -->
+                    <TextBlock Text="Colour Space" FontWeight="Bold"/>
+                    <ComboBox Margin="0,4,0,12"
+                              ItemsSource="{Binding AvailableColorSpaces}"
+                              SelectedItem="{Binding SelectedColorSpace}">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+
+                    <TextBlock Text="Binning" FontWeight="Bold"/>
+                    <ComboBox Margin="0,4,0,12"
+                              ItemsSource="{Binding AvailableBinningOptions}"
+                              SelectedItem="{Binding SelectedBinning}">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <!-- Gain: 0-600 (0.1dB/step), matching the ASI678MM's own range in SharpCap -->
+                    <DockPanel Margin="0,0,0,4">
+                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsGainAuto}"/>
+                        <TextBlock Text="{Binding Gain, StringFormat='Gain: {0:0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <Slider Minimum="0" Maximum="600" Value="{Binding Gain}" Margin="0,0,0,12">
+                        <Slider.Style>
+                            <Style TargetType="Slider">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+
+                    <!-- Exposure: 0.032ms-5s on a log scale (see ExposureScale) - the slider itself
+                         drags a 0-1 position, ExposureMicroseconds/ExposureDisplayText follow it -->
+                    <DockPanel Margin="0,0,0,4">
+                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsExposureAuto}"/>
+                        <TextBlock Text="{Binding ExposureDisplayText, StringFormat='Exposure: {0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <Slider Minimum="0" Maximum="1" Value="{Binding ExposureSliderPosition}" Margin="0,0,0,12">
+                        <Slider.Style>
+                            <Style TargetType="Slider">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+
+                    <!-- USB Turbo: 40-100, matching SharpCap's floor for the ASI678MM -->
+                    <DockPanel Margin="0,0,0,4">
+                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsUsbBandwidthAuto}"/>
+                        <TextBlock Text="{Binding UsbBandwidthPercent, StringFormat='USB Turbo: {0}%'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <Slider Minimum="40" Maximum="100" Value="{Binding UsbBandwidthPercent}" Margin="0,0,0,12">
+                        <Slider.Style>
+                            <Style TargetType="Slider">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsUsbBandwidthAuto}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only, never
+                         affects what's recorded, matches SharpCap's "Display Histogram Stretch" -->
+                    <DockPanel Margin="0,0,0,4">
+                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsContrastAuto}"/>
+                        <TextBlock Text="Contrast" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock Text="Black point" Margin="0,4,0,0"/>
+                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastBlackPoint}">
+                        <Slider.Style>
+                            <Style TargetType="Slider">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+                    <TextBlock Text="White point" Margin="0,4,0,0"/>
+                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastWhitePoint}" Margin="0,0,0,12">
+                        <Slider.Style>
+                            <Style TargetType="Slider">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Slider.Style>
+                    </Slider>
+
+                    <TextBlock Text="Histogram" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <Border Height="60" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
+                        <Viewbox Stretch="Fill">
+                            <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
+                        </Viewbox>
+                    </Border>
+                    <!-- Matches ASICap's own Max/Min/AVG readout - the fastest way to tell a
+                         display-stretch issue apart from the camera reporting different raw
+                         values than expected for the current Colour Space. -->
+                    <TextBlock Text="{Binding HistogramStatsText}" Opacity="0.8" FontSize="11" Margin="0,4,0,12"/>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <Button Content="Start Recording" Command="{Binding StartRecordingCommand}" Margin="0,0,0,8"/>
+                    <Button Content="Stop Recording" Command="{Binding StopRecordingCommand}" Margin="0,0,0,12"/>
+
+                    <TextBlock Text="{Binding FrameCount, StringFormat='Frames written: {0}'}"/>
+                    <TextBlock Text="{Binding DroppedFrameCount, StringFormat='Dropped frames: {0}'}"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <TextBlock Grid.Row="4" Text="{Binding StatusText}" Opacity="0.8"/>
     </Grid>
 </UserControl>

@@ -31,9 +31,14 @@ public partial class NavigationViewModel : ObservableObject
     [ObservableProperty]
     private object? currentViewModel;
 
-    public NavigationViewModel(IServiceProvider serviceProvider)
+    /// <summary>Bound as the StatusBar UserControl's DataContext in MainWindow.xaml - same
+    /// shape as RASTA's NavigationViewModel.StatusBarViewModel.</summary>
+    public StatusBarViewModel StatusBarViewModel { get; }
+
+    public NavigationViewModel(IServiceProvider serviceProvider, StatusBarViewModel statusBarViewModel)
     {
         _serviceProvider = serviceProvider;
+        StatusBarViewModel = statusBarViewModel;
     }
 
     public void NavigateTo<TViewModel>() where TViewModel : class

@@ -12,7 +12,15 @@
     <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
   </ItemGroup>
 
-  <!-- Native camera SDK binaries (e.g. ZWO ASICamera2.dll, x64) will ship alongside this
-       assembly once the camera wrapper lands - see SolScan CLAUDE.md Phase 4. -->
+  <!-- Native camera SDK binaries (ZWO's ASICamera2.dll, Altair's altaircam.dll, both x64) are not
+       committed - see ASICamera2.README.md / altaircam.README.md. Sit flat in this project's own
+       folder (not nested under Camera\...) so CopyToOutputDirectory's default behaviour already
+       places them next to the built assembly with no Link/flattening needed - P/Invoke's default
+       DllImport search only looks in the app's own base directory, not subfolders under it.
+       Condition guards let the build succeed with either file absent (see the READMEs). -->
+  <ItemGroup>
+    <None Include="ASICamera2.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('ASICamera2.dll')" />
+    <None Include="altaircam.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('altaircam.dll')" />
+  </ItemGroup>
 
 </Project>

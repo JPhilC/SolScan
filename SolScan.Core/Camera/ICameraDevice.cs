@@ -4,6 +4,19 @@ namespace SolScan.Core.Camera;
 public sealed record CameraFrame(byte[] Data, int Width, int Height, int BitDepth, DateTime TimestampUtc);
 
 /// <summary>
+/// The camera's output pixel format for streaming - SharpCap's "Colour Space" control. Mono8
+/// trades precision for less USB bandwidth/higher achievable frame rate (the sensor's ADC reading
+/// is truncated down to 8 bits, still spanning the full 0-255 range); Mono16 keeps the sensor's
+/// full native precision in a 16-bit container (see <see cref="ICameraDevice"/>'s mono-only scope
+/// note - no colour/Bayer formats, matching this app's mono target cameras).
+/// </summary>
+public enum CameraOutputFormat
+{
+    Mono8,
+    Mono16,
+}
+
+/// <summary>
 /// Abstraction over the acquisition camera (ZWO ASI678MM to start with, via SolScan.Infrastructure's
 /// native SDK wrapper). Streaming rather than single-shot, since both live preview and SER recording
 /// consume the same continuous frame feed - see SolScan CLAUDE.md Phase 4/5.
@@ -16,10 +29,30 @@ public sealed record CameraFrame(byte[] Data, int Width, int Height, int BitDept
 /// </summary>
 public interface ICameraDevice
 {
+    /// <summary>
+    /// Stable identifier for this specific device (e.g. the vendor SDK's camera index/serial) -
+    /// used to persist "last used camera" selection and to tell two attached units of the same
+    /// model apart. Set at discovery time; doesn't change across connect/disconnect.
+    /// </summary>
+    string Id { get; }
+
+    /// <summary>Display name for the camera picker (e.g. "ZWO ASI678MM"). Available before
+    /// <see cref="ConnectAsync"/> is ever called - the same instance is returned by
+    /// <see cref="Camera.ICameraProvider.Discover"/> and then connected, matching N.I.N.A.'s
+    /// discover-then-connect shape (see SolScan CLAUDE.md's N.I.N.A. entry).</summary>
+    string Name { get; }
+
     bool IsConnected { get; }
     bool IsStreaming { get; }
 
+    /// <summary>Raw sensor gain. Range/units are vendor- (really sensor-) specific - the ASI678MM
+    /// (0-600, 0.1dB/step, matching what SharpCap shows for it) is what SolScan.App's sliders are
+    /// currently calibrated to; a different sensor's real range may not match.</summary>
     double Gain { get; set; }
+
+    /// <summary>Exposure time in microseconds. SolScan.App's slider maps this on a log scale (see
+    /// <see cref="ExposureScale"/>) over the ASI678MM's non-"long exposure mode" range - LX mode
+    /// (exposures beyond ~5s) isn't supported, and isn't needed for SHG drift-scan capture anyway.</summary>
     double ExposureMicroseconds { get; set; }
 
     /// <summary>
@@ -29,6 +62,51 @@ public interface ICameraDevice
     /// concern a single long-exposure download ever has - see the class doc comment above.
     /// </summary>
     int UsbBandwidthPercent { get; set; }
+
+    /// <summary>Whether the camera's own auto-gain algorithm is driving <see cref="Gain"/> rather
+    /// than the user - mirrors SharpCap's per-slider "Auto" button. A vendor with no independent
+    /// auto-gain control (Altair conflates gain and exposure under one auto-exposure flag - see
+    /// <c>AltairCameraDevice</c>) may tie this to the same underlying toggle as
+    /// <see cref="IsExposureAuto"/>.</summary>
+    bool IsGainAuto { get; set; }
+
+    /// <summary>Whether the camera's own auto-exposure algorithm is driving
+    /// <see cref="ExposureMicroseconds"/> rather than the user.</summary>
+    bool IsExposureAuto { get; set; }
+
+    /// <summary>Whether the camera should pick <see cref="UsbBandwidthPercent"/> itself. Not every
+    /// vendor's SDK supports this (Altair's transfer-speed control has no auto mode) - such a
+    /// device just ignores the setter and always reports false.</summary>
+    bool IsUsbBandwidthAuto { get; set; }
+
+    /// <summary>Current output pixel format - see <see cref="CameraOutputFormat"/>. Change it via
+    /// <see cref="SetOutputFormatAsync"/>, not a plain setter: reconfiguring it is a real native
+    /// operation (it changes <see cref="CameraFrame"/>'s BitDepth, and on some SDKs needs streaming
+    /// briefly stopped and restarted around it), not a cheap value push like <see cref="Gain"/>.</summary>
+    CameraOutputFormat OutputFormat { get; }
+
+    /// <summary>Current binning factor (1 = none/1x1). Binning sums/averages NxN sensor pixels
+    /// into one, so it also shrinks <see cref="CameraFrame"/>'s Width/Height by this factor - e.g.
+    /// binning=2 on a 3840x2160 sensor yields 1920x1080 frames. Change it via
+    /// <see cref="SetOutputFormatAsync"/>, alongside <see cref="OutputFormat"/> - ASI sets both in
+    /// one native call.</summary>
+    int Binning { get; }
+
+    /// <summary>The binning factors this specific camera actually supports (e.g. [1, 2, 3, 4] for
+    /// the ASI678MM, read from the SDK's own reported capability list where available) - what
+    /// SolScan.App's binning dropdown populates itself from, rather than assuming every camera
+    /// supports the same range.</summary>
+    IReadOnlyList<int> SupportedBinning { get; }
+
+    /// <summary>
+    /// Reconfigures <see cref="OutputFormat"/> and <see cref="Binning"/> together (ASI sets both in
+    /// one native ROI-format call, so there's no point splitting them into two operations) - if
+    /// already streaming, stops and restarts streaming around the change so the caller doesn't have
+    /// to orchestrate that itself. Not safe to call while a recording is in progress: the change
+    /// alters frame geometry/bit depth mid-file, which a SER file's fixed header can't represent -
+    /// SolScan.App's CaptureViewModel guards against this at the UI layer.
+    /// </summary>
+    Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Cumulative count of frames the SDK's internal ring buffer dropped because they weren't

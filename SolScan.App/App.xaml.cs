@@ -2,8 +2,15 @@ using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using SolScan.App.ViewModels;
+using SolScan.Core.Camera;
+using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
+using SolScan.Infrastructure.Camera;
+using SolScan.Infrastructure.Camera.Altair;
+using SolScan.Infrastructure.Camera.Asi;
+using SolScan.Infrastructure.Capture;
 using SolScan.Infrastructure.Equipment;
+using SolScan.Simulators;
 
 namespace SolScan.App;
 
@@ -55,11 +62,30 @@ public partial class App : Application
 
     private static void ConfigureServices(IServiceCollection services)
     {
-        // TODO (Phase 2+): register ITelescopeMount / ICameraDevice / ISerWriter
-        // implementations from SolScan.Infrastructure here once they exist.
+        // TODO (Phase 2+): register ITelescopeMount from SolScan.Infrastructure once it exists.
 
         services.AddSingleton<IEquipmentLibrary, JsonEquipmentLibrary>();
 
+        // One ICameraProvider per vendor (plus the hardware-free simulator) - aggregated by
+        // ICameraDiscoveryService for the Capture view's camera picker. Each provider degrades to
+        // an empty Discover() if its native SDK DLL isn't present - see
+        // SolScan.Infrastructure/ASICamera2.README.md / altaircam.README.md.
+        services.AddSingleton<ICameraProvider, AsiCameraProvider>();
+        services.AddSingleton<ICameraProvider, AltairCameraProvider>();
+        services.AddSingleton<ICameraProvider, SimulatedCameraProvider>();
+        services.AddSingleton<ICameraDiscoveryService, CameraDiscoveryService>();
+
+        // Per-camera-model (keyed by name, e.g. "ZWO ASI678MM") dial-in settings, remembered
+        // across sessions - see ICameraSettingsStore's own doc comment for why Name, not Id.
+        services.AddSingleton<ICameraSettingsStore, JsonCameraSettingsStore>();
+
+        // Transient so CaptureViewModel gets a fresh writer per recording; resolved via a factory
+        // delegate rather than an injected IServiceProvider, to keep the view model out of the
+        // service-locator pattern.
+        services.AddTransient<ISerWriter, SerWriter>();
+        services.AddSingleton<Func<ISerWriter>>(sp => sp.GetRequiredService<ISerWriter>);
+
+        services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<NavigationViewModel>();
         services.AddTransient<PrepareViewModel>();
         services.AddTransient<CaptureViewModel>();

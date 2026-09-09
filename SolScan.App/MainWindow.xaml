@@ -69,10 +69,14 @@
             <ColumnDefinition Width="220"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
         <!-- Sidebar: nav buttons run down the left-hand margin, with Options docked to the
              bottom of the sidebar regardless of window height. -->
-        <DockPanel Grid.Column="0"
+        <DockPanel Grid.Row="0" Grid.Column="0"
                    Background="#FF050910">
 
             <!-- Decorative footer, anchored below the Options button at the very bottom of the
@@ -165,8 +169,13 @@
         </DockPanel>
 
         <!-- Main Content -->
-        <ContentControl Grid.Column="1"
+        <ContentControl Grid.Row="0" Grid.Column="1"
                         Content="{Binding CurrentViewModel}"
                         Margin="20"/>
+
+        <!-- Status bar: full width, below both the sidebar and content - same role/placement as
+             RASTA's own StatusBar.xaml. -->
+        <views:StatusBar Grid.Row="1" Grid.ColumnSpan="2"
+                         DataContext="{Binding StatusBarViewModel}"/>
     </Grid>
 </Window>

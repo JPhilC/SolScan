@@ -39,6 +39,9 @@
     <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
     <ProjectReference Include="..\SolScan.Infrastructure\SolScan.Infrastructure.csproj" />
     <ProjectReference Include="..\SolScan.Processing\SolScan.Processing.csproj" />
+    <!-- SimulatedCameraProvider - guarantees the Capture view's camera picker always has at
+         least one entry, even with zero ZWO/Altair hardware attached. -->
+    <ProjectReference Include="..\SolScan.Simulators\SolScan.Simulators.csproj" />
   </ItemGroup>
 
 </Project>

@@ -19,6 +19,8 @@
   <ItemGroup>
     <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
     <ProjectReference Include="..\SolScan.Processing\SolScan.Processing.csproj" />
+    <ProjectReference Include="..\SolScan.Infrastructure\SolScan.Infrastructure.csproj" />
+    <ProjectReference Include="..\SolScan.Simulators\SolScan.Simulators.csproj" />
   </ItemGroup>
 
   <ItemGroup>

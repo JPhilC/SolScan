@@ -480,3 +480,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Third-party camera SDK native binaries - not committed (unverified vendor redistribution
+# terms; see SolScan.Infrastructure/ASICamera2.README.md / altaircam.README.md for where to get
+# them yourself).
+SolScan.Infrastructure/ASICamera2.dll
+SolScan.Infrastructure/altaircam.dll

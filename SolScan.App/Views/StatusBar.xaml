@@ -1,0 +1,11 @@
+<UserControl x:Class="SolScan.App.Views.StatusBar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Same dark bar / bold-label-then-value styling as RASTA's own StatusBar.xaml, docked
+         full-width at the bottom of MainWindow.xaml. -->
+    <Border Background="#FF2D2D2D" Padding="8,4">
+        <StackPanel Orientation="Horizontal">
+            <TextBlock Text="{Binding CaptureFrameRateText}" Foreground="White" VerticalAlignment="Center"/>
+        </StackPanel>
+    </Border>
+</UserControl>
