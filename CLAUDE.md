@@ -73,6 +73,24 @@ interface exists.
     findings (`tiltDegrees`, `xyRatio`) from ellipse-fitting the reconstructed disk. Two unrelated
     pipeline stages that happen to be reported together - SolScan's Process stage should adopt the
     same two-part results panel (see Phase 7).
+  - **`ExposureCalculator`** (`jsolex/.../app/jfx/ExposureCalculator.java`) — recommends a starting
+    exposure/fps from real optics, not a guess: apparent solar disk size today (a low-precision
+    analytic solar ephemeris - mean anomaly → true anomaly → Earth-Sun distance in AU → apparent
+    angular diameter, since it varies ~3% over the year) → disk image size at the slit (telescope
+    focal length) → disk image size on the sensor (scaled by the SHG's own `cameraFocalLength /
+    collimatorFocalLength` re-imaging ratio) → pixels (sensor pixel size × binning) → divided by
+    scan time available (`apparent size arcmin × 4 / scanSpeed`, where `scanSpeed` is a multiplier
+    of the sun's ~15"/sec apparent motion - Sol'ex users commonly drive RA well above sidereal to
+    control scan speed directly rather than relying only on natural drift, worth keeping in mind for
+    `ITelescopeMount`'s tracking design in Phase 2/3 - with a `cos(declination)` correction for RA
+    scans). All static methods, `java.time`/`Math` only - no JavaFX dependency in the algorithm
+    itself, so it ports directly. The apparent-disk-size/declination part is the same ephemeris
+    Phase 3's `SunPosition` needs - build it once in `SolScan.Core`, share it between "find the sun"
+    and this calculator. `SpectroHeliograph.java` (same `params` package) already carries a
+    `SOLEX`/`SOLEX_10`/`SOLEX_7` preset matching real Sol'ex hardware (34° total angle, 125mm camera
+    focal length, 80mm collimator, 2400 lines/mm, order 1) and `Setup.java` is the telescope/camera
+    equivalent (focal length, aperture, pixel size, site lat/long, mount) - both worth adopting as
+    SolScan.Core equipment-profile records rather than reinventing the shape.
 
 ## Commands
 
@@ -101,7 +119,11 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   lat/lon/elevation), `ICameraDevice` (streaming frame capture, gain/exposure), `ISerWriter`
   (writes a live frame stream to a `.ser` file). References `CommunityToolkit.Mvvm` for
   `ObservableObject`/`RelayCommand` base classes on domain models that need change notification
-  (e.g. live capture/session state), without pulling in WPF itself.
+  (e.g. live capture/session state), without pulling in WPF itself. Will also carry equipment-profile
+  records ported from astro4j's shape (see below) - a `SpectrographProfile` (Sol'ex-equivalent to
+  `SpectroHeliograph.java`: total angle, camera/collimator focal lengths, grating density/order, slit
+  size) and an `EquipmentProfile` (telescope-equivalent to `Setup.java`: focal length, aperture,
+  pixel size, mount) - not yet added.
 - **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca telescope client (to be
   ported from RASTA's `AscomAlpacaClient`/`AscomTelescopeMount`), a ZWO ASI camera wrapper (native
   SDK P/Invoke), a `.ser` file writer/reader. Not yet implemented.
@@ -134,10 +156,15 @@ empty class libraries with only a project reference to `Core` so far.
    `ITelescopeMount`, wire a real Prepare-stage connect/disconnect/site-settings UI.
 3. **Find the sun** — add a solar ephemeris (`SunPosition`, low-precision analytic, arc-minute
    accuracy is enough for a slit-width offset) to `SolScan.Core`, add a "slew to sun + lead offset"
-   command to the Capture stage.
+   command to the Capture stage. Build the apparent-disk-size/declination part so Phase 4's exposure
+   calculator can reuse it rather than duplicating the ephemeris.
 4. **Manual capture** — ZWO ASI SDK wrapper implementing `ICameraDevice`, live preview in the
    Capture view, manual start/stop recording through a real `ISerWriter` implementation. This alone
    matches what SharpCap does today. Carries over the sunscan-app UX features noted above:
+   - an exposure/fps calculator (port `ExposureCalculator.java`'s physics - apparent disk size at
+     the slit, through the SHG's camera/collimator focal-length ratio, to pixels on the sensor,
+     divided by scan time from the mount's scan-rate multiplier) suggesting a starting point before
+     the sliders below are hand-tuned; needs `SpectrographProfile`/`EquipmentProfile` data from Core
    - live gain/exposure sliders driving the camera in real time, not a separate settings dialog
    - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
      vs. the tighter view actually used while recording
