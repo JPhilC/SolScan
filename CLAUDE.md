@@ -33,16 +33,18 @@ interface exists.
   Capture-stage UX features SolScan should reproduce (see `screens/ScanScreen.js`):
   - **Gain/exposure controls** — live sliders (`GAIN`, exposure time) sent to the backend as the
     preview updates, not just a settings screen buried elsewhere.
-  - **Camera focus aid** — a toggleable "focus assistant" overlay; on the backend this is
-    `focus_analyzer.py`'s `measure_focus_two_edges` (gradient-based sharpness of the solar disk's
-    edges in a live frame, smoothed/normalized over recent frames). SolScan needs the equivalent for
-    the ASI678MM's own optical focus.
-  - **Collimator focus aid** — a related but distinct concern specific to a slit spectrograph
-    (Sol'ex) that Sunscan's simpler design doesn't have an exact equivalent for: judging the
-    sharpness/quality of the spectral line image at the slit itself, as opposed to the camera's
-    optical focus. Likely built on the same live-frame-gradient technique as the camera focus aid,
-    but measuring the spectral line profile rather than the disk edge - needs its own aid, not
-    reuse-as-is.
+  - **Two distinct focus aids, both already present** (initially misread as one aid plus a gap -
+    corrected after re-checking against the real app):
+    - **Camera focus** — the "Spectrum" toggle (`toggleSpectrum('vertical')`, `align-horizontal-middle`
+      icon, `ScanScreen.js` ~607-616), which streams a live FWHM (full-width-half-maximum) of the
+      spectral line profile (`main.py`'s `calculate_fwhm`, over the `spectrum` websocket channel). A
+      narrower line = sharper camera focus - this reflects the camera sensor's own optical focus,
+      independent of the spectrograph's alignment.
+    - **Collimator focus** — the "Focus" toggle (prism icon, `toggleFocus`, gated to crop/ROI mode),
+      backed by `focus_analyzer.py`'s `measure_focus_two_edges` (gradient-based sharpness of the solar
+      disk's edges built up during a scan, over the `focus` websocket channel, with a running
+      "best so far" high-water mark). This reflects the collimator's alignment, not the camera's.
+    Both need porting to SolScan; neither is a stand-in for the other.
   - **Wide view / clipped (ROI) view toggle** — `toggleCrop`/`updatePosYCrop` swap between a wide
     preview (for finding/framing the disk and the slit) and a cropped, vertically-positionable
     region-of-interest view used during actual capture. SolScan's Capture view needs the same two
@@ -119,8 +121,10 @@ empty class libraries with only a project reference to `Core` so far.
    - live gain/exposure sliders driving the camera in real time, not a separate settings dialog
    - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
      vs. the tighter view actually used while recording
-   - a camera focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement)
-   - a collimator focus aid (new - spectral-line-sharpness-at-the-slit, not disk-edge-based)
+   - a camera focus aid (port `calculate_fwhm`'s spectral-line-width measurement - narrower FWHM
+     means sharper camera focus)
+   - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
+     disk edges mean better collimator alignment)
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
    the disk entering/centred on/leaving the slit from the live preview (port the technique from
    `locate_lines.py`/`focus_analyzer.py`), tie into step 3's slew-ahead-and-drift logic as one
