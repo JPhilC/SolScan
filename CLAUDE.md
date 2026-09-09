@@ -121,6 +121,23 @@ interface exists.
     focal length, 80mm collimator, 2400 lines/mm, order 1) and `Setup.java` is the telescope/camera
     equivalent (focal length, aperture, pixel size, site lat/long, mount) - both worth adopting as
     SolScan.Core equipment-profile records rather than reinventing the shape.
+- **N.I.N.A.** (`C:\Source\Repos\JPhilC\nina`, third-party, MPL-2.0 - studied for reference, nothing
+  ported) — validated `ICameraDevice`'s shape rather than supplying code to port. Multi-vendor camera
+  support is layered `NINA.Equipment/SDK/CameraSDKs/<Vendor>SDK/` (raw P/Invoke, ~1:1 with the
+  vendor's native C API) → `NINA.Equipment/Interfaces/ICamera.cs` (the one common interface the rest
+  of NINA talks to) → `NINA.Equipment/Equipment/MyCamera/<Vendor>Camera.cs` (the adapter implementing
+  `ICamera` against that vendor's SDK class) - the same shape `ICameraDevice`/a future ASI SDK wrapper
+  already follows. Confirms two things concretely (not inferred): `IGenericCameraSDK.cs` exposes
+  `StartExposure`/`GetExposure` *and* a separate `StartVideoCapture`/`StopVideoCapture`/
+  `GetVideoCapture` - native astro-camera SDKs really do treat single-shot and streaming capture as
+  distinct API families, not one generalized "capture" call - and `ICamera.cs` exposes
+  `CanSetUSBLimit`/`USBLimit`, a streaming-specific throttle with no equivalent for a one-shot
+  download, which is what motivated adding `ICameraDevice.UsbBandwidthPercent`/`DroppedFrameCount`
+  (see "Video vs. long-exposure stills" under Phase 4). SharpCap (closed-source, not clonable) was
+  also researched for its camera-support model via its own public docs/forum posts rather than
+  source - a three-tier native-SDK/ASCOM/DirectShow fallback with no public extension point, useful
+  for its documented *behaviour* (prefer native > ASCOM > DirectShow when more than one applies to a
+  camera) but not something to model `ICameraDevice`'s actual structure on the way NINA's code is.
 
 ## Commands
 
@@ -147,7 +164,8 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
 - **SolScan.Core** — domain models and interfaces only, no concrete hardware/IO deps:
   `ITelescopeMount` (connect/disconnect, current position, slew, tracking, park/unpark, site
   lat/lon/elevation - RA/Dec-only by design, see "Scope for v1" above), `ICameraDevice` (streaming
-  frame capture, gain/exposure), `ISerWriter`
+  frame capture only, no long-exposure-still path by design - see "Video vs. long-exposure stills"
+  under Phase 4; gain/exposure, `UsbBandwidthPercent`, `DroppedFrameCount`), `ISerWriter`
   (writes a live frame stream to a `.ser` file). References `CommunityToolkit.Mvvm` for
   `ObservableObject`/`RelayCommand` base classes on domain models that need change notification
   (e.g. live capture/session state), without pulling in WPF itself. Also carries the `Equipment`
@@ -226,6 +244,20 @@ only a project reference to `Core`.
 4. **Manual capture** — ZWO ASI SDK wrapper implementing `ICameraDevice`, live preview in the
    Capture view, manual start/stop recording through a real `ISerWriter` implementation. This alone
    matches what SharpCap does today. Carries over the sunscan-app UX features noted above:
+
+   **Video vs. long-exposure stills**: SolScan is deliberately scoped to streaming/video capture
+   only - continuous frames for live preview and SER recording - never NINA's single-shot
+   `StartExposure`/`DownloadExposure` long-exposure-still model, and `ICameraDevice` has no such
+   path. These are genuinely different SDK API families (confirmed from NINA's own
+   `IGenericCameraSDK.cs`, not inferred - see the N.I.N.A. entry above), not just "the same call with
+   a different duration": a request/response cycle (start, wait seconds-to-minutes, download one
+   frame) versus a continuous producer/consumer stream (sub-ms-to-low-ms exposures, frames arriving
+   continuously until told to stop). That difference is why `ICameraDevice` carries
+   `UsbBandwidthPercent` (throttles sustained throughput against max achievable fps - irrelevant to a
+   single occasional download) and `DroppedFrameCount` (the SDK's ring buffer overwrites frames the
+   app doesn't pull fast enough - a failure mode a one-shot download has no equivalent of). Wire the
+   ASI SDK wrapper to its video-capture API family (`ASIStartVideoCapture`/`ASIGetVideoData`), not
+   its single-exposure one (`ASIStartExposure`/`ASIGetDataAfterExp`).
    - an exposure/fps calculator (port `ExposureCalculator.java`'s physics - apparent disk size at
      the slit, through the SHG's camera/collimator focal-length ratio, to pixels on the sensor,
      divided by scan time from the mount's scan-rate multiplier) suggesting a starting point before
