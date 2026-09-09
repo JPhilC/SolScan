@@ -11,7 +11,22 @@ namespace SolScan.App.ViewModels;
 /// </summary>
 public partial class NavigationViewModel : ObservableObject
 {
+    /// <summary>
+    /// Mirrors RASTA's NavigationViewModel.NavigationSection - drives which sidebar button is
+    /// highlighted as "current" in MainWindow.xaml's DataTrigger styling.
+    /// </summary>
+    public enum NavigationSection
+    {
+        Prepare,
+        Capture,
+        Process,
+        Options
+    }
+
     private readonly IServiceProvider _serviceProvider;
+
+    [ObservableProperty]
+    private NavigationSection currentSection = NavigationSection.Prepare;
 
     [ObservableProperty]
     private object? currentViewModel;
@@ -27,11 +42,30 @@ public partial class NavigationViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void NavigatePrepare() => NavigateTo<PrepareViewModel>();
+    private void NavigatePrepare()
+    {
+        CurrentSection = NavigationSection.Prepare;
+        NavigateTo<PrepareViewModel>();
+    }
 
     [RelayCommand]
-    private void NavigateCapture() => NavigateTo<CaptureViewModel>();
+    private void NavigateCapture()
+    {
+        CurrentSection = NavigationSection.Capture;
+        NavigateTo<CaptureViewModel>();
+    }
 
     [RelayCommand]
-    private void NavigateProcess() => NavigateTo<ProcessViewModel>();
+    private void NavigateProcess()
+    {
+        CurrentSection = NavigationSection.Process;
+        NavigateTo<ProcessViewModel>();
+    }
+
+    [RelayCommand]
+    private void NavigateOptions()
+    {
+        CurrentSection = NavigationSection.Options;
+        NavigateTo<OptionsViewModel>();
+    }
 }

@@ -150,14 +150,22 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   frame capture, gain/exposure), `ISerWriter`
   (writes a live frame stream to a `.ser` file). References `CommunityToolkit.Mvvm` for
   `ObservableObject`/`RelayCommand` base classes on domain models that need change notification
-  (e.g. live capture/session state), without pulling in WPF itself. Will also carry equipment-profile
-  records ported from astro4j's shape (see below) - a `SpectrographProfile` (Sol'ex-equivalent to
-  `SpectroHeliograph.java`: total angle, camera/collimator focal lengths, grating density/order, slit
-  size) and an `EquipmentProfile` (telescope-equivalent to `Setup.java`: focal length, aperture,
-  pixel size, mount) - not yet added.
+  (e.g. live capture/session state), without pulling in WPF itself. Also carries the `Equipment`
+  namespace's equipment-profile records, adapted from astro4j's shape: `SpectrographProfile`
+  (Sol'ex-equivalent to `SpectroHeliograph.java`: total angle, camera/collimator focal lengths,
+  grating density/order, slit size) and `EquipmentProfile` (telescope-equivalent to `Setup.java`:
+  telescope/camera names, focal length, aperture, pixel size, mount, site lat/long). Unlike astro4j,
+  where `SpectroHeliograph` and `Setup` are two independently-selected libraries with no persisted
+  link between them, SolScan adds a third record, `EquipmentSetup` - a saved "this SHG is mounted
+  behind this telescope/camera" combination, referencing the other two by `Id` - plus
+  `IEquipmentLibrary`, the persistence abstraction for all three libraries (implemented by
+  `SolScan.Infrastructure`'s `JsonEquipmentLibrary`, one JSON file per library under
+  `%LocalAppData%\SolScan\equipment\`, mirroring astro4j's `SpectroHeliographsIO`/`SetupsIO`). Backs the
+  Options view - see below.
 - **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca telescope client (to be
   ported from RASTA's `AscomAlpacaClient`/`AscomTelescopeMount`), a ZWO ASI camera wrapper (native
-  SDK P/Invoke), a `.ser` file writer/reader. Not yet implemented.
+  SDK P/Invoke), a `.ser` file writer/reader - none of those three implemented yet. `JsonEquipmentLibrary`
+  (see above) is implemented.
 - **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline. Not
   yet implemented — starts as a wrapper shelling out to `jsolex-cli`, then incrementally replaced
   with native ports of `SolexVideoProcessor`'s individual workflow steps (spectral line detection,
@@ -166,19 +174,27 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   `ServiceCollection` built once at startup (no scopes created afterward), same pattern RASTA uses.
   `MainWindow` binds to `NavigationViewModel.CurrentViewModel`, swapped via
   `NavigationViewModel.NavigateTo<TViewModel>()` (resolves from the DI container) - no
-  router/framework, deliberately, same as RASTA. Three stage view models exist as placeholders:
-  `PrepareViewModel`, `CaptureViewModel`, `ProcessViewModel`, each currently just a `StatusText`
-  string bound into its view.
+  router/framework, deliberately, same as RASTA. The left-hand nav sidebar (mirroring RASTA's
+  `MainWindow.xaml`) has four buttons - Prepare/Capture/Process plus Options, docked to the bottom
+  of the sidebar. `PrepareViewModel`, `CaptureViewModel`, `ProcessViewModel` remain placeholders,
+  each currently just a `StatusText` string bound into its view. `OptionsViewModel` is real: it's
+  SolScan's equivalent of JSolex's "Equipment" menu (`SpectroHeliographEditor.java` +
+  `SetupEditor.java`), embedded as three tabs (Spectrographs / Telescopes & Cameras / Setups) rather
+  than separate modal dialogs, each tab backed by its own list-view-model
+  (`SpectrographLibraryViewModel`, `EquipmentProfileLibraryViewModel`, `EquipmentSetupLibraryViewModel`
+  under `ViewModels/Equipment`) editing `SolScan.Core.Equipment` records through `IEquipmentLibrary`.
 
 ### What's real vs. placeholder right now
 
 Real: the solution/project scaffolding, the three-project dependency layering, the DI composition
-root, the nav shell (Prepare/Capture/Process buttons swap the content pane), and the `ITelescopeMount`
-/`ICameraDevice`/`ISerWriter` contracts in Core.
+root, the nav shell (Prepare/Capture/Process/Options buttons swap the content pane), the
+`ITelescopeMount`/`ICameraDevice`/`ISerWriter` contracts in Core, and the Options view's equipment
+library (`SpectrographProfile`/`EquipmentProfile`/`EquipmentSetup` + `IEquipmentLibrary`, backed by
+`JsonEquipmentLibrary`).
 
-Placeholder: everything behind those contracts. No ASCOM client, no camera wrapper, no SER I/O, no
-solar ephemeris, no processing pipeline. `SolScan.Simulators` and `SolScan.Infrastructure` are both
-empty class libraries with only a project reference to `Core` so far.
+Placeholder: everything else behind those contracts. No ASCOM client, no camera wrapper, no SER I/O,
+no solar ephemeris, no processing pipeline. `SolScan.Simulators` is still an empty class library with
+only a project reference to `Core`.
 
 ## Phased build plan
 

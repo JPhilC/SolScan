@@ -1,6 +1,8 @@
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using SolScan.App.ViewModels;
+using SolScan.Core.Equipment;
+using SolScan.Infrastructure.Equipment;
 
 namespace SolScan.App;
 
@@ -32,10 +34,13 @@ public partial class App : Application
         // TODO (Phase 2+): register ITelescopeMount / ICameraDevice / ISerWriter
         // implementations from SolScan.Infrastructure here once they exist.
 
+        services.AddSingleton<IEquipmentLibrary, JsonEquipmentLibrary>();
+
         services.AddSingleton<NavigationViewModel>();
         services.AddTransient<PrepareViewModel>();
         services.AddTransient<CaptureViewModel>();
         services.AddTransient<ProcessViewModel>();
+        services.AddTransient<OptionsViewModel>();
         services.AddSingleton<MainWindow>();
     }
 

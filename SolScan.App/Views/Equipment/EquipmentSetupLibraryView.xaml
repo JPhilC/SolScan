@@ -1,0 +1,43 @@
+<UserControl x:Class="SolScan.App.Views.Equipment.EquipmentSetupLibraryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="20"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Library list -->
+        <DockPanel Grid.Column="0">
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="Add" Width="70" Margin="0,0,8,0" Command="{Binding AddCommand}"/>
+                <Button Content="Remove" Width="70" Command="{Binding RemoveCommand}"/>
+            </StackPanel>
+            <ListBox ItemsSource="{Binding Items}"
+                     SelectedItem="{Binding SelectedItem}"
+                     DisplayMemberPath="Label"/>
+        </DockPanel>
+
+        <!-- Selected setup: which spectrograph is mounted with which telescope/camera profile -->
+        <StackPanel Grid.Column="2" DataContext="{Binding SelectedItem}">
+            <TextBlock Text="Label" Margin="0,0,0,4"/>
+            <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" Width="280" HorizontalAlignment="Left"/>
+
+            <TextBlock Text="Spectrograph" Margin="0,16,0,4"/>
+            <ComboBox Width="280" HorizontalAlignment="Left"
+                      ItemsSource="{Binding DataContext.AvailableSpectrographs, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                      DisplayMemberPath="Label"
+                      SelectedItem="{Binding Spectrograph}"/>
+
+            <TextBlock Text="Telescope / camera" Margin="0,16,0,4"/>
+            <ComboBox Width="280" HorizontalAlignment="Left"
+                      ItemsSource="{Binding DataContext.AvailableEquipmentProfiles, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                      DisplayMemberPath="Label"
+                      SelectedItem="{Binding EquipmentProfile}"/>
+        </StackPanel>
+    </Grid>
+</UserControl>
