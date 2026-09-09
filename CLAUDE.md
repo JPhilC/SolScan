@@ -26,9 +26,12 @@ interface exists.
   deliberately shaped to match.
 - **sunscan-backend** (`C:\Source\Repos\JPhilC\sunscan-backend`) — the Raspberry Pi backend for a
   Sunscan SHG: `camera_controller.py` shows the continuous-capture-thread-writing-SER-frames
-  pattern; `locate_lines.py`/`focus_analyzer.py` show template-matching/gradient-edge techniques for
-  finding the solar disk and spectral line position in a live frame - the basis for auto
-  start/stop-on-slit-crossing detection.
+  pattern; `focus_analyzer.py`'s disk-edge gradient detection is the basis for auto
+  start/stop-on-slit-crossing detection. `locate_lines.py` is a disabled prototype (imported but
+  commented out at `main.py:972-973`) for live line identification in the wide view - cross-correlates
+  the current profile against a reference spectrum image (`sun_spectre.png`) and a small hardcoded
+  13-line atlas. Superseded as a design reference by astro4j's `DeepLineIdentifier` below - same core
+  idea, but statistically gated rather than a single naive template match.
 - **sunscan-app** (`C:\Source\Repos\JPhilC\sunscan-app`) — the Sunscan mobile UI, source of several
   Capture-stage UX features SolScan should reproduce (see `screens/ScanScreen.js`):
   - **Gain/exposure controls** — live sliders (`GAIN`, exposure time) sent to the backend as the
@@ -52,7 +55,24 @@ interface exists.
 - **astro4j / JSolex** (`C:\Source\Repos\JPhilC\astro4j`) — the mature, offline SHG reconstruction
   pipeline (`jsolex-core`'s `SolexVideoProcessor` and friends) this app's Process stage is meant to
   eventually match in flexibility. Apache-2.0 licensed; `jsolex-cli` is a headless entry point
-  usable as an external process before any native port exists.
+  usable as an external process before any native port exists. Two pieces worth calling out
+  specifically:
+  - **`DeepLineIdentifier`** (`jsolex-core/.../spectrum/DeepLineIdentifier.java`) — identifies which
+    line a captured profile is centred on by correlating it against a real solar flux atlas
+    (3900-6800 Å, 0.01 Å resolution) across several instrumental-broadening hypotheses, and reports
+    nothing unless one hypothesis clearly wins (score ≥ 0.70, margin ≥ 30% of headroom over the
+    runner-up). Designed for a whole captured file, but the core method (1D profile → correlate
+    against a reference atlas) is the right basis for SolScan's *live* wide-view line-highlighting
+    feature too - see Phase 4 - rather than reviving `sunscan-backend`'s disabled `locate_lines.py`
+    prototype (see above).
+  - **`SpectralLineCatalog`** (same package) — a curated "other interesting lines in this window"
+    lookup, backed by a bundled `interesting-lines.txt` resource (`wavelength;element;identifier;
+    difficulty`), used once the studied line's wavelength is known to label secondary lines nearby.
+  - **`SpectralLineDetectedEvent`/`GeometryDetectedEvent`** — the two halves of JSolex's results
+    "info view": which line was detected (a `SpectralRay`), and the geometry-correction step's own
+    findings (`tiltDegrees`, `xyRatio`) from ellipse-fitting the reconstructed disk. Two unrelated
+    pipeline stages that happen to be reported together - SolScan's Process stage should adopt the
+    same two-part results panel (see Phase 7).
 
 ## Commands
 
@@ -125,17 +145,25 @@ empty class libraries with only a project reference to `Core` so far.
      means sharper camera focus)
    - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
      disk edges mean better collimator alignment)
+   - a live line-identification overlay for the wide view, so labeled Fraunhofer lines scroll into
+     place as the diffraction grating is rotated - built on `DeepLineIdentifier`'s confidence-gated
+     correlation approach (needs its own reference solar-flux atlas and dispersion calibration for
+     the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants), plus `SpectralLineCatalog`'s
+     `interesting-lines.txt` data for secondary-line labels once roughly on target
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
-   the disk entering/centred on/leaving the slit from the live preview (port the technique from
-   `locate_lines.py`/`focus_analyzer.py`), tie into step 3's slew-ahead-and-drift logic as one
-   "Capture" action requiring no further manual intervention.
+   the disk entering/centred on/leaving the slit from the live preview (port `focus_analyzer.py`'s
+   edge-detection technique), tie into step 3's slew-ahead-and-drift logic as one "Capture" action
+   requiring no further manual intervention.
 6. **Processing v1 (shell-out)** — `JSolexCliProcessor` in `SolScan.Processing`, invokes `jsolex-cli`
    against a finished SER file as a background `Task`, parses/display results, progress surfaced in
    the Process view.
 7. **Processing v2 (native, incremental)** — port `SolexVideoProcessor`'s workflow steps into
    `SolScan.Processing` one at a time, behind the same `IShgProcessor`-shaped interface, validated
    against the CLI's output as ground truth for each. Goal: processing running concurrently with
-   capture on its own thread, not waiting on a full external pass over the finished file.
+   capture on its own thread, not waiting on a full external pass over the finished file. Includes
+   porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
+   identification, and a results panel mirroring JSolex's two-part info view (detected line +
+   geometry tilt/xyRatio).
 8. **Polish** — output styles/palettes, dark/flat calibration, session/plan management, installer
    (WiX, mirroring RASTA's `Setup`/`Bundle` projects), `SolScan.Simulators` fleshed out for offline
    dev/tests.
