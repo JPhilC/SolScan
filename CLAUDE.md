@@ -121,6 +121,24 @@ interface exists.
     focal length, 80mm collimator, 2400 lines/mm, order 1) and `Setup.java` is the telescope/camera
     equivalent (focal length, aperture, pixel size, site lat/long, mount) - both worth adopting as
     SolScan.Core equipment-profile records rather than reinventing the shape.
+  - **ROI height** (the *other* crop axis from `ExposureCalculator` above - easy to conflate the two,
+    so worth being explicit): in an SHG frame, width is the *spatial* axis (position along the slit,
+    across the disk - what `ExposureCalculator` sizes) and height is the *wavelength/dispersion*
+    axis (pixel-shift from the line centre) - confirmed from `PixelShiftRange.java`'s doc comment
+    ("the shift is expressed in pixels relative to the middle of the detected spectral line") and
+    from `jsolex.adoc`'s "Trimming SER files" section, which works on this exact quantity after the
+    fact (post-hoc "pixels up"/"pixels down" trimming once the line's "smile" curvature is already
+    known) rather than recommending it up front - JSolex never actually prescribes a capture-time
+    height, only warns about getting it wrong: *"reducing the number of pixels up/down will remove
+    information from the video (you won't be able to compute images with larger pixel shifts)... If
+    you are selecting too low pixel up/down values, you may not be able to generate a continuum image
+    anymore."* SolScan's own `RecommendedRoiHeight` (Phase 4) is new - a capture-time equivalent of
+    that same trade-off, built from `SpectrumAnalyzer.computeSpectralDispersion`'s Å/pixel plus how
+    far out you want reconstruction to reach (line + wings + enough continuum margin, plus a small
+    allowance for smile curvature) - directly opposed to `ExposureCalculator`'s own fps target, since
+    a taller ROI costs frame-rate/USB-bandwidth budget the scan-sampling requirement also needs, so
+    the right answer is the *smallest* height that reaches the reconstruction goal, not the largest
+    one that fits.
 - **N.I.N.A.** (`C:\Source\Repos\JPhilC\nina`, third-party, MPL-2.0 - studied for reference, nothing
   ported) — validated `ICameraDevice`'s shape rather than supplying code to port. Multi-vendor camera
   support is layered `NINA.Equipment/SDK/CameraSDKs/<Vendor>SDK/` (raw P/Invoke, ~1:1 with the
@@ -133,7 +151,15 @@ interface exists.
   distinct API families, not one generalized "capture" call - and `ICamera.cs` exposes
   `CanSetUSBLimit`/`USBLimit`, a streaming-specific throttle with no equivalent for a one-shot
   download, which is what motivated adding `ICameraDevice.UsbBandwidthPercent`/`DroppedFrameCount`
-  (see "Video vs. long-exposure stills" under Phase 4). SharpCap (closed-source, not clonable) was
+  (see "Video vs. long-exposure stills" under Phase 4). Also confirmed concretely: N.I.N.A.'s
+  discovery pattern, `IEquipmentProvider<ICamera>.GetEquipment()` - one per vendor, enumerates
+  attached devices, returns ready-to-connect (not-yet-connected) device objects - which is what
+  `ICameraProvider`/`ICameraDiscoveryService` in `SolScan.Core.Camera` are modelled on; and that ASI
+  (poll/blocking `ASIGetVideoData`) and ToupTek-alike brands like Altair (callback-driven
+  `StartPullModeWithCallback` + `PullImage`) genuinely need different capture-loop shapes
+  internally, even though both normalise into `ICameraDevice`'s single push-style `FrameCaptured`
+  event - see `SolScan.Infrastructure.Camera.Asi`/`.Camera.Altair`. SharpCap (closed-source, not
+  clonable) was
   also researched for its camera-support model via its own public docs/forum posts rather than
   source - a three-tier native-SDK/ASCOM/DirectShow fallback with no public extension point, useful
   for its documented *behaviour* (prefer native > ASCOM > DirectShow when more than one applies to a
@@ -194,8 +220,9 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   `NavigationViewModel.NavigateTo<TViewModel>()` (resolves from the DI container) - no
   router/framework, deliberately, same as RASTA. The left-hand nav sidebar (mirroring RASTA's
   `MainWindow.xaml`) has four buttons - Prepare/Capture/Process plus Options, docked to the bottom
-  of the sidebar. `PrepareViewModel`, `CaptureViewModel`, `ProcessViewModel` remain placeholders,
-  each currently just a `StatusText` string bound into its view. `OptionsViewModel` is real: it's
+  of the sidebar. `PrepareViewModel`/`ProcessViewModel` remain placeholders, each currently just a
+  `StatusText` string bound into its view. `CaptureViewModel` is real as of the camera
+  discovery/live-view/recording work below. `OptionsViewModel` is real: it's
   SolScan's equivalent of JSolex's "Equipment" menu (`SpectroHeliographEditor.java` +
   `SetupEditor.java`), embedded as three tabs (Spectrographs / Telescopes & Cameras / Setups) rather
   than separate modal dialogs, each tab backed by its own list-view-model
@@ -208,11 +235,23 @@ Real: the solution/project scaffolding, the three-project dependency layering, t
 root, the nav shell (Prepare/Capture/Process/Options buttons swap the content pane), the
 `ITelescopeMount`/`ICameraDevice`/`ISerWriter` contracts in Core, and the Options view's equipment
 library (`SpectrographProfile`/`EquipmentProfile`/`EquipmentSetup` + `IEquipmentLibrary`, backed by
-`JsonEquipmentLibrary`).
+`JsonEquipmentLibrary`). Also real: camera discovery/live view/manual SER recording (the first slice
+of Phase 4, "Manual capture" below) - `ICameraProvider`/`ICameraDiscoveryService` in Core;
+`SolScan.Infrastructure.Camera.Asi`/`.Camera.Altair` (hand-written P/Invoke against each vendor's
+native SDK - no vendor DLLs committed, see `SolScan.Infrastructure/ASICamera2.README.md`/
+`altaircam.README.md`) and
+`SolScan.Infrastructure.Capture.SerWriter`; `SolScan.Simulators`' `SimulatedCameraDevice`/
+`SimulatedCameraProvider` (a hardware-free camera so the above works with zero hardware attached);
+and `CaptureViewModel`/`CaptureView.xaml` wiring it all into a SharpCap-style live view (camera
+picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop recording). Also real:
+per-camera-model settings persistence (`ICameraSettingsStore`/`JsonCameraSettingsStore`) and a
+RASTA-style `StatusBarViewModel`/`StatusBar.xaml` docked at the bottom of `MainWindow.xaml`,
+currently just showing the live capture frame rate.
 
-Placeholder: everything else behind those contracts. No ASCOM client, no camera wrapper, no SER I/O,
-no solar ephemeris, no processing pipeline. `SolScan.Simulators` is still an empty class library with
-only a project reference to `Core`.
+Placeholder: everything else behind those contracts. No ASCOM client, no solar ephemeris, no
+processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI view toggle,
+no camera-focus/collimator-focus aids, no live line-ID overlay yet (see the Phase 4 sub-items
+below).
 
 ## Phased build plan
 
@@ -241,9 +280,14 @@ only a project reference to `Core`.
      drift away mid-search. Refines pointing precision only - the ephemeris still supplies the lead-
      offset direction/distance, which brightness-peaking alone can't tell you. No prior art for this
      one in RASTA/sunscan-backend/astro4j - genuinely new to SolScan, not a port.
-4. **Manual capture** — ZWO ASI SDK wrapper implementing `ICameraDevice`, live preview in the
-   Capture view, manual start/stop recording through a real `ISerWriter` implementation. This alone
-   matches what SharpCap does today. Carries over the sunscan-app UX features noted above:
+4. **Manual capture** *(core landed)* — camera discovery + ZWO ASI/Altair SDK wrappers implementing
+   `ICameraDevice` (plus a hardware-free `SolScan.Simulators` camera), live preview in the Capture
+   view, manual start/stop recording through a real `ISerWriter` implementation, gain/exposure/
+   contrast sliders and a histogram. This alone matches what SharpCap does today for these two
+   vendors - real ZWO/Altair hardware still needs their native SDK DLL dropped in manually (see
+   `SolScan.Infrastructure/ASICamera2.README.md`/`altaircam.README.md`), and the sub-items below (exposure
+   calculator, wide/ROI view, focus aids, live line-ID overlay) are still outstanding. Carries over
+   the sunscan-app UX features noted above:
 
    **Video vs. long-exposure stills**: SolScan is deliberately scoped to streaming/video capture
    only - continuous frames for live preview and SER recording - never NINA's single-shot
@@ -262,9 +306,101 @@ only a project reference to `Core`.
      the slit, through the SHG's camera/collimator focal-length ratio, to pixels on the sensor,
      divided by scan time from the mount's scan-rate multiplier) suggesting a starting point before
      the sliders below are hand-tuned; needs `SpectrographProfile`/`EquipmentProfile` data from Core
-   - live gain/exposure sliders driving the camera in real time, not a separate settings dialog
+   - live gain/exposure/USB-bandwidth sliders driving the camera in real time (each with a SharpCap-
+     style "Auto" toggle handing that control to the camera's own algorithm), not a separate
+     settings dialog. Ranges are calibrated to the ASI678MM specifically, matching SharpCap: gain
+     0-600 linear, USB Turbo 40-100 linear, exposure 0.032ms-5s on a *log* scale (`SolScan.Core.
+     Camera.ExposureScale` - a linear slider is useless across five decades of range) - other
+     sensors' real control ranges may differ, not yet queried from the SDK per-camera. Also matching
+     SharpCap: a Colour Space dropdown (Mono8/Mono16 - `CameraOutputFormat`) and a Binning dropdown
+     populated from the connected camera's own `SupportedBinning` list (ASI's is read from the SDK's
+     real reported capability, e.g. [1,2,3,4] for the ASI678MM; Altair's is a hardcoded guess, not
+     queried - see `AltairCameraDevice`'s remarks). Both are reconfigured together via
+     `ICameraDevice.SetOutputFormatAsync` - a real native operation, not a cheap value push like
+     Gain/Exposure, since it changes frame geometry/bit depth and (on ASI) needs streaming briefly
+     stopped/restarted around it; `CaptureViewModel` blocks changing either while a recording is in
+     progress, since a SER file's fixed header can't represent a mid-file geometry change.
+
+     Live preview rendering went through a few rounds of tuning against real ASI678MM hardware,
+     compared side-by-side against SharpCap and ZWO's own ASICap (which sustains ~47fps, 0 dropped
+     frames, at full 3840x2160 - the working proof that the camera/USB link itself isn't the
+     bottleneck):
+     - **Auto-stretch is off by default** (`CaptureViewModel.IsContrastAuto`). It exists
+       (`FramePreview.ComputeAutoStretch` - percentile-clips a small fraction at each histogram
+       extreme rather than true min/max, so a couple of hot/dead pixels can't skew the whole
+       result) for just eyeballing a scene, but dialing in real Gain/Exposure settings needs the
+       preview to faithfully show the actual exposure, not a software-brightened stand-in for it -
+       matches ASICap/SharpCap's own default behaviour once their own gamma/stretch is set to
+       neutral. For the same reason `FramePreview`'s display gamma constant defaults to 1 (a
+       no-op) rather than a brightening curve.
+     - **The histogram is drawn as a stepped bar chart**, not a line connecting bucket-centre
+       points - an isolated spike (e.g. a heavily overexposed frame, virtually every pixel in one
+       bucket) drawn as a line has a literally zero-width peak, which can render as invisible
+       rather than a small sliver; a bar always has real width.
+     - **`ComputeHistogram`/`Stretch` sample a downsampled (nearest-neighbour strided) grid of the
+       frame, not every pixel** (`FramePreview.DefaultMaxPreviewDimension`, 960 on the longest
+       side) - a live preview redrawn ~20x/sec has no business scanning every one of several
+       million sensor pixels each time just to end up displayed in a window nowhere near that
+       size; recording (`SerWriter.WriteFrame`) always gets the full, untouched frame regardless.
+     - **This scanning work never runs on the thread the connected device raises `FrameCaptured`
+       on** - that's the *camera's own capture thread* (the loop calling `ASIGetVideoData`, or
+       Altair's native callback), and blocking it on preview work throttles the actual camera
+       capture rate, which is what was showing up as both dropped frames and a laggy live view
+       even before the downsampling fix above. It's offloaded to the thread pool instead, guarded
+       (`Interlocked`) so at most one preview frame is ever mid-processing at once - a slow redraw
+       silently drops that frame for *preview* purposes only, never for recording, which happens
+       synchronously before this throttle/offload point.
+
+     Resolved via `FramePreview.ComputeHistogramStats`' Max/Min/AVG readout: on real ASI678MM
+     hardware, a saturated Mono16 pixel reads back as exactly 65520 = 4095 << 4. That means ZWO's
+     RAW16 output **left-shifts** the 12-bit ADC reading into the *upper* 12 bits of the 16-bit
+     word - the opposite of what an earlier version of this code assumed (that it sat unscaled in
+     the low bits, matching the doc comment ZWO's own header carries for `BitDepth`, "the actual
+     ADC depth of image sensor" - true of the sensor, not of how the 16-bit container packs it).
+     So the correct normalization range for Mono16 is the **container size** (65535), not the
+     sensor's own ADC depth (4095) - `AsiCameraDevice.ApplyRoiFormat` sets `_bitDepth` from
+     `_bytesPerPixel * 8` accordingly. Mono8 was never affected either way, since it always
+     hardcodes BitDepth=8 regardless of anything read from the SDK - which is exactly why
+     comparing the two side-by-side against ASICap (Mono8 matching, Mono16 not) is what isolated
+     this. Confirmed the `AsiCameraInfo` struct layout itself is *not* the culprit by checking it
+     field-by-field against ZWO's real `ASICamera2.h` (via indilib/indi-3rdparty's mirror of it) -
+     it matches exactly. `AltairCameraDevice` already assumed left-shift-to-fill-container for
+     Altair's own RAW16 (it was never "fixed" the wrong way in the first place) - this finding is
+     one more data point supporting that being correct there too, though still unverified against
+     real Altair hardware.
+
+     Binning defaults to `SupportedBinning[0]` (each device's own connect logic), not a hardcoded
+     1 - always the same value in practice for cameras seen so far, but asks the camera rather than
+     assuming.
+
+     Capture settings (Gain/Exposure/USB Turbo and their Auto flags, Colour Space, Binning,
+     Contrast stretch) are remembered per camera *model* across sessions -
+     `SolScan.Core.Camera.ICameraSettingsStore`/`CameraSettings`, backed by
+     `SolScan.Infrastructure.Camera.JsonCameraSettingsStore` (one JSON file, keyed by
+     `ICameraDevice.Name` such as "ZWO ASI678MM" - deliberately not `Id`, a discovery-session-local
+     index/serial not worth keying saved preferences on - see the interface's own doc comment).
+     `CaptureViewModel` loads a camera's saved settings (if any) right after `ConnectAsync`
+     succeeds and applies them before the live view starts, and saves again on every user-driven
+     change via `PersistSettingsIfConnected` - guarded to skip both the load-and-apply pass itself
+     and live Auto-readback ticks, so a continuously-varying auto-exposure value isn't rewritten to
+     disk every frame; only what the user actually set is persisted.
+
+     A `StatusBarViewModel`/`StatusBar.xaml` pair now exists too, mirroring RASTA's own
+     StatusBarViewModel/StatusBar.xaml pattern exactly: a singleton, injected into
+     `NavigationViewModel` and docked full-width at the bottom of `MainWindow.xaml`
+     (`Grid.ColumnSpan="2"`, below both the sidebar and content area), for cross-cutting state any
+     active stage view model can push into. Starts with just `CaptureViewModel` reporting the
+     camera's actual capture rate (every frame arriving via `FrameCaptured`, not the throttled
+     ~20fps preview redraw) once a second - future sections (mount status, etc.) should follow the
+     same pattern once those exist.
    - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
-     vs. the tighter view actually used while recording
+     vs. the tighter view actually used while recording. The ROI's *height* has its own recommended
+     value, independent of `ExposureCalculator`'s sizing (which governs width/fps) - see "ROI height"
+     under astro4j above: `RecommendedRoiHeight` = dispersion (Å/pixel, from
+     `SpectrumAnalyzer.computeSpectralDispersion`) converted from a wanted Å range (line + wings +
+     continuum margin) into pixels, plus a small smile-curvature allowance - sized to the *smallest*
+     value that reaches the reconstruction goal, since every extra row costs frame-rate/USB-bandwidth
+     budget the scan-sampling fps target also needs
    - a camera focus aid (port `calculate_fwhm`'s spectral-line-width measurement - narrower FWHM
      means sharper camera focus)
    - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
