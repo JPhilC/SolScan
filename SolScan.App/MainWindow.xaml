@@ -1,0 +1,31 @@
+<Window x:Class="SolScan.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:SolScan.App.ViewModels"
+        xmlns:views="clr-namespace:SolScan.App.Views"
+        mc:Ignorable="d"
+        Title="SolScan" Height="600" Width="900">
+    <Window.Resources>
+        <DataTemplate DataType="{x:Type vm:PrepareViewModel}">
+            <views:PrepareView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:CaptureViewModel}">
+            <views:CaptureView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ProcessViewModel}">
+            <views:ProcessView />
+        </DataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12">
+            <Button Content="Prepare" Command="{Binding NavigatePrepareCommand}" Padding="12,4" Margin="0,0,8,0" />
+            <Button Content="Capture" Command="{Binding NavigateCaptureCommand}" Padding="12,4" Margin="0,0,8,0" />
+            <Button Content="Process" Command="{Binding NavigateProcessCommand}" Padding="12,4" />
+        </StackPanel>
+
+        <ContentControl Content="{Binding CurrentViewModel}" />
+    </DockPanel>
+</Window>

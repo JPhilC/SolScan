@@ -1,0 +1,10 @@
+﻿<Application x:Class="SolScan.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:SolScan.App">
+    <!-- No StartupUri: App.xaml.cs builds the DI container and resolves MainWindow itself,
+         same single-composition-root pattern RASTA uses. -->
+    <Application.Resources>
+
+    </Application.Resources>
+</Application>
