@@ -55,7 +55,7 @@ interface exists.
 - **astro4j / JSolex** (`C:\Source\Repos\JPhilC\astro4j`) — the mature, offline SHG reconstruction
   pipeline (`jsolex-core`'s `SolexVideoProcessor` and friends) this app's Process stage is meant to
   eventually match in flexibility. Apache-2.0 licensed; `jsolex-cli` is a headless entry point
-  usable as an external process before any native port exists. Two pieces worth calling out
+  usable as an external process before any native port exists. Several pieces worth calling out
   specifically:
   - **`DeepLineIdentifier`** (`jsolex-core/.../spectrum/DeepLineIdentifier.java`) — identifies which
     line a captured profile is centred on by correlating it against a real solar flux atlas
@@ -64,7 +64,25 @@ interface exists.
     runner-up). Designed for a whole captured file, but the core method (1D profile → correlate
     against a reference atlas) is the right basis for SolScan's *live* wide-view line-highlighting
     feature too - see Phase 4 - rather than reviving `sunscan-backend`'s disabled `locate_lines.py`
-    prototype (see above).
+    prototype (see above). This is the *identification* logic to reuse; `SpectrumBrowser` below is
+    the *rendering* to reuse - the two aren't the same code.
+  - **`SpectrumBrowser`** (`jsolex/.../app/jfx/SpectrumBrowser.java`) — a standalone reference-atlas
+    viewer, and the closest existing match to the live wide-view feature itself: renders a synthetic
+    spectrum image sampled from `ReferenceIntensities` (the bundled full-resolution reference solar
+    spectrum) around a chosen centre wavelength, with pixel↔wavelength mapping computed from the
+    *real* instrument optics (`SpectrumAnalyzer.computeSpectralDispersion(shg, centerWavelength,
+    pixelSize)` - the same `SpectroHeliograph` preset data noted below), so "Adjust dispersion" ties
+    on-screen zoom to actual dispersion rather than a free zoom. Labels lines from
+    `SpectralLineCatalog.defaults()` directly (`loadDefaultLines()`) - same catalog as below, nothing
+    new there. Its own "Identify" button runs a *third*, simpler algorithm
+    (`performWavelengthIdentification()`) - distinct from `DeepLineIdentifier` - that corrects
+    spectral-line curvature on a *loaded* captured image first (`DistortionCorrection`, driven by a
+    `SpectrumFrameAnalyzer` detection pass), then brute-force scans the whole reference range scoring
+    each candidate by profile difference plus local-minima agreement, always returning its best match
+    with no confidence gate. For SolScan: build the live overlay's rendering/dispersion/labeling on
+    this browser's approach, but keep `DeepLineIdentifier`'s confidence gating for the identification
+    step rather than this browser's ungated brute-force scan - a live view shouldn't confidently
+    mislabel an ambiguous stretch of spectrum.
   - **`SpectralLineCatalog`** (same package) — a curated "other interesting lines in this window"
     lookup, backed by a bundled `interesting-lines.txt` resource (`wavelength;element;identifier;
     difficulty`), used once the studied line's wavelength is known to label secondary lines nearby.
@@ -173,10 +191,12 @@ empty class libraries with only a project reference to `Core` so far.
    - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
      disk edges mean better collimator alignment)
    - a live line-identification overlay for the wide view, so labeled Fraunhofer lines scroll into
-     place as the diffraction grating is rotated - built on `DeepLineIdentifier`'s confidence-gated
-     correlation approach (needs its own reference solar-flux atlas and dispersion calibration for
-     the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants), plus `SpectralLineCatalog`'s
-     `interesting-lines.txt` data for secondary-line labels once roughly on target
+     place as the diffraction grating is rotated. Rendering/dispersion-matching/labeling modelled on
+     `SpectrumBrowser` (real-optics dispersion via `SpectrumAnalyzer.computeSpectralDispersion`,
+     labels from `SpectralLineCatalog`'s `interesting-lines.txt`), but identification logic modelled
+     on `DeepLineIdentifier`'s confidence-gated correlation rather than `SpectrumBrowser`'s own
+     ungated brute-force scan - needs its own reference solar-flux atlas and dispersion calibration
+     for the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
    the disk entering/centred on/leaving the slit from the live preview (port `focus_analyzer.py`'s
    edge-detection technique), tie into step 3's slew-ahead-and-drift logic as one "Capture" action
