@@ -13,6 +13,10 @@ disk reconstruction → corrections → output images) on a background thread wi
 rather than the current manual workflow of slewing by hand, capturing in SharpCap, and processing
 later in JSolex.
 
+**Scope for v1**: equatorial mounts only (no AltAz coordinate conversion) - `ITelescopeMount`'s
+RA/Dec-only shape reflects this deliberately, not an oversight. ASCOM **Alpaca** only (REST, via the
+ASCOM Remote Server), matching RASTA - not direct COM.
+
 It's early-stage scaffolding as of this writing — see "Phased build plan" below for what's actually
 implemented vs. still a placeholder. Don't assume a component is wired up just because a project or
 interface exists.
@@ -134,7 +138,8 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
 
 - **SolScan.Core** — domain models and interfaces only, no concrete hardware/IO deps:
   `ITelescopeMount` (connect/disconnect, current position, slew, tracking, park/unpark, site
-  lat/lon/elevation), `ICameraDevice` (streaming frame capture, gain/exposure), `ISerWriter`
+  lat/lon/elevation - RA/Dec-only by design, see "Scope for v1" above), `ICameraDevice` (streaming
+  frame capture, gain/exposure), `ISerWriter`
   (writes a live frame stream to a `.ser` file). References `CommunityToolkit.Mvvm` for
   `ObservableObject`/`RelayCommand` base classes on domain models that need change notification
   (e.g. live capture/session state), without pulling in WPF itself. Will also carry equipment-profile
@@ -175,7 +180,25 @@ empty class libraries with only a project reference to `Core` so far.
 3. **Find the sun** — add a solar ephemeris (`SunPosition`, low-precision analytic, arc-minute
    accuracy is enough for a slit-width offset) to `SolScan.Core`, add a "slew to sun + lead offset"
    command to the Capture stage. Build the apparent-disk-size/declination part so Phase 4's exposure
-   calculator can reuse it rather than duplicating the ephemeris.
+   calculator can reuse it rather than duplicating the ephemeris. The ephemeris slew is always the
+   starting point - it's what gets the mount close enough for anything below to have signal to work
+   with in the first place.
+   - **Visual fine-centering** (refinement, depends on Phase 4's camera capture landing first -
+     either build a minimal frame-streaming capability ahead of the rest of Phase 4's UI, or treat
+     this as a Phase 3 addition once Phase 4 exists rather than a hard blocker): an SHG only ever
+     sees whatever light passes through its slit, so total brightness in the live frame is a direct,
+     unimodal proxy for how well the sun's disk currently overlaps the slit - no risk of locking onto
+     the wrong source, since nothing else in a daytime sky is remotely as bright as the sun. Two
+     phases: an expanding-spiral/raster search first, in case the ephemeris slew leaves the frame at
+     zero signal (gradient-climbing needs *some* nonzero signal to follow - it can't recover from a
+     flat-zero frame on its own); then a hill-climb/P-controller phase nudging both mount axes to
+     maximize total frame brightness once signal exists. Needs a deliberately low search-phase
+     exposure/gain, separate from the capture-ready exposure the Phase 4 calculator recommends, so
+     the signal doesn't saturate and flatten out near the peak. Keep tracking on throughout (ideally
+     already at a rate accounting for the sun's faster-than-sidereal motion) so the target doesn't
+     drift away mid-search. Refines pointing precision only - the ephemeris still supplies the lead-
+     offset direction/distance, which brightness-peaking alone can't tell you. No prior art for this
+     one in RASTA/sunscan-backend/astro4j - genuinely new to SolScan, not a port.
 4. **Manual capture** — ZWO ASI SDK wrapper implementing `ICameraDevice`, live preview in the
    Capture view, manual start/stop recording through a real `ISerWriter` implementation. This alone
    matches what SharpCap does today. Carries over the sunscan-app UX features noted above:
