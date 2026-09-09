@@ -73,7 +73,13 @@
         <!-- Sidebar: nav buttons run down the left-hand margin, with Options docked to the
              bottom of the sidebar regardless of window height. -->
         <DockPanel Grid.Column="0"
-                   Background="#1E1E1E">
+                   Background="#FF050910">
+
+            <!-- Decorative footer, anchored below the Options button at the very bottom of the
+                 sidebar - same role as RASTA's MainWindow.xaml ButtonBarFooter.png. -->
+            <Image DockPanel.Dock="Bottom"
+                   Margin="10"
+                   Source="/Assets/ButtonBarFooter.png"/>
 
             <Button DockPanel.Dock="Bottom"
                     Content="Options"

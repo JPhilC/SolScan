@@ -9,7 +9,26 @@
     <StartupObject>SolScan.App.App</StartupObject>
     <PlatformTarget>x64</PlatformTarget>
     <Platforms>AnyCPU;x64</Platforms>
+    <ApplicationIcon>Assets\SolScan.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The SDK's implicit default-items glob would otherwise also include these as <None>,
+         alongside their explicit Resource entries below - two item types for the same file trips
+         up WPF's resource generation ("An item with the same key has already been added",
+         RG1000). Mirrors RASTA.App.csproj's equivalent Remove/Include pairing. -->
+    <None Remove="Assets\ButtonBarFooter.png" />
+    <None Remove="Assets\SolScan.ico" />
+    <None Remove="Assets\SolScanSplash.png" />
+    <Resource Include="Assets\ButtonBarFooter.png" />
+    <Resource Include="Assets\SolScan.ico" />
+    <!-- NOT the SplashScreen build action: that renders via a native GDI call before WPF's own
+         rendering pipeline loads, and that path ignores PNG alpha entirely - transparent pixels
+         always paint white. SplashWindow.xaml, a real AllowsTransparency WPF window shown
+         manually from App.OnStartup, is what actually honors this image's transparency - see
+         RASTA.App.csproj for the same note against the equivalent asset. -->
+    <Resource Include="Assets\SolScanSplash.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
