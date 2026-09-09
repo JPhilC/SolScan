@@ -29,6 +29,24 @@ interface exists.
   pattern; `locate_lines.py`/`focus_analyzer.py` show template-matching/gradient-edge techniques for
   finding the solar disk and spectral line position in a live frame - the basis for auto
   start/stop-on-slit-crossing detection.
+- **sunscan-app** (`C:\Source\Repos\JPhilC\sunscan-app`) — the Sunscan mobile UI, source of several
+  Capture-stage UX features SolScan should reproduce (see `screens/ScanScreen.js`):
+  - **Gain/exposure controls** — live sliders (`GAIN`, exposure time) sent to the backend as the
+    preview updates, not just a settings screen buried elsewhere.
+  - **Camera focus aid** — a toggleable "focus assistant" overlay; on the backend this is
+    `focus_analyzer.py`'s `measure_focus_two_edges` (gradient-based sharpness of the solar disk's
+    edges in a live frame, smoothed/normalized over recent frames). SolScan needs the equivalent for
+    the ASI678MM's own optical focus.
+  - **Collimator focus aid** — a related but distinct concern specific to a slit spectrograph
+    (Sol'ex) that Sunscan's simpler design doesn't have an exact equivalent for: judging the
+    sharpness/quality of the spectral line image at the slit itself, as opposed to the camera's
+    optical focus. Likely built on the same live-frame-gradient technique as the camera focus aid,
+    but measuring the spectral line profile rather than the disk edge - needs its own aid, not
+    reuse-as-is.
+  - **Wide view / clipped (ROI) view toggle** — `toggleCrop`/`updatePosYCrop` swap between a wide
+    preview (for finding/framing the disk and the slit) and a cropped, vertically-positionable
+    region-of-interest view used during actual capture. SolScan's Capture view needs the same two
+    modes, not just one fixed preview.
 - **astro4j / JSolex** (`C:\Source\Repos\JPhilC\astro4j`) — the mature, offline SHG reconstruction
   pipeline (`jsolex-core`'s `SolexVideoProcessor` and friends) this app's Process stage is meant to
   eventually match in flexibility. Apache-2.0 licensed; `jsolex-cli` is a headless entry point
@@ -97,7 +115,12 @@ empty class libraries with only a project reference to `Core` so far.
    command to the Capture stage.
 4. **Manual capture** — ZWO ASI SDK wrapper implementing `ICameraDevice`, live preview in the
    Capture view, manual start/stop recording through a real `ISerWriter` implementation. This alone
-   matches what SharpCap does today.
+   matches what SharpCap does today. Carries over the sunscan-app UX features noted above:
+   - live gain/exposure sliders driving the camera in real time, not a separate settings dialog
+   - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
+     vs. the tighter view actually used while recording
+   - a camera focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement)
+   - a collimator focus aid (new - spectral-line-sharpness-at-the-slit, not disk-edge-based)
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
    the disk entering/centred on/leaving the slit from the live preview (port the technique from
    `locate_lines.py`/`focus_analyzer.py`), tie into step 3's slew-ahead-and-drift logic as one
