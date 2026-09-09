@@ -36,6 +36,12 @@ Platform is x64 (matches the ZWO ASI camera SDK's native binaries). Windows only
 - **SolScan.Simulators** — fake mount/camera implementations for development without hardware.
 - **SolScan.Tests** — xUnit tests (unlike some sibling projects, this one starts real from day one).
 
+## License
+
+GNU AGPL 3.0 — see [LICENSE.md](LICENSE.md). Chosen for compatibility with the projects this one
+ports code and ideas from: RASTA (AGPL-3.0), sunscan-backend/sunscan-app (GPL-3.0), and astro4j/
+JSolex (Apache-2.0) — AGPL-3.0 is the one license compatible with combining all three.
+
 ## Author
 
 Phil Crompton
