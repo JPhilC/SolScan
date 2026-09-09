@@ -14,7 +14,7 @@ astro4j / JSol'Ex
 Portions of SolScan's spectral-line identification, exposure calculation, and SHG reconstruction
 logic are translated and adapted from the astro4j project (JSol'Ex, JSol'Ex CLI, jsolex-core),
 by Cedric Champeau ("melix") and contributors.
-    https://melix.github.io/blog/2023/04-22-introducing-astro4j.html
+    https://github.com/melix/astro4j
 
 Licensed under the Apache License, Version 2.0. A copy of the License is available at:
     http://www.apache.org/licenses/LICENSE-2.0
@@ -47,7 +47,8 @@ Sunscan (sunscan-backend / sunscan-app)
 
 Portions of SolScan's Capture-stage UX (camera and collimator focus aids, live gain/exposure
 controls, wide/ROI view toggle) and live-frame analysis techniques are adapted from the Sunscan
-project (sunscan-backend, sunscan-app), initiated by the STAROS association.
-    https://staros-projects.org
+project, initiated by the STAROS association.
+    https://github.com/staros-projects/sunscan-backend
+    https://github.com/staros-projects/sunscan-app
 
 Licensed under the GNU General Public License v3.0 (GPL-3.0).
