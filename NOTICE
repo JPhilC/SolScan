@@ -1,0 +1,53 @@
+SolScan
+Copyright (C) Phil Crompton
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see LICENSE.md.
+
+This NOTICE file is provided for attribution purposes only, in line with the Apache License,
+Version 2.0, Section 4(d) (see the astro4j entry below). It does not modify the terms of any
+license referenced here.
+
+================================================================================
+astro4j / JSol'Ex
+================================================================================
+
+Portions of SolScan's spectral-line identification, exposure calculation, and SHG reconstruction
+logic are translated and adapted from the astro4j project (JSol'Ex, JSol'Ex CLI, jsolex-core),
+by Cedric Champeau ("melix") and contributors.
+    https://melix.github.io/blog/2023/04-22-introducing-astro4j.html
+
+Licensed under the Apache License, Version 2.0. A copy of the License is available at:
+    http://www.apache.org/licenses/LICENSE-2.0
+
+astro4j does not ship a NOTICE file of its own to propagate. Per-file attribution is instead
+retained in the header of each SolScan source file that closely translates a specific astro4j
+source file, pointing back to the original.
+
+Specifically adapted, at time of writing (see CLAUDE.md for the full, current list):
+  - DeepLineIdentifier (spectral line identification via reference-atlas correlation)
+  - SpectralLineCatalog (interesting-lines.txt secondary-line lookup)
+  - SpectrumBrowser (dispersion-aware reference-spectrum rendering)
+  - ExposureCalculator (recommended exposure/fps from instrument optics and solar ephemeris)
+  - SpectroHeliograph / Setup (equipment-profile data shapes)
+  - SolexVideoProcessor and related workflow steps (SHG reconstruction pipeline)
+
+================================================================================
+RASTA
+================================================================================
+
+SolScan's project layering (Core/Infrastructure/Processing/App), ASCOM Alpaca telescope client,
+and WPF application composition-root pattern are ported and adapted from RASTA, by Phil Crompton
+(the same author as this project).
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+
+================================================================================
+Sunscan (sunscan-backend / sunscan-app)
+================================================================================
+
+Portions of SolScan's Capture-stage UX (camera and collimator focus aids, live gain/exposure
+controls, wide/ROI view toggle) and live-frame analysis techniques are adapted from the Sunscan
+project (sunscan-backend, sunscan-app), initiated by the STAROS association.
+    https://staros-projects.org
+
+Licensed under the GNU General Public License v3.0 (GPL-3.0).

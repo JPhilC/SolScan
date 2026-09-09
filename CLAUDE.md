@@ -17,6 +17,14 @@ later in JSolex.
 RA/Dec-only shape reflects this deliberately, not an oversight. ASCOM **Alpaca** only (REST, via the
 ASCOM Remote Server), matching RASTA - not direct COM.
 
+**Licensing**: AGPL-3.0 (`LICENSE.md`), chosen for compatibility with the three projects this one
+ports code and ideas from (RASTA - AGPL-3.0, sunscan-backend/sunscan-app - GPL-3.0, astro4j/JSolex -
+Apache-2.0). When actually porting a specific astro4j file (a close translation, not just an idea),
+add a short header comment on the new C# file pointing back to the original Java source file and
+its Apache-2.0 status, and add the new file to the `NOTICE` file's "Specifically adapted" list under
+astro4j - that list currently only reflects what's been *discussed*, not what's actually been
+ported, so it will need updating as Phases 2+ land real code.
+
 It's early-stage scaffolding as of this writing — see "Phased build plan" below for what's actually
 implemented vs. still a placeholder. Don't assume a component is wired up just because a project or
 interface exists.

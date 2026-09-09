@@ -40,7 +40,8 @@ Platform is x64 (matches the ZWO ASI camera SDK's native binaries). Windows only
 
 GNU AGPL 3.0 — see [LICENSE.md](LICENSE.md). Chosen for compatibility with the projects this one
 ports code and ideas from: RASTA (AGPL-3.0), sunscan-backend/sunscan-app (GPL-3.0), and astro4j/
-JSolex (Apache-2.0) — AGPL-3.0 is the one license compatible with combining all three.
+JSolex (Apache-2.0) — AGPL-3.0 is the one license compatible with combining all three. See
+[NOTICE](NOTICE) for attribution details.
 
 ## Author
 
