@@ -224,10 +224,24 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   `StatusText` string bound into its view. `CaptureViewModel` is real as of the camera
   discovery/live-view/recording work below. `OptionsViewModel` is real: it's
   SolScan's equivalent of JSolex's "Equipment" menu (`SpectroHeliographEditor.java` +
-  `SetupEditor.java`), embedded as three tabs (Spectrographs / Telescopes & Cameras / Setups) rather
-  than separate modal dialogs, each tab backed by its own list-view-model
+  `SetupEditor.java`) plus a General tab for app-wide settings that aren't equipment at all,
+  embedded as four tabs (General / Spectrographs / Telescopes & Cameras / Setups) rather than
+  separate modal dialogs. The three equipment tabs are each backed by their own list-view-model
   (`SpectrographLibraryViewModel`, `EquipmentProfileLibraryViewModel`, `EquipmentSetupLibraryViewModel`
   under `ViewModels/Equipment`) editing `SolScan.Core.Equipment` records through `IEquipmentLibrary`.
+  General is backed by `GeneralSettingsViewModel` editing `SolScan.Core.Capture.AppSettings` through
+  `IAppSettingsStore` (`SolScan.Infrastructure.Capture.JsonAppSettingsStore`, one JSON file under
+  `%LocalAppData%\SolScan\`, same per-machine-data rationale as `JsonEquipmentLibrary`/
+  `JsonCameraSettingsStore`) - currently just where new recordings are saved
+  (`AppSettings.CapturesRootFolder`), picked via a native `Microsoft.Win32.OpenFolderDialog` (no
+  WinForms reference needed - that type's been part of WPF itself since .NET 8). Defaults to
+  `Documents\SolScan\Captures` (`CaptureLocations.DefaultCapturesRootFolder`) - stored as `null`,
+  not that literal path, whenever the field still equals the current default, so a future change to
+  the default is picked up automatically for anyone who's never actually customized it.
+  `CaptureViewModel.StartRecording` reads the setting fresh (a cheap JSON read) each time a
+  recording starts, so a change in Options takes effect on the very next recording without a
+  restart; a customized folder is used exactly as chosen, with no further `SolScan\Captures`
+  subfolder appended underneath it.
 
 ### What's real vs. placeholder right now
 

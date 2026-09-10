@@ -29,6 +29,7 @@ public partial class CaptureViewModel : ObservableObject
     private readonly ICameraDiscoveryService _discoveryService;
     private readonly Func<ISerWriter> _serWriterFactory;
     private readonly ICameraSettingsStore _cameraSettingsStore;
+    private readonly IAppSettingsStore _appSettingsStore;
     private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private readonly Lock _recordingLock = new();
@@ -190,11 +191,13 @@ public partial class CaptureViewModel : ObservableObject
         ICameraDiscoveryService discoveryService,
         Func<ISerWriter> serWriterFactory,
         ICameraSettingsStore cameraSettingsStore,
+        IAppSettingsStore appSettingsStore,
         StatusBarViewModel statusBar)
     {
         _discoveryService = discoveryService;
         _serWriterFactory = serWriterFactory;
         _cameraSettingsStore = cameraSettingsStore;
+        _appSettingsStore = appSettingsStore;
         _statusBar = statusBar;
         _dispatcher = Dispatcher.CurrentDispatcher;
         RefreshCameras();
@@ -394,8 +397,15 @@ public partial class CaptureViewModel : ObservableObject
             return;
         }
 
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SolScan", "Captures");
+        // Read fresh (a cheap JSON file read, not hot-path) rather than cached at startup, so a
+        // change made in Options > General takes effect on the very next recording without
+        // requiring a restart. Falls back to SolScan's own default location - see
+        // AppSettings.CapturesRootFolder's doc comment for why a customized value is used exactly
+        // as chosen (no further "SolScan\Captures" subfolder appended) rather than treated as a
+        // parent to nest under.
+        var directory = _appSettingsStore.Load().CapturesRootFolder is { Length: > 0 } customFolder
+            ? customFolder
+            : CaptureLocations.DefaultCapturesRootFolder;
         Directory.CreateDirectory(directory);
         RecordingFilePath = Path.Combine(directory, $"SolScan_{DateTime.Now:yyyyMMdd_HHmmss}.ser");
 

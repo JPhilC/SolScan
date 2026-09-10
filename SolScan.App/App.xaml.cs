@@ -66,6 +66,10 @@ public partial class App : Application
 
         services.AddSingleton<IEquipmentLibrary, JsonEquipmentLibrary>();
 
+        // App-wide settings not tied to a specific camera model - currently just where new
+        // recordings are saved (Options > General).
+        services.AddSingleton<IAppSettingsStore, JsonAppSettingsStore>();
+
         // One ICameraProvider per vendor (plus the hardware-free simulator) - aggregated by
         // ICameraDiscoveryService for the Capture view's camera picker. Each provider degrades to
         // an empty Discover() if its native SDK DLL isn't present - see

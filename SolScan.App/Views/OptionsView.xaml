@@ -7,7 +7,7 @@
              mc:Ignorable="d">
     <DockPanel>
         <TextBlock DockPanel.Dock="Top"
-                   Text="Equipment"
+                   Text="Options"
                    FontSize="20"
                    FontWeight="Bold"
                    Margin="16,16,16,0"/>
@@ -21,6 +21,19 @@
         </StackPanel>
 
         <TabControl Margin="16">
+            <TabItem Header="General">
+                <StackPanel DataContext="{Binding General}" Margin="16" MaxWidth="640" HorizontalAlignment="Left">
+                    <TextBlock Text="Save Location" FontWeight="Bold"/>
+                    <TextBlock Text="Where new recordings (.ser files) are saved." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                    <DockPanel Margin="0,0,0,4">
+                        <Button Content="Browse..." DockPanel.Dock="Right" Width="80" Margin="8,0,0,0"
+                                Command="{Binding BrowseForCapturesRootFolderCommand}"/>
+                        <TextBox Text="{Binding CapturesRootFolder, UpdateSourceTrigger=PropertyChanged}"/>
+                    </DockPanel>
+                    <Button Content="Reset to Default" HorizontalAlignment="Left"
+                            Command="{Binding ResetCapturesRootFolderToDefaultCommand}"/>
+                </StackPanel>
+            </TabItem>
             <TabItem Header="Spectrographs">
                 <equipment:SpectrographLibraryView DataContext="{Binding Spectrographs}"/>
             </TabItem>
