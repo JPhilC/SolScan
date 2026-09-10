@@ -36,6 +36,11 @@
                         </Style>
                     </Button.Style>
                 </Button>
+                <TextBlock Text="Zoom:" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                <ComboBox Width="90" Margin="0,0,8,0"
+                          ItemsSource="{Binding AvailableZoomOptions}"
+                          SelectedItem="{Binding SelectedZoomOption}"
+                          DisplayMemberPath="Label"/>
                 <Button Content="Disconnect" Width="80" Command="{Binding DisconnectCommand}"/>
             </StackPanel>
         </DockPanel>
@@ -49,14 +54,22 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
-                     (see FramePreview's class doc comment) and then magnified back up to fill this
-                     area, so a smooth scale looks right where NearestNeighbor would look blocky.
-                     Shows exactly what the camera is actually streaming - the Region of Interest
-                     below is a real hardware setting (see CaptureViewModel.ApplyOutputFormatChange),
-                     not a post-capture crop, so there's no wider "full sensor" view to show
-                     alongside it once a narrower ROI is applied. -->
-                <Image Source="{Binding PreviewBitmap}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <!-- SharpCap-style Zoom: PreviewImage's actual Width/Height are computed and kept
+                     up to date in CaptureView.xaml.cs (CaptureViewModel.SelectedZoomOption changing,
+                     PreviewScrollViewer resizing, or a new differently-sized PreviewBitmap arriving
+                     - see UpdateImageSize) rather than any Stretch mode here - Stretch="Fill" with
+                     an explicit size is what makes a literal, fixed zoom percentage meaningful.
+                     Centred so a preview smaller than the viewport (Auto, or a low fixed %) sits in
+                     the middle rather than pinned to a corner; once it's bigger than the viewport,
+                     PreviewScrollViewer's own scrollbars appear for panning regardless of alignment. -->
+                <ScrollViewer x:Name="PreviewScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
+                         (see FramePreview's class doc comment) and then magnified back up, so a
+                         smooth scale looks right where NearestNeighbor would look blocky. -->
+                    <Image x:Name="PreviewImage" Source="{Binding PreviewBitmap}" Stretch="Fill"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                </ScrollViewer>
             </Border>
 
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">

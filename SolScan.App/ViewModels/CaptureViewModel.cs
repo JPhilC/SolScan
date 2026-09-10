@@ -159,6 +159,38 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
+    /// <summary>SharpCap-style Zoom dropdown options - three "fit to available space" modes plus a
+    /// fixed set of percentages matching SharpCap's own list exactly. See <see cref="ZoomOption"/>'s
+    /// doc comment for why the actual pixel-size computation from whichever of these is selected
+    /// lives in CaptureView.xaml.cs rather than here.</summary>
+    public IReadOnlyList<ZoomOption> AvailableZoomOptions { get; } =
+    [
+        new("Auto", ZoomKind.Auto),
+        new("Fit Width", ZoomKind.FitWidth),
+        new("Fit Height", ZoomKind.FitHeight),
+        new("16%", ZoomKind.Fixed, 16),
+        new("20%", ZoomKind.Fixed, 20),
+        new("25%", ZoomKind.Fixed, 25),
+        new("33%", ZoomKind.Fixed, 33),
+        new("40%", ZoomKind.Fixed, 40),
+        new("50%", ZoomKind.Fixed, 50),
+        new("66%", ZoomKind.Fixed, 66),
+        new("75%", ZoomKind.Fixed, 75),
+        new("100%", ZoomKind.Fixed, 100),
+        new("125%", ZoomKind.Fixed, 125),
+        new("150%", ZoomKind.Fixed, 150),
+        new("175%", ZoomKind.Fixed, 175),
+        new("200%", ZoomKind.Fixed, 200),
+        new("250%", ZoomKind.Fixed, 250),
+        new("300%", ZoomKind.Fixed, 300),
+        new("400%", ZoomKind.Fixed, 400),
+        new("600%", ZoomKind.Fixed, 600),
+        new("800%", ZoomKind.Fixed, 800),
+    ];
+
+    [ObservableProperty]
+    private ZoomOption selectedZoomOption = new("Auto", ZoomKind.Auto); // must match AvailableZoomOptions[0] exactly (record struct equality) for the ComboBox to show it selected initially
+
     /// <summary>A filled silhouette over <see cref="FramePreview.HistogramBucketCount"/> x [0,1]
     /// - CaptureView.xaml just stretches it into whatever panel space it has (a Viewbox), so no
     /// converter/per-bucket item template is needed for what's otherwise a 256-element collection
