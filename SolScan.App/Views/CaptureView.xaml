@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:SolScan.App.ViewModels"
              mc:Ignorable="d">
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -228,8 +229,20 @@
 
                     <TextBlock Text="Histogram" FontWeight="Bold" Margin="0,0,0,4"/>
                     <Border Height="60" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
+                        <!-- The inner Canvas is sized to CaptureViewModel.HistogramPlotWidth x
+                             HistogramPlotHeight explicitly, rather than letting the Viewbox size
+                             itself off the Path's own (data-dependent) geometry bounds - a bar
+                             right at the plotted area's edge (e.g. a fully saturated frame, every
+                             pixel piled into the very last bucket) was getting rounded away to
+                             nothing by WPF's layout rounding when the Viewbox's scale factor came
+                             from that same edge-flush geometry, confirmed on real ASI678MM hardware.
+                             A fixed, explicit viewport plus CaptureViewModel's own small margin on
+                             each side keeps every bar comfortably inside it instead. -->
                         <Viewbox Stretch="Fill">
-                            <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
+                            <Canvas Width="{x:Static local:CaptureViewModel.HistogramPlotWidth}"
+                                    Height="{x:Static local:CaptureViewModel.HistogramPlotHeight}">
+                                <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
+                            </Canvas>
                         </Viewbox>
                     </Border>
                     <!-- Matches ASICap's own Max/Min/AVG readout - the fastest way to tell a

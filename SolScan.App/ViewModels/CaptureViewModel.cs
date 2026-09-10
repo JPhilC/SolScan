@@ -769,35 +769,56 @@ public partial class CaptureViewModel : ObservableObject
         return group;
     }
 
+    /// <summary>Height of the plotted bar-chart coordinate space, in <see cref="BuildHistogramGeometry"/>'s
+    /// own local units - CaptureView.xaml's histogram Canvas must be sized to match
+    /// (<see cref="HistogramPlotWidth"/> x this).</summary>
+    public const double HistogramPlotHeight = 100;
+
+    /// <summary>Width of the plotted bar-chart coordinate space: <see cref="FramePreview.HistogramBucketCount"/>
+    /// buckets plus a small margin on each side (see <see cref="BuildHistogramGeometry"/>'s doc
+    /// comment) - CaptureView.xaml's histogram Canvas must be sized to match.</summary>
+    public const double HistogramPlotWidth = FramePreview.HistogramBucketCount + (2 * HistogramEdgeMargin);
+
+    private const double HistogramEdgeMargin = 2;
+
     /// <summary>
     /// Turns raw bucket counts into a filled step/bar-chart outline in a fixed
-    /// [bucket count]x[0,100] space. Bar heights come from
-    /// <see cref="FramePreview.ComputeHistogramBarHeights"/> - a *log* scale against the tallest
-    /// bucket, not linear - see its doc comment for why: on this panel's compact 60px height, a
-    /// linear scale left anything but the single dominant (usually background) bucket rendering
-    /// under a pixel tall, so a heavily overexposed frame's real, growing "clipping" hump would
-    /// appear to flatten to nothing instead of becoming visible.
+    /// [<see cref="HistogramPlotWidth"/>]x[<see cref="HistogramPlotHeight"/>] space - CaptureView.xaml
+    /// sizes its histogram Canvas to exactly that, rather than letting the Viewbox size itself off
+    /// this geometry's own (data-dependent) bounds, for the same edge-visibility reason as the
+    /// margin below.
+    ///
+    /// Bar heights come from <see cref="FramePreview.ComputeHistogramBarHeights"/> - a *log* scale
+    /// against the tallest bucket, not linear - see its doc comment for why: on this panel's compact
+    /// 60px height, a linear scale left anything but the single dominant (usually background) bucket
+    /// rendering under a pixel tall, so a heavily overexposed frame's real, growing "clipping" hump
+    /// would appear to flatten to nothing instead of becoming visible.
     ///
     /// Deliberately a *stepped* outline (each bucket gets a full-width flat-topped rectangle) and
     /// not a line connecting bucket-centre points: a heavily overexposed frame can have virtually
     /// every pixel land in one bucket (typically the last one), and a centre-point line would draw
     /// that as a triangle whose peak is a single, literally zero-width point - which, especially
     /// sitting right on the plot's own edge, can render as invisible (no fillable area) rather than
-    /// a small sliver. A stepped bar always has real width, however extreme the spike.
+    /// a small sliver. A stepped bar always has real width, however extreme the spike - but a fully
+    /// saturated frame (every sampled pixel identical, all piled into the very last bucket) still
+    /// rendered as a completely blank graph in practice, confirmed on real ASI678MM hardware: with
+    /// zero margin, that single bar sits exactly flush against the plotted area's own right edge,
+    /// where WPF's layout rounding can round its (already sub-pixel-thin) fill area away to nothing.
+    /// <see cref="HistogramEdgeMargin"/> keeps every bar - including one at bucket 0 or the very
+    /// last bucket - comfortably inside the plotted area's own bounds instead of flush against them.
     /// </summary>
     private static Geometry BuildHistogramGeometry(int[] rawHistogram)
     {
-        const double PlotHeight = 100;
         var barHeights = FramePreview.ComputeHistogramBarHeights(rawHistogram);
 
-        var figure = new PathFigure { StartPoint = new Point(0, PlotHeight), IsClosed = true };
+        var figure = new PathFigure { StartPoint = new Point(HistogramEdgeMargin, HistogramPlotHeight), IsClosed = true };
         for (var i = 0; i < rawHistogram.Length; i++)
         {
-            var barTop = PlotHeight - (barHeights[i] * PlotHeight);
-            figure.Segments.Add(new LineSegment(new Point(i, barTop), isStroked: true)); // rise/fall to this bucket's height
-            figure.Segments.Add(new LineSegment(new Point(i + 1, barTop), isStroked: true)); // flat top across the full bucket width
+            var barTop = HistogramPlotHeight - (barHeights[i] * HistogramPlotHeight);
+            figure.Segments.Add(new LineSegment(new Point(HistogramEdgeMargin + i, barTop), isStroked: true)); // rise/fall to this bucket's height
+            figure.Segments.Add(new LineSegment(new Point(HistogramEdgeMargin + i + 1, barTop), isStroked: true)); // flat top across the full bucket width
         }
-        figure.Segments.Add(new LineSegment(new Point(rawHistogram.Length, PlotHeight), isStroked: true));
+        figure.Segments.Add(new LineSegment(new Point(HistogramEdgeMargin + rawHistogram.Length, HistogramPlotHeight), isStroked: true));
 
         var geometry = new PathGeometry();
         geometry.Figures.Add(figure);
