@@ -246,12 +246,22 @@ and `CaptureViewModel`/`CaptureView.xaml` wiring it all into a SharpCap-style li
 picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop recording). Also real:
 per-camera-model settings persistence (`ICameraSettingsStore`/`JsonCameraSettingsStore`) and a
 RASTA-style `StatusBarViewModel`/`StatusBar.xaml` docked at the bottom of `MainWindow.xaml`,
-currently just showing the live capture frame rate.
+currently just showing the live capture frame rate. Also real: a centred, width/height-only ROI
+(`CaptureViewModel.RoiWidth`/`RoiHeight`, defaulting to the full sensor) driving three things - the
+histogram/auto-stretch (computed from the ROI crop only, via `FramePreview.CropToRoi`, not the whole
+frame), a dimming mask overlay on the live preview (the full frame stays visible, everywhere outside
+the ROI drawn darker via a translucent overlay, built in `CaptureViewModel.BuildRoiMaskGeometry`),
+and what's actually written while recording (cropped to the ROI in effect when the SER file was
+opened, snapshotted once per recording session rather than re-read live, since a SER header can't
+represent a mid-file geometry change). This is a *simpler* mechanism than the "wide/ROI view toggle"
+described under Phase 4 below - no vertical positioning, no switching between a wide framing view and
+a separate tight recording view, always centred - so that toggle item is still outstanding; this is a
+complementary piece of it, not a replacement.
 
 Placeholder: everything else behind those contracts. No ASCOM client, no solar ephemeris, no
-processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI view toggle,
-no camera-focus/collimator-focus aids, no live line-ID overlay yet (see the Phase 4 sub-items
-below).
+processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle*
+(see the centred ROI note above for what's real there instead), no camera-focus/collimator-focus
+aids, no live line-ID overlay yet (see the Phase 4 sub-items below).
 
 ## Phased build plan
 
@@ -336,7 +346,31 @@ below).
      - **The histogram is drawn as a stepped bar chart**, not a line connecting bucket-centre
        points - an isolated spike (e.g. a heavily overexposed frame, virtually every pixel in one
        bucket) drawn as a line has a literally zero-width peak, which can render as invisible
-       rather than a small sliver; a bar always has real width.
+       rather than a small sliver; a bar always has real width. That alone turned out not to be
+       enough, though - two further rounds of tuning, both against real ASI678MM hardware:
+       - **Bar heights are on a log scale** (`FramePreview.ComputeHistogramBarHeights` -
+         log(count+1)/log(maxCount+1) per bucket), not linear. A live SHG frame is overwhelmingly
+         background/sky pixels around whatever's actually interesting (the slit's bright band, a
+         clipping disk edge); as exposure rises toward overexposed the dominant background bucket's
+         count grows faster than the smaller "interesting" bucket's, so under linear normalization
+         the interesting bucket's *relative* height kept shrinking even as its raw count (and
+         `ComputeHistogramStats`' own Max/Avg readout) correctly climbed - on the histogram panel's
+         compact 60px height, anything under ~1.7% of the peak's count renders under a pixel tall,
+         i.e. invisible. Confirmed on real hardware: a real overexposure sweep showed the graph
+         flattening to nothing instead of building a hump on the right, while the Min/Max/Avg text
+         tracked correctly the whole time - proof the underlying data was fine and only the *scale*
+         used to draw it was the problem. Log scale is the same fix SharpCap/PixInsight/ASICap use
+         for this exact "background massively outnumbers signal" shape of problem.
+       - **The plotted area has a small margin on each side**
+         (`CaptureViewModel.HistogramEdgeMargin`/`HistogramPlotWidth`/`HistogramPlotHeight`, with
+         CaptureView.xaml's histogram `Canvas` sized to those constants via `x:Static` instead of
+         letting its `Viewbox` size itself off the `Path`'s own data-dependent geometry bounds). Even
+         after the log-scale fix, a *fully* saturated frame (every sampled pixel identical, e.g.
+         Min:255 Max:255 Avg:255) still rendered a completely blank graph on real hardware - that
+         single 100%-height bar sits exactly flush against the plotted area's own edge (the very
+         last bucket), where WPF's layout rounding could snap its already-thin fill area away to
+         nothing. The margin keeps a bar at bucket 0 or the last bucket comfortably inside the
+         plotted area instead of flush against it.
      - **`ComputeHistogram`/`Stretch` sample a downsampled (nearest-neighbour strided) grid of the
        frame, not every pixel** (`FramePreview.DefaultMaxPreviewDimension`, 960 on the longest
        side) - a live preview redrawn ~20x/sec has no business scanning every one of several
@@ -394,9 +428,12 @@ below).
      ~20fps preview redraw) once a second - future sections (mount status, etc.) should follow the
      same pattern once those exist.
    - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
-     vs. the tighter view actually used while recording. The ROI's *height* has its own recommended
-     value, independent of `ExposureCalculator`'s sizing (which governs width/fps) - see "ROI height"
-     under astro4j above: `RecommendedRoiHeight` = dispersion (Å/pixel, from
+     vs. the tighter view actually used while recording. *(Partially landed: a centred, width/height
+     ROI - see the "What's real" note above - already drives the histogram, a dimming mask overlay,
+     and what's cropped while recording; still outstanding is the actual view-toggle UX itself and
+     vertical positioning of the ROI, rather than always-centred.)* The ROI's *height* has its own
+     recommended value, independent of `ExposureCalculator`'s sizing (which governs width/fps) - see
+     "ROI height" under astro4j above: `RecommendedRoiHeight` = dispersion (Å/pixel, from
      `SpectrumAnalyzer.computeSpectralDispersion`) converted from a wanted Å range (line + wings +
      continuum margin) into pixels, plus a small smile-curvature allowance - sized to the *smallest*
      value that reaches the reconstruction goal, since every extra row costs frame-rate/USB-bandwidth
