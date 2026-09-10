@@ -239,6 +239,43 @@ public partial class CaptureViewModel : ObservableObject
             ?? AvailableCameras.FirstOrDefault();
     }
 
+    /// <summary>
+    /// Adds whatever's in <paramref name="supportedBinning"/> but not yet in
+    /// <see cref="AvailableBinningOptions"/> - never removes anything, so the collection only ever
+    /// grows here. Paired with <see cref="RemoveStaleBinningOptions"/>, called only once
+    /// <see cref="SelectedBinning"/> has moved to a value in the new set: together they replace the
+    /// dropdown's contents for a newly-connected camera without ever Clear()-ing it outright, which
+    /// would momentarily leave <see cref="AvailableBinningOptions"/> empty while the bound
+    /// ComboBox's SelectedItem still (briefly) has nothing to match - WPF's SelectedItem binding
+    /// reacts to that by trying to push null back into <see cref="SelectedBinning"/> (a plain,
+    /// non-nullable int), which throws and shows up as the ComboBox's default red validation-error
+    /// adorner right on every connect/Play.
+    /// </summary>
+    private void AddMissingBinningOptions(IReadOnlyList<int> supportedBinning)
+    {
+        foreach (var binning in supportedBinning)
+        {
+            if (!AvailableBinningOptions.Contains(binning))
+            {
+                AvailableBinningOptions.Add(binning);
+            }
+        }
+    }
+
+    /// <summary>See <see cref="AddMissingBinningOptions"/> - removes whatever's in
+    /// <see cref="AvailableBinningOptions"/> but not in <paramref name="supportedBinning"/>. Safe to
+    /// call once <see cref="SelectedBinning"/> no longer references any of them.</summary>
+    private void RemoveStaleBinningOptions(IReadOnlyList<int> supportedBinning)
+    {
+        for (var i = AvailableBinningOptions.Count - 1; i >= 0; i--)
+        {
+            if (!supportedBinning.Contains(AvailableBinningOptions[i]))
+            {
+                AvailableBinningOptions.RemoveAt(i);
+            }
+        }
+    }
+
     /// <summary>The "connect/play" button - connects <see cref="SelectedCamera"/> if it isn't
     /// already, then starts streaming; a second press just stops streaming (stays connected).
     /// Deliberately distinct from <see cref="DisconnectAsync"/> - see CaptureView.xaml.</summary>
@@ -272,12 +309,15 @@ public partial class CaptureViewModel : ObservableObject
             IsConnected = true;
 
             // SupportedBinning is camera-specific, so the dropdown is (re)populated on every
-            // connect regardless of whether saved settings exist.
-            AvailableBinningOptions.Clear();
-            foreach (var binning in SelectedCamera.SupportedBinning)
-            {
-                AvailableBinningOptions.Add(binning);
-            }
+            // connect regardless of whether saved settings exist. Adds anything newly-supported
+            // *before* SelectedBinning moves below, and only removes what's stale *after* - see
+            // AddMissingBinningOptions's doc comment for why: naively Clear()-ing first would
+            // momentarily empty the bound ComboBox's ItemsSource while SelectedBinning (a plain,
+            // non-nullable int) still points at the old value, and WPF's SelectedItem binding
+            // reacting to that by trying to push null back into a non-nullable int throws - showing
+            // as the ComboBox's default red validation-error adorner right on every connect/Play.
+            var supportedBinning = SelectedCamera.SupportedBinning;
+            AddMissingBinningOptions(supportedBinning);
 
             // Remembered from a previous session with this same camera *model* (keyed by Name,
             // not Id - see ICameraSettingsStore) - if there's nothing saved yet, fall back to
@@ -298,7 +338,9 @@ public partial class CaptureViewModel : ObservableObject
                 ContrastWhitePoint = savedSettings.ContrastWhitePoint;
                 IsContrastAuto = savedSettings.IsContrastAuto;
                 SelectedColorSpace = savedSettings.OutputFormat;
-                SelectedBinning = savedSettings.Binning;
+                // Falls back to the camera's own current binning if the saved value isn't (or is no
+                // longer) one this camera actually supports, rather than selecting something invalid.
+                SelectedBinning = supportedBinning.Contains(savedSettings.Binning) ? savedSettings.Binning : SelectedCamera.Binning;
                 RoiWidth = savedSettings.RoiWidth;
                 RoiHeight = savedSettings.RoiHeight;
             }
@@ -310,6 +352,11 @@ public partial class CaptureViewModel : ObservableObject
                 RoiHeight = 0;
             }
             _syncingFromDevice = false;
+
+            // SelectedBinning now definitely points at something in supportedBinning, so anything
+            // else left over from a previous camera can be dropped without ever removing the
+            // currently-selected entry.
+            RemoveStaleBinningOptions(supportedBinning);
 
             SelectedCamera.Gain = Gain;
             SelectedCamera.ExposureMicroseconds = ExposureMicroseconds;
