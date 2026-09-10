@@ -43,11 +43,23 @@ internal static class AsiNative
         InvalidMode,
     }
 
+    /// <summary>Numeric values match ZWO's own ASI_CONTROL_TYPE enum order exactly (see
+    /// "ASICamera2 Software Development Kit manual" section 2.9) - only the entries SolScan
+    /// currently drives are declared, not the full ~20-value native enum.</summary>
     internal enum AsiControlType
     {
         Gain = 0,
         Exposure = 1,
         BandwidthOverload = 6,
+
+        /// <summary>A sensor readout mode trading some dynamic range/noise for significantly higher
+        /// achievable frame rate - SharpCap exposes this as its own "High Speed Mode" checkbox for
+        /// ASI cameras. Left completely unset (at the camera's own power-on default, almost
+        /// certainly off) prior to this being added - the likely explanation for a large, otherwise
+        /// unaccounted-for live-view fps gap against ASICap/SharpCap at the same
+        /// Gain/Exposure/USB Turbo settings. 0/1 boolean-style control per general ASI SDK usage
+        /// (ASISetControlValue's lValue), same shape as Gain/Exposure/BandwidthOverload above.</summary>
+        HighSpeedMode = 14,
     }
 
     /// <summary>Only the mono formats SolScan's target hardware (ASI678MM and similar mono

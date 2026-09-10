@@ -133,6 +133,12 @@ public sealed class AsiCameraDevice : ICameraDevice
         // itself reports as its lowest supported binning factor (always 1 in practice for ASI, but
         // no reason to assume that rather than just asking).
         ApplyRoiFormat(CameraOutputFormat.Mono16, binning: SupportedBinning.Count > 0 ? SupportedBinning[0] : 1);
+
+        // See AsiControlType.HighSpeedMode's doc comment - left entirely unset (at the camera's own
+        // power-on default) prior to this, the likely explanation for a large live-view fps gap
+        // against ASICap/SharpCap at otherwise-matching Gain/Exposure/USB Turbo settings. Set once
+        // per connect, not tied to ApplyRoiFormat/output-format changes.
+        SetControl(AsiControlType.HighSpeedMode, 1, isAuto: false);
     }, cancellationToken);
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
