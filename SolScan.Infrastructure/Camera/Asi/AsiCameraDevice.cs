@@ -261,9 +261,37 @@ public sealed class AsiCameraDevice : ICameraDevice
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// How many pre-allocated frame buffers <see cref="CaptureLoop"/> rotates through - see its own
+    /// doc comment for why. 8 is a generous margin: even at several hundred fps, a full rotation is
+    /// still many milliseconds away, comfortably longer than <c>CaptureViewModel.ProcessPreviewFrame</c>
+    /// (the only consumer whose read can outlive the native call that produced the buffer) ever
+    /// takes to finish with one frame - it's throttled to at most ~20/sec and works over a
+    /// downsampled grid, not the full frame.
+    /// </summary>
+    private const int CaptureBufferPoolSize = 8;
+
     private void CaptureLoop()
     {
-        var buffer = new byte[_width * _height * _bytesPerPixel];
+        // A small pool of pre-allocated, reused buffers instead of a fresh `new byte[]` (then
+        // cloned) every single frame - on a large ROI (e.g. Mono16 3840x500 is ~3.84MB) at a high
+        // frame rate, that was a lot of allocation for the .NET allocator/GC to keep up with on
+        // every iteration, for no benefit ASI's own reference C/C++ demo (ASICamera2 SDK's
+        // demo/MFC2/demoDlg.cpp - CaptureVideo) doesn't pay either: it writes each frame straight
+        // into one shared, reused buffer and just flips a "new image" flag, no per-frame allocation
+        // at all. A single shared buffer would race the async preview consumer in
+        // CaptureViewModel.ProcessPreviewFrame (which reads frame.Data on the thread pool, after
+        // this method has already moved on) - rotating through several buffers instead keeps that
+        // safe without paying for a fresh allocation+copy every frame. Recording doesn't need this
+        // margin at all: SerWriter.WriteFrame consumes its buffer synchronously, inside
+        // CaptureViewModel.OnFrameCaptured, before this loop can call ASIGetVideoData again.
+        var frameByteSize = _width * _height * _bytesPerPixel;
+        var bufferPool = new byte[CaptureBufferPoolSize][];
+        for (var i = 0; i < CaptureBufferPoolSize; i++)
+        {
+            bufferPool[i] = new byte[frameByteSize];
+        }
+        var nextBufferIndex = 0;
 
         while (!_stopRequested)
         {
@@ -273,6 +301,7 @@ public sealed class AsiCameraDevice : ICameraDevice
             // property directly - this runs every loop iteration, and the property getter is a real
             // native SDK round-trip, not a cheap in-process read.
             var waitMs = (int)Math.Max(100, _cachedExposureMicroseconds / 1000.0 * 2 + 500);
+            var buffer = bufferPool[nextBufferIndex];
             var result = GetVideoData(_cameraId, buffer, buffer.Length, waitMs);
             if (result != AsiErrorCode.Success)
             {
@@ -281,7 +310,8 @@ public sealed class AsiCameraDevice : ICameraDevice
                 continue;
             }
 
-            var frame = new CameraFrame((byte[])buffer.Clone(), _width, _height, _bitDepth, DateTime.UtcNow);
+            var frame = new CameraFrame(buffer, _width, _height, _bitDepth, DateTime.UtcNow);
+            nextBufferIndex = (nextBufferIndex + 1) % CaptureBufferPoolSize;
             FrameCaptured?.Invoke(this, frame);
         }
     }
