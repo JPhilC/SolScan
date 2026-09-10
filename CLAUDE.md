@@ -247,16 +247,37 @@ picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop reco
 per-camera-model settings persistence (`ICameraSettingsStore`/`JsonCameraSettingsStore`) and a
 RASTA-style `StatusBarViewModel`/`StatusBar.xaml` docked at the bottom of `MainWindow.xaml`,
 currently just showing the live capture frame rate. Also real: a centred, width/height-only ROI
-(`CaptureViewModel.RoiWidth`/`RoiHeight`, defaulting to the full sensor) driving three things - the
-histogram/auto-stretch (computed from the ROI crop only, via `FramePreview.CropToRoi`, not the whole
-frame), a dimming mask overlay on the live preview (the full frame stays visible, everywhere outside
-the ROI drawn darker via a translucent overlay, built in `CaptureViewModel.BuildRoiMaskGeometry`),
-and what's actually written while recording (cropped to the ROI in effect when the SER file was
-opened, snapshotted once per recording session rather than re-read live, since a SER header can't
-represent a mid-file geometry change). This is a *simpler* mechanism than the "wide/ROI view toggle"
-described under Phase 4 below - no vertical positioning, no switching between a wide framing view and
-a separate tight recording view, always centred - so that toggle item is still outstanding; this is a
-complementary piece of it, not a replacement.
+(`CaptureViewModel.RoiWidth`/`RoiHeight`, defaulting to the full sensor) - a genuine *hardware*
+reconfiguration via `ICameraDevice.SetOutputFormatAsync` (which now takes `roiWidth`/`roiHeight`
+alongside colour space/binning - ASI's `ASISetROIFormat` sets all of these in one native call, and
+per its own SDK manual centres the ROI on the sensor automatically), not a post-capture software
+crop. That distinction isn't cosmetic: an earlier version of this feature *was* a software-only crop
+applied after the frame had already been captured, and confirmed on real ASI678MM hardware it left
+live-view frame rate completely unchanged from full-frame capture (~19-24fps at Mono16 3840x500
+regardless of Server GC, `ASI_HIGH_SPEED_MODE`, or removing a redundant per-loop-iteration native
+exposure query - none of which were the actual cause) - the camera was transferring the full sensor
+over USB the entire time no matter what the UI showed. Switching to a real `ASISetROIFormat`-driven
+ROI (`AsiCameraDevice.ApplyRoiFormat`, using `FramePreview.ComputeCenteredRoi` to resolve the
+request against the full binned sensor size, then rounding down to the SDK's iWidth%8=0/iHeight%2=0
+requirement) let ASICap sustain ~102.5fps at the same settings once *it* was given the same real
+ROI - confirming the fix. `AsiCameraDevice.CaptureLoop` also rotates through 8 pre-allocated frame
+buffers instead of a fresh allocation-plus-clone every frame, matching ZWO's own bundled C/C++
+reference demo's approach (`demo/MFC2/demoDlg.cpp`'s `CaptureVideo` thread writes each frame into
+one shared, reused buffer) - a real, if secondary, throughput improvement found while investigating
+the same fps gap, independent of the ROI fix itself. A first version of the ROI feature also had a
+dimming-mask overlay showing the full sensor with everything outside the ROI darkened, but that
+only made sense for a software crop (where the full frame was still being captured and displayed) -
+removed once ROI became a real hardware setting, since the camera then only ever delivers the
+cropped region and there's no wider "full sensor" data left to show or mask. `SimulatedCameraDevice`
+mirrors the real ASI behaviour (`FramePreview.ComputeCenteredRoi` resolves the requested ROI against
+its own fixed sensor size) so the feature is exercisable without hardware; `AltairCameraDevice`
+accepts the same `roiWidth`/`roiHeight` parameters but doesn't yet apply them (no
+`Altaircam_put_Roi`-equivalent P/Invoke binding exists, and there's no real Altair hardware in this
+environment to develop one against) - always streams the full frame regardless of what's requested,
+same honesty-over-guessing stance as the rest of that class. This ROI mechanism is *simpler* than
+the "wide/ROI view toggle" described under Phase 4 below - no vertical positioning, no switching
+between a wide framing view and a separate tight recording view, always centred - so that toggle
+item is still outstanding; this is a complementary piece of it, not a replacement.
 
 Placeholder: everything else behind those contracts. No ASCOM client, no solar ephemeris, no
 processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle*

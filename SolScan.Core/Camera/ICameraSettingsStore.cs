@@ -6,7 +6,9 @@ namespace SolScan.Core.Camera;
 /// was left, rather than the app's own defaults every time.</summary>
 /// <remarks><see cref="RoiWidth"/>/<see cref="RoiHeight"/> default to 0 ("full frame" - see
 /// <see cref="FramePreview.ComputeCenteredRoi"/>) so settings files saved before the ROI feature
-/// existed still deserialize cleanly into "no ROI selected".</remarks>
+/// existed still deserialize cleanly into "no ROI selected". A real hardware ROI (applied via
+/// <see cref="ICameraDevice.SetOutputFormatAsync"/>), not a post-capture crop - see that method's
+/// own doc comment.</remarks>
 public sealed record CameraSettings(
     double Gain,
     double ExposureMicroseconds,

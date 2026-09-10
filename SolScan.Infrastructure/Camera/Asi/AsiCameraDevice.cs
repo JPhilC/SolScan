@@ -151,8 +151,10 @@ public sealed class AsiCameraDevice : ICameraDevice
         IsConnected = true;
         // First entry in SupportedBinning rather than a hardcoded 1 - matches whatever the camera
         // itself reports as its lowest supported binning factor (always 1 in practice for ASI, but
-        // no reason to assume that rather than just asking).
-        ApplyRoiFormat(CameraOutputFormat.Mono16, binning: SupportedBinning.Count > 0 ? SupportedBinning[0] : 1);
+        // no reason to assume that rather than just asking). roiWidth/roiHeight 0/0 - full frame -
+        // CaptureViewModel re-applies whatever ROI it actually wants (saved or otherwise) via its
+        // own SetOutputFormatAsync call right after connecting.
+        ApplyRoiFormat(CameraOutputFormat.Mono16, binning: SupportedBinning.Count > 0 ? SupportedBinning[0] : 1, roiWidth: 0, roiHeight: 0);
 
         // See AsiControlType.HighSpeedMode's doc comment - left entirely unset (at the camera's own
         // power-on default) prior to this, a candidate explanation for a large live-view fps gap
@@ -178,7 +180,7 @@ public sealed class AsiCameraDevice : ICameraDevice
         IsConnected = false;
     }, cancellationToken);
 
-    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default)
+    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, int roiWidth = 0, int roiHeight = 0, CancellationToken cancellationToken = default)
     {
         if (!IsConnected)
         {
@@ -191,7 +193,7 @@ public sealed class AsiCameraDevice : ICameraDevice
             await StopStreamingAsync(cancellationToken);
         }
 
-        await Task.Run(() => ApplyRoiFormat(outputFormat, binning), cancellationToken);
+        await Task.Run(() => ApplyRoiFormat(outputFormat, binning, roiWidth, roiHeight), cancellationToken);
 
         if (wasStreaming)
         {
@@ -199,15 +201,34 @@ public sealed class AsiCameraDevice : ICameraDevice
         }
     }
 
-    /// <summary>The actual ROI-format reconfiguration: ASI sets pixel format and binning together
-    /// in one native call, and the requested width/height must already be pre-divided by the
-    /// binning factor (the SDK doesn't do that division itself).</summary>
-    private void ApplyRoiFormat(CameraOutputFormat outputFormat, int binning)
+    /// <summary>
+    /// The actual ROI-format reconfiguration: ASI sets pixel format, binning, and ROI size together
+    /// in one native call. <paramref name="roiWidth"/>/<paramref name="roiHeight"/> are in the same
+    /// post-binning units as the resulting frame (0 = full frame - see
+    /// <see cref="ICameraDevice.SetOutputFormatAsync"/>'s doc comment) -
+    /// <see cref="FramePreview.ComputeCenteredRoi"/> resolves that against the full (binned) sensor
+    /// size to get the actual region to request.
+    ///
+    /// This is a *real* hardware ROI, not a software crop applied after the fact: ASISetROIFormat
+    /// tells the sensor itself to only read out and transfer the requested region, which is what
+    /// actually reduces USB bandwidth and raises achievable frame rate - confirmed on real ASI678MM
+    /// hardware (a software-only crop left live-view fps identical to full-frame capture; switching
+    /// to this let ASICap sustain ~4x the frame rate at the same Gain/Exposure/USB Turbo settings).
+    /// ASI's SDK notes the requested width/height should generally satisfy iWidth%8=0, iHeight%2=0 -
+    /// rounded down (never up, so a requested ROI never grows past what was asked for) rather than
+    /// rejected outright. Per the SDK manual, ASISetROIFormat centres the ROI on the sensor itself,
+    /// so no separate ASISetStartPos call is needed to achieve SolScan's own "always centred" design.
+    /// </summary>
+    private void ApplyRoiFormat(CameraOutputFormat outputFormat, int binning, int roiWidth, int roiHeight)
     {
         _outputFormat = outputFormat;
         _binning = binning;
-        _width = _nativeMaxWidth / binning;
-        _height = _nativeMaxHeight / binning;
+
+        var fullWidth = _nativeMaxWidth / binning;
+        var fullHeight = _nativeMaxHeight / binning;
+        var roi = FramePreview.ComputeCenteredRoi(fullWidth, fullHeight, roiWidth, roiHeight);
+        _width = Math.Max(8, roi.Width - (roi.Width % 8));
+        _height = Math.Max(2, roi.Height - (roi.Height % 2));
 
         var imageType = outputFormat == CameraOutputFormat.Mono16 ? AsiImageType.Raw16 : AsiImageType.Raw8;
         _bytesPerPixel = imageType == AsiImageType.Raw16 ? 2 : 1;

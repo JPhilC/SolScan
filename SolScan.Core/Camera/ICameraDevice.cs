@@ -99,14 +99,28 @@ public interface ICameraDevice
     IReadOnlyList<int> SupportedBinning { get; }
 
     /// <summary>
-    /// Reconfigures <see cref="OutputFormat"/> and <see cref="Binning"/> together (ASI sets both in
-    /// one native ROI-format call, so there's no point splitting them into two operations) - if
-    /// already streaming, stops and restarts streaming around the change so the caller doesn't have
-    /// to orchestrate that itself. Not safe to call while a recording is in progress: the change
-    /// alters frame geometry/bit depth mid-file, which a SER file's fixed header can't represent -
-    /// SolScan.App's CaptureViewModel guards against this at the UI layer.
+    /// Reconfigures <see cref="OutputFormat"/>, <see cref="Binning"/>, and the region of interest
+    /// together - ASI's own native call (<c>ASISetROIFormat</c>) sets all of these in one operation,
+    /// so there's no point splitting them apart. If already streaming, stops and restarts streaming
+    /// around the change so the caller doesn't have to orchestrate that itself. Not safe to call
+    /// while a recording is in progress: the change alters frame geometry/bit depth mid-file, which
+    /// a SER file's fixed header can't represent - SolScan.App's CaptureViewModel guards against
+    /// this at the UI layer.
+    ///
+    /// <paramref name="roiWidth"/>/<paramref name="roiHeight"/> are in the *same* post-binning pixel
+    /// units as the resulting <see cref="CameraFrame"/>'s own Width/Height (i.e. what the frame
+    /// would be at this <paramref name="binning"/> with no ROI applied, then optionally narrowed) -
+    /// not full-sensor/unbinned units. 0 (the default) means "full frame" on either axis, clamped
+    /// and centred on the sensor if larger than it actually is - see
+    /// <see cref="FramePreview.ComputeCenteredRoi"/>, which implementations use for this. This is a
+    /// genuine hardware reconfiguration, not a post-capture crop: implementations that support it
+    /// (see <c>AsiCameraDevice</c>) tell the sensor itself to only read out and transfer the
+    /// requested region, directly reducing USB bandwidth and raising achievable frame rate - unlike
+    /// a software crop applied after capture, which does neither (confirmed on real ASI678MM
+    /// hardware: a software-only crop left live-view fps identical to full-frame capture, while a
+    /// real ASISetROIFormat-driven ROI let ASICap sustain ~4x the frame rate at the same settings).
     /// </summary>
-    Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default);
+    Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, int roiWidth = 0, int roiHeight = 0, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Cumulative count of frames the SDK's internal ring buffer dropped because they weren't

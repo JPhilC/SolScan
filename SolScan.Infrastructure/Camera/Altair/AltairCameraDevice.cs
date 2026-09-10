@@ -171,7 +171,14 @@ public sealed class AltairCameraDevice : ICameraDevice
         ApplyOutputFormat(CameraOutputFormat.Mono16, binning: SupportedBinning.Count > 0 ? SupportedBinning[0] : 1);
     }, cancellationToken);
 
-    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default)
+    /// <summary><paramref name="roiWidth"/>/<paramref name="roiHeight"/> are accepted (to satisfy
+    /// <see cref="ICameraDevice"/>) but not yet applied - no <c>Altaircam_put_Roi</c>-equivalent
+    /// P/Invoke binding exists in <see cref="AltairNative"/> yet, and (same caveat as the rest of
+    /// this class) there's no real Altair hardware in this environment to develop/verify it against.
+    /// Always streams the full (binned) frame regardless of what's requested. Revisit once real
+    /// Altair hardware is available - see <c>AsiCameraDevice.ApplyRoiFormat</c> for the ASI
+    /// equivalent this should eventually match in spirit.</summary>
+    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, int roiWidth = 0, int roiHeight = 0, CancellationToken cancellationToken = default)
     {
         if (!IsConnected)
         {

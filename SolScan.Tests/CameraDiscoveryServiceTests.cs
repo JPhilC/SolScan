@@ -56,7 +56,7 @@ public class CameraDiscoveryServiceTests
         public IReadOnlyList<int> SupportedBinning { get; } = [1, 2, 3, 4];
         public long DroppedFrameCount => 0;
 
-        public Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default)
+        public Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, int roiWidth = 0, int roiHeight = 0, CancellationToken cancellationToken = default)
         {
             OutputFormat = outputFormat;
             Binning = binning;

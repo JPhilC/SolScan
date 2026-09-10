@@ -49,25 +49,14 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                <!-- A single Viewbox scales the image and the ROI mask together, uniformly, so the
-                     mask always lines up with the preview pixels underneath it regardless of how big
-                     this Border ends up on screen - the inner Grid's Width/Height match the preview
-                     bitmap's own pixel size exactly (RoiMaskGeometry is built in that same preview
-                     pixel space, see CaptureViewModel.BuildRoiMaskGeometry), so Stretch="Fill" below
-                     is a 1:1 placement, not an actual resize. -->
-                <Viewbox Stretch="Uniform">
-                    <Grid Width="{Binding PreviewBitmap.PixelWidth}" Height="{Binding PreviewBitmap.PixelHeight}">
-                        <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately
-                             downsampled (see FramePreview's class doc comment) and then magnified
-                             back up to fill this area, so a smooth scale looks right where
-                             NearestNeighbor would look blocky. -->
-                        <Image Source="{Binding PreviewBitmap}" Stretch="Fill" RenderOptions.BitmapScalingMode="HighQuality"/>
-                        <!-- Dims everything outside the ROI via a translucent fill, leaving the ROI
-                             itself unmasked - see BuildRoiMaskGeometry. Empty (no visible dimming)
-                             whenever the ROI covers the full frame, e.g. before one's been chosen. -->
-                        <Path Data="{Binding RoiMaskGeometry}" Fill="#99000000" IsHitTestVisible="False"/>
-                    </Grid>
-                </Viewbox>
+                <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
+                     (see FramePreview's class doc comment) and then magnified back up to fill this
+                     area, so a smooth scale looks right where NearestNeighbor would look blocky.
+                     Shows exactly what the camera is actually streaming - the Region of Interest
+                     below is a real hardware setting (see CaptureViewModel.ApplyOutputFormatChange),
+                     not a post-capture crop, so there's no wider "full sensor" view to show
+                     alongside it once a narrower ROI is applied. -->
+                <Image Source="{Binding PreviewBitmap}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
             </Border>
 
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
@@ -106,11 +95,13 @@
                     </ComboBox>
 
                     <!-- Region of interest: width/height only (always centred on the sensor - see
-                         CaptureViewModel.RoiWidth/RoiHeight), applied to both the live view (as a
-                         dimming mask over the full frame, above) and - once cropped - what's
-                         actually written while recording. Locked while recording, same as colour
-                         space/binning above: a SER file's header can't represent a mid-file ROI
-                         change. -->
+                         CaptureViewModel.RoiWidth/RoiHeight) - a real hardware setting (reconfigured
+                         together with colour space/binning, see ApplyOutputFormatChange): the camera
+                         itself only reads out and transfers this region, which is what actually
+                         raises achievable frame rate at a smaller ROI (a software-only crop applied
+                         after capture doesn't - confirmed on real ASI678MM hardware). Locked while
+                         recording, same as colour space/binning above: a SER file's header can't
+                         represent a mid-file geometry change. -->
                     <TextBlock Text="Region of Interest" FontWeight="Bold"/>
                     <StackPanel Margin="0,4,0,12">
                         <StackPanel.Style>

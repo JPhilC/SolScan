@@ -38,22 +38,6 @@ public partial class CaptureViewModel : ObservableObject
     private bool _writerNeedsOpening;
     private DateTime _lastPreviewRedrawUtc = DateTime.MinValue;
 
-    // The most recently captured frame's full (un-cropped) dimensions - tracked so RoiWidth/
-    // RoiHeight can be (re)defaulted to "full sensor" the first time a frame arrives, and again
-    // whenever that geometry actually changes (a binning/colour-space change), without stomping a
-    // user-chosen ROI that's smaller than the frame. Only ever touched from the capture thread in
-    // OnFrameCaptured.
-    private int _lastFullFrameWidth;
-    private int _lastFullFrameHeight;
-
-    // The ROI actually applied to the file currently being recorded - captured once, from the first
-    // frame of the recording session (alongside _writerNeedsOpening below), rather than recomputed
-    // from RoiWidth/RoiHeight on every frame. A SER file's header fixes its geometry for the whole
-    // file, so the recording must keep using whatever ROI was in effect when it started even if the
-    // user manages to change RoiWidth/RoiHeight mid-recording (CaptureView.xaml disables those
-    // controls while IsRecording, but this is the guarantee, not the UI).
-    private RoiRect _activeRecordingRoi;
-
     // The actual camera capture rate (every frame, not just the throttled ~20fps preview redraw
     // above) - reported on the shared StatusBarViewModel roughly once a second. Only ever touched
     // from the capture thread (each device raises FrameCaptured from a single dedicated thread of
@@ -135,26 +119,21 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private int selectedBinning = 1;
 
-    /// <summary>Desired ROI width in full-frame sensor pixels, centred on the sensor - see
-    /// <see cref="FramePreview.ComputeCenteredRoi"/>. 0 (the default) means "not chosen yet/full
-    /// frame": <see cref="OnFrameCaptured"/> fills this in with the actual sensor width the first
-    /// time a frame arrives (and again after a binning/colour-space change), unless the user has
-    /// already picked something smaller. Drives the histogram (ROI-only, see
-    /// <see cref="ProcessPreviewFrame"/>), the ROI mask overlay, and - while recording - what's
-    /// actually cropped and written to the SER file.</summary>
+    /// <summary>Desired ROI width, centred on the sensor - a real hardware setting applied via
+    /// <see cref="ICameraDevice.SetOutputFormatAsync"/> (see <see cref="ApplyOutputFormatChange"/>),
+    /// not a post-capture crop: the camera itself only reads out and transfers this region, which is
+    /// what actually reduces USB bandwidth and raises achievable frame rate - confirmed on real
+    /// ASI678MM hardware (an earlier, software-only-crop version of this feature left live-view fps
+    /// unchanged, since the camera kept transferring the full frame regardless). 0 (the default)
+    /// means "full frame": <see cref="OnFrameCaptured"/> fills this in with the actual sensor width
+    /// the first time a frame arrives, purely so the textbox shows a real number instead of a bare
+    /// "0" - functionally 0 and the sensor's own full width mean the same thing to the device.</summary>
     [ObservableProperty]
     private int roiWidth;
 
     /// <summary>See <see cref="RoiWidth"/> - same idea, sensor height.</summary>
     [ObservableProperty]
     private int roiHeight;
-
-    /// <summary>A filled "donut" - the full preview bitmap dimmed by a translucent overlay
-    /// everywhere except the ROI itself, which is left unmasked - see
-    /// <see cref="BuildRoiMaskGeometry"/> and CaptureView.xaml. Null (no overlay drawn) before the
-    /// first preview frame.</summary>
-    [ObservableProperty]
-    private Geometry? roiMaskGeometry;
 
     /// <summary>Display-only contrast stretch (0-1, normalized to the frame's own bit depth) -
     /// never affects what's written to the SER file, see <see cref="FramePreview.Stretch"/>. Only
@@ -365,10 +344,12 @@ public partial class CaptureViewModel : ObservableObject
             SelectedCamera.IsExposureAuto = IsExposureAuto;
             SelectedCamera.IsUsbBandwidthAuto = IsUsbBandwidthAuto;
 
-            if (SelectedCamera.OutputFormat != SelectedColorSpace || SelectedCamera.Binning != SelectedBinning)
-            {
-                await SelectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning);
-            }
+            // Unconditional, not "if it differs from what the camera already reports": ROI has no
+            // readback property to compare against (see ICameraDevice.SetOutputFormatAsync's doc
+            // comment), and applying it again when it already matches is a harmless, connect-time-
+            // only extra native call - far simpler than trying to know in advance whether a saved
+            // RoiWidth/RoiHeight differs from whatever the camera just defaulted to on its own.
+            await SelectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning, RoiWidth, RoiHeight);
         }
 
         _frameArrivalCount = 0;
@@ -537,18 +518,18 @@ public partial class CaptureViewModel : ObservableObject
         PersistSettingsIfConnected();
     }
 
-    partial void OnRoiWidthChanged(int value) => PersistSettingsIfConnected();
+    partial void OnRoiWidthChanged(int value) => ApplyOutputFormatChange();
 
-    partial void OnRoiHeightChanged(int value) => PersistSettingsIfConnected();
+    partial void OnRoiHeightChanged(int value) => ApplyOutputFormatChange();
 
     /// <summary>Resets the ROI back to the full sensor - the "Full Frame" button on CaptureView.xaml.
-    /// Falls back to 0 (also "full frame" - see <see cref="RoiWidth"/>'s doc comment) if no frame's
-    /// been captured yet to know the real sensor dimensions from.</summary>
+    /// 0 means "full frame" to the device regardless of the sensor's actual size (see
+    /// <see cref="RoiWidth"/>'s doc comment), so there's no need to know real dimensions here.</summary>
     [RelayCommand]
     private void ResetRoi()
     {
-        RoiWidth = _lastFullFrameWidth;
-        RoiHeight = _lastFullFrameHeight;
+        RoiWidth = 0;
+        RoiHeight = 0;
     }
 
     partial void OnContrastBlackPointChanged(double value) => PersistSettingsIfConnected();
@@ -561,10 +542,10 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnSelectedBinningChanged(int value) => ApplyOutputFormatChange();
 
-    /// <summary>Colour space and binning are reconfigured together (see
-    /// <see cref="ICameraDevice.SetOutputFormatAsync"/>) - fired from either dropdown's
-    /// OnXChanged, which is why this is a fire-and-forget async void rather than an
-    /// [RelayCommand]: it's reacting to a property change, not a user-invoked command.</summary>
+    /// <summary>Colour space, binning, and ROI are all reconfigured together (see
+    /// <see cref="ICameraDevice.SetOutputFormatAsync"/>) - fired from any of the three controls'
+    /// OnXChanged, which is why this is a fire-and-forget async void rather than an [RelayCommand]:
+    /// it's reacting to a property change, not a user-invoked command.</summary>
     private async void ApplyOutputFormatChange()
     {
         if (_connectedCamera is null || _syncingFromDevice)
@@ -575,8 +556,12 @@ public partial class CaptureViewModel : ObservableObject
         if (IsRecording)
         {
             // Changing frame geometry/bit depth mid-file isn't representable in a SER file's fixed
-            // header - revert the dropdown rather than silently corrupting the recording.
-            StatusText = "Stop recording before changing colour space/binning.";
+            // header - revert the colour space/binning dropdowns rather than silently corrupting the
+            // recording. RoiWidth/RoiHeight aren't reverted here - ICameraDevice has no readback
+            // property for the currently-applied ROI to revert *to* (see its own doc comment) - but
+            // CaptureView.xaml already disables the ROI controls while IsRecording, so this path
+            // isn't expected to be hit via the ROI textboxes in practice.
+            StatusText = "Stop recording before changing colour space/binning/ROI.";
             _syncingFromDevice = true;
             SelectedColorSpace = _connectedCamera.OutputFormat;
             SelectedBinning = _connectedCamera.Binning;
@@ -586,12 +571,12 @@ public partial class CaptureViewModel : ObservableObject
 
         try
         {
-            await _connectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning);
+            await _connectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning, RoiWidth, RoiHeight);
             PersistSettingsIfConnected();
         }
         catch (Exception ex)
         {
-            StatusText = $"Failed to apply colour space/binning: {ex.Message}";
+            StatusText = $"Failed to apply colour space/binning/ROI: {ex.Message}";
         }
     }
 
@@ -639,27 +624,30 @@ public partial class CaptureViewModel : ObservableObject
             _dispatcher.BeginInvoke(() => _statusBar.CaptureFrameRateText = $"Capture: {fps:0.0} fps");
         }
 
-        // (Re)default RoiWidth/RoiHeight to the full sensor the first time a frame arrives, and
-        // again whenever the full-frame geometry actually changes (a binning/colour-space change) -
-        // but only while the ROI was already tracking "full frame" (0, unset, or equal to the
-        // *previous* full geometry), so a user-chosen smaller ROI survives a geometry change (it's
-        // re-clamped per-frame by ComputeCenteredRoi below instead, not stomped here).
-        if (frame.Width != _lastFullFrameWidth || frame.Height != _lastFullFrameHeight)
+        // UI-display convenience only: ROI is now a real hardware setting (see
+        // ApplyOutputFormatChange), not a post-capture crop, so a RoiWidth/RoiHeight of 0 already
+        // means "full frame" to the device - this just fills the textboxes in with the actual sensor
+        // dimensions the first time they're seen, rather than leaving them showing a bare,
+        // unhelpful "0". _syncingFromDevice guards it from triggering another (unnecessary,
+        // stream-restarting) ApplyOutputFormatChange call - 0 and the real number already mean the
+        // same thing to the device, so there's nothing to actually reapply.
+        if (RoiWidth <= 0 || RoiHeight <= 0)
         {
-            var wasTrackingFullFrame = RoiWidth <= 0 || RoiHeight <= 0
-                || (RoiWidth == _lastFullFrameWidth && RoiHeight == _lastFullFrameHeight);
-            _lastFullFrameWidth = frame.Width;
-            _lastFullFrameHeight = frame.Height;
-            if (wasTrackingFullFrame)
+            var fullWidth = frame.Width;
+            var fullHeight = frame.Height;
+            _dispatcher.BeginInvoke(() =>
             {
-                var fullWidth = frame.Width;
-                var fullHeight = frame.Height;
-                _dispatcher.BeginInvoke(() =>
+                _syncingFromDevice = true;
+                if (RoiWidth <= 0)
                 {
                     RoiWidth = fullWidth;
+                }
+                if (RoiHeight <= 0)
+                {
                     RoiHeight = fullHeight;
-                });
-            }
+                }
+                _syncingFromDevice = false;
+            });
         }
 
         ISerWriter? writer;
@@ -668,15 +656,14 @@ public partial class CaptureViewModel : ObservableObject
             writer = _activeWriter;
             if (writer is not null && _writerNeedsOpening)
             {
-                _activeRecordingRoi = FramePreview.ComputeCenteredRoi(frame.Width, frame.Height, RoiWidth, RoiHeight);
-                writer.Open(RecordingFilePath!, _activeRecordingRoi.Width, _activeRecordingRoi.Height, frame.BitDepth);
+                writer.Open(RecordingFilePath!, frame.Width, frame.Height, frame.BitDepth);
                 _writerNeedsOpening = false;
             }
         }
 
         if (writer is not null)
         {
-            writer.WriteFrame(FramePreview.CropToRoi(frame, _activeRecordingRoi));
+            writer.WriteFrame(frame);
             _dispatcher.BeginInvoke(() => FrameCount++);
         }
 
@@ -711,14 +698,9 @@ public partial class CaptureViewModel : ObservableObject
     {
         try
         {
-            // The histogram (and, below, the auto-stretch derived from it) is driven from the ROI
-            // only, not the whole frame - the point of an ROI is usually to frame the solar disk/
-            // spectral line, and a surrounding dark bezel outside it would otherwise skew both.
-            // CropToRoi is a no-op (returns frame itself) when the ROI covers the full frame, so
-            // this costs nothing extra in the default, no-ROI-chosen case.
-            var roi = FramePreview.ComputeCenteredRoi(frame.Width, frame.Height, RoiWidth, RoiHeight);
-            var roiFrame = FramePreview.CropToRoi(frame, roi);
-            var stats = FramePreview.ComputeHistogramStats(roiFrame);
+            // frame is already exactly the ROI - see ApplyOutputFormatChange - so the histogram,
+            // auto-stretch, and preview bitmap all just operate on it directly, no separate crop step.
+            var stats = FramePreview.ComputeHistogramStats(frame);
 
             // Auto-stretch is computed fresh from *this* frame's histogram rather than read back
             // off the (UI-thread-owned) ContrastBlackPoint/WhitePoint properties, so the preview
@@ -730,11 +712,7 @@ public partial class CaptureViewModel : ObservableObject
                 ? FramePreview.ComputeAutoStretch(stats.Histogram)
                 : (ContrastBlackPoint, ContrastWhitePoint);
 
-            // The preview bitmap itself is still stretched from the *whole* frame, not the ROI crop
-            // - the mask overlay built below dims everything outside the ROI directly on top of it,
-            // rather than the live view only ever showing the cropped-down region.
             var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint);
-            var roiInPreview = FramePreview.ScaleRoiToPreview(roi, frame.Width, frame.Height, previewWidth, previewHeight);
             var droppedFrames = camera?.DroppedFrameCount ?? 0;
 
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
@@ -750,7 +728,6 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
-                RoiMaskGeometry = BuildRoiMaskGeometry(previewWidth, previewHeight, roiInPreview);
 
                 if (isContrastAuto)
                 {
@@ -795,25 +772,6 @@ public partial class CaptureViewModel : ObservableObject
         }
 
         PreviewBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width, offset: 0);
-    }
-
-    /// <summary>
-    /// A rectangular "donut": the full <paramref name="previewWidth"/> x <paramref name="previewHeight"/>
-    /// preview area filled, with <paramref name="roiInPreview"/> cut out of it as a hole - drawn on
-    /// top of the (un-cropped) preview bitmap in CaptureView.xaml so the ROI itself shows through
-    /// unmasked while everything around it is dimmed by the fill's own translucency. Two overlapping
-    /// axis-aligned rectangles under an even-odd fill rule is the standard WPF way to punch a hole
-    /// like this: a point inside the ROI crosses both rectangles' boundaries on the way out (even -
-    /// unfilled), a point outside it but still inside the preview crosses only the outer one (odd -
-    /// filled).
-    /// </summary>
-    private static Geometry BuildRoiMaskGeometry(int previewWidth, int previewHeight, RoiRect roiInPreview)
-    {
-        var group = new GeometryGroup { FillRule = FillRule.EvenOdd };
-        group.Children.Add(new RectangleGeometry(new Rect(0, 0, previewWidth, previewHeight)));
-        group.Children.Add(new RectangleGeometry(new Rect(roiInPreview.X, roiInPreview.Y, roiInPreview.Width, roiInPreview.Height)));
-        group.Freeze();
-        return group;
     }
 
     /// <summary>Height of the plotted bar-chart coordinate space, in <see cref="BuildHistogramGeometry"/>'s

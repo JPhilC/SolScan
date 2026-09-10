@@ -79,10 +79,12 @@ public sealed class SimulatedCameraDevice : ICameraDevice
         return Task.CompletedTask;
     }
 
-    /// <summary>Mirrors the real devices' shape - frame Width/Height shrink with Binning, BitDepth
-    /// follows OutputFormat - purely so the Capture view's colour-space/binning dropdowns have a
-    /// visible effect during dev/testing without real hardware.</summary>
-    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, CancellationToken cancellationToken = default)
+    /// <summary>Mirrors the real devices' shape - frame Width/Height shrink with Binning and now
+    /// with roiWidth/roiHeight too (see <see cref="FramePreview.ComputeCenteredRoi"/>, matching
+    /// AsiCameraDevice's own approach), BitDepth follows OutputFormat - purely so the Capture view's
+    /// colour-space/binning/ROI controls have a visible effect during dev/testing without real
+    /// hardware.</summary>
+    public async Task SetOutputFormatAsync(CameraOutputFormat outputFormat, int binning, int roiWidth = 0, int roiHeight = 0, CancellationToken cancellationToken = default)
     {
         var wasStreaming = IsStreaming;
         if (wasStreaming)
@@ -92,8 +94,11 @@ public sealed class SimulatedCameraDevice : ICameraDevice
 
         _outputFormat = outputFormat;
         _binning = binning;
-        _width = NativeWidth / binning;
-        _height = NativeHeight / binning;
+        var fullWidth = NativeWidth / binning;
+        var fullHeight = NativeHeight / binning;
+        var roi = FramePreview.ComputeCenteredRoi(fullWidth, fullHeight, roiWidth, roiHeight);
+        _width = roi.Width;
+        _height = roi.Height;
         _bitDepth = outputFormat == CameraOutputFormat.Mono16 ? 16 : 8;
 
         if (wasStreaming)
