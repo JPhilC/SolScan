@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using SolScan.Core.Camera;
 using static SolScan.Infrastructure.Camera.Asi.AsiNative;
 
@@ -35,6 +36,16 @@ public sealed class AsiCameraDevice : ICameraDevice
     private bool _exposureIsAuto;
     private bool _bandwidthIsAuto;
 
+    // Mirrors the last known ExposureMicroseconds value - updated by both the property's getter and
+    // setter (see ExposureMicroseconds) - so CaptureLoop can size ASIGetVideoData's wait timeout
+    // without hitting the native SDK (ASIGetControlValue, a real round-trip, not a cheap in-process
+    // read) on every single loop iteration purely to compute that timeout. Read/written from
+    // different threads (UI thread via the property, capture thread via CaptureLoop) without a
+    // lock - not `volatile` (C# doesn't allow that on a double) - deliberately: this only ever sizes
+    // a generous wait timeout, not a correctness-critical value, so an occasional stale read is
+    // harmless.
+    private double _cachedExposureMicroseconds = 10_000;
+
     public AsiCameraDevice(int cameraId, string name, IReadOnlyList<int> supportedBinning)
     {
         _cameraId = cameraId;
@@ -56,8 +67,17 @@ public sealed class AsiCameraDevice : ICameraDevice
 
     public double ExposureMicroseconds
     {
-        get => GetControl(AsiControlType.Exposure);
-        set => SetControl(AsiControlType.Exposure, value, _exposureIsAuto);
+        get
+        {
+            var value = GetControl(AsiControlType.Exposure);
+            _cachedExposureMicroseconds = value;
+            return value;
+        }
+        set
+        {
+            _cachedExposureMicroseconds = value;
+            SetControl(AsiControlType.Exposure, value, _exposureIsAuto);
+        }
     }
 
     public int UsbBandwidthPercent
@@ -135,10 +155,16 @@ public sealed class AsiCameraDevice : ICameraDevice
         ApplyRoiFormat(CameraOutputFormat.Mono16, binning: SupportedBinning.Count > 0 ? SupportedBinning[0] : 1);
 
         // See AsiControlType.HighSpeedMode's doc comment - left entirely unset (at the camera's own
-        // power-on default) prior to this, the likely explanation for a large live-view fps gap
+        // power-on default) prior to this, a candidate explanation for a large live-view fps gap
         // against ASICap/SharpCap at otherwise-matching Gain/Exposure/USB Turbo settings. Set once
-        // per connect, not tied to ApplyRoiFormat/output-format changes.
-        SetControl(AsiControlType.HighSpeedMode, 1, isAuto: false);
+        // per connect, not tied to ApplyRoiFormat/output-format changes. Checked and read back
+        // explicitly (unlike Gain/Exposure/Bandwidth's fire-and-forget SetControl helper) since a
+        // real-hardware test showed no fps change from enabling it - worth confirming whether the
+        // SDK actually accepted the value at all before ruling the hypothesis out entirely.
+        var setResult = SetControlValue(_cameraId, AsiControlType.HighSpeedMode, 1, 0);
+        GetControlValue(_cameraId, AsiControlType.HighSpeedMode, out var highSpeedModeValue, out _);
+        Debug.WriteLine($"AsiCameraDevice: SetControlValue(HighSpeedMode, 1) -> {setResult}; " +
+            $"read back as {highSpeedModeValue}.");
     }, cancellationToken);
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
@@ -242,8 +268,11 @@ public sealed class AsiCameraDevice : ICameraDevice
         while (!_stopRequested)
         {
             // Wait comfortably longer than the current exposure so a slow/long exposure doesn't
-            // spuriously time out; ASIGetVideoData itself returns as soon as a frame is ready.
-            var waitMs = (int)Math.Max(100, ExposureMicroseconds / 1000.0 * 2 + 500);
+            // spuriously time out; ASIGetVideoData itself returns as soon as a frame is ready. Reads
+            // the cached value (see _cachedExposureMicroseconds) rather than the ExposureMicroseconds
+            // property directly - this runs every loop iteration, and the property getter is a real
+            // native SDK round-trip, not a cheap in-process read.
+            var waitMs = (int)Math.Max(100, _cachedExposureMicroseconds / 1000.0 * 2 + 500);
             var result = GetVideoData(_cameraId, buffer, buffer.Length, waitMs);
             if (result != AsiErrorCode.Success)
             {
