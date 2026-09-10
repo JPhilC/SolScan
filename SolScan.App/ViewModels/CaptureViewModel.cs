@@ -415,15 +415,17 @@ public partial class CaptureViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(IsRecording))]
     private void StopRecording()
     {
-        ISerWriter? writer;
+        // Close()/Dispose() run *inside* the lock too - see OnFrameCaptured's own comment on
+        // _recordingLock for why: without this, a frame arriving on the capture thread just as this
+        // (UI-thread) button handler runs could call SerWriter.WriteFrame concurrently with this
+        // method's Close(), corrupting its internal frame-timestamp list.
         lock (_recordingLock)
         {
-            writer = _activeWriter;
+            _activeWriter?.Close();
+            _activeWriter?.Dispose();
             _activeWriter = null;
         }
 
-        writer?.Close();
-        writer?.Dispose();
         IsRecording = false;
         StatusText = $"Recording stopped - {FrameCount} frame(s) written to {RecordingFilePath}.";
     }
@@ -650,20 +652,34 @@ public partial class CaptureViewModel : ObservableObject
             });
         }
 
-        ISerWriter? writer;
+        // WriteFrame itself now runs *inside* the lock, not just the reference grab - StopRecording
+        // takes the same lock around Close()/Dispose() (see below), so a WriteFrame call on this
+        // (capture) thread and a Close() call on the UI thread (Stop Recording button) can never run
+        // concurrently against the same SerWriter instance. They used to be able to: SerWriter has no
+        // internal synchronization of its own (its _frameTimestampsUtcTicks list is plain, mutated by
+        // WriteFrame and enumerated by Close()), and the previous, narrower lock only protected
+        // grabbing the writer reference - real-hardware testing hit exactly this race as
+        // "InvalidOperationException: Collection was modified; enumeration operation may not execute"
+        // out of Close(), from a frame arriving concurrently with the Stop Recording button.
+        var writerWasOpen = false;
         lock (_recordingLock)
         {
-            writer = _activeWriter;
-            if (writer is not null && _writerNeedsOpening)
+            var writer = _activeWriter;
+            if (writer is not null)
             {
-                writer.Open(RecordingFilePath!, frame.Width, frame.Height, frame.BitDepth);
-                _writerNeedsOpening = false;
+                if (_writerNeedsOpening)
+                {
+                    writer.Open(RecordingFilePath!, frame.Width, frame.Height, frame.BitDepth);
+                    _writerNeedsOpening = false;
+                }
+
+                writer.WriteFrame(frame);
+                writerWasOpen = true;
             }
         }
 
-        if (writer is not null)
+        if (writerWasOpen)
         {
-            writer.WriteFrame(frame);
             _dispatcher.BeginInvoke(() => FrameCount++);
         }
 
