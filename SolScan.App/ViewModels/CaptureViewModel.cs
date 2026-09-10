@@ -775,7 +775,22 @@ public partial class CaptureViewModel : ObservableObject
                 ? FramePreview.ComputeAutoStretch(stats.Histogram)
                 : (ContrastBlackPoint, ContrastWhitePoint);
 
-            var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint);
+            // A *fixed* zoom percentage is the user deliberately asking to inspect real detail -
+            // checking focus on the spectral line itself is the actual point of this app - so the
+            // preview needs genuinely native-resolution pixels there, not FramePreview's default
+            // downsample-for-performance cap (960px longest side): zooming into an already-
+            // downsampled bitmap would just show a magnified, blurry copy of detail that's already
+            // been thrown away, defeating the purpose. Passing the frame's own full size as
+            // maxDimension makes ComputeDownsampleGrid's scale factor exactly 1 (no downsampling) -
+            // see its own doc comment. Auto/FitWidth/FitHeight keep the cheap default: their whole
+            // point is fitting the available viewport, not pixel-peeping, so there's nothing to gain
+            // from the extra work. This only runs on the already-offloaded preview thread (see the
+            // throttling comment above), never the capture thread, so it can't affect capture fps -
+            // the cost of a deliberate zoom-in is a slower-feeling *preview* redraw only.
+            var stretchMaxDimension = SelectedZoomOption.Kind == ZoomKind.Fixed
+                ? Math.Max(frame.Width, frame.Height)
+                : FramePreview.DefaultMaxPreviewDimension;
+            var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint, stretchMaxDimension);
             var droppedFrames = camera?.DroppedFrameCount ?? 0;
 
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,

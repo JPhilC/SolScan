@@ -299,6 +299,26 @@ the "wide/ROI view toggle" described under Phase 4 below - no vertical positioni
 between a wide framing view and a separate tight recording view, always centred - so that toggle
 item is still outstanding; this is a complementary piece of it, not a replacement.
 
+Also real: a SharpCap-style Zoom dropdown (`CaptureViewModel.AvailableZoomOptions`/
+`SelectedZoomOption`, a new `ZoomOption`/`ZoomKind` in `SolScan.App.ViewModels`) - Auto, Fit Width,
+Fit Height, then fixed percentages 16%-800%, matching SharpCap's own list. The preview `Image` sits
+in a `ScrollViewer` (`PreviewScrollViewer`) for pan scrollbars once zoomed past the available space.
+The actual pixel width/height math lives in `CaptureView.xaml.cs` (`UpdateImageSize`), not the view
+model - it needs the ScrollViewer's live viewport size, a View-layer concern - recomputed whenever
+`SelectedZoomOption` changes, the ScrollViewer resizes, or a differently-sized `PreviewBitmap`
+arrives. Important interaction with `FramePreview`'s downsampling (see below): a *fixed* percentage
+means the user is deliberately pixel-peeping to check focus on the spectral line itself - the actual
+point of this app - so `CaptureViewModel.ProcessPreviewFrame` passes the frame's own full size as
+`FramePreview.Stretch`'s `maxDimension` whenever `SelectedZoomOption.Kind == ZoomKind.Fixed`
+(yielding a downsample scale of exactly 1, i.e. true native resolution), rather than the default
+960px-longest-side cap - zooming into an already-downsampled bitmap would otherwise just magnify a
+blurry copy of detail that's already been thrown away, defeating the purpose. Auto/Fit Width/Fit
+Height keep the cheap default, since their job is fitting the viewport, not inspecting native
+pixels. This only runs on the already-offloaded preview thread, never the capture thread, so a
+deliberate zoom-in can make the *preview* redraw feel slower but can't affect capture/recording fps.
+`ComputeHistogramStats`' own sampling is untouched by zoom - it's a statistical summary, not a
+spatial one, so the downsampled default remains accurate and cheap regardless.
+
 Placeholder: everything else behind those contracts. No ASCOM client, no solar ephemeris, no
 processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle*
 (see the centred ROI note above for what's real there instead), no camera-focus/collimator-focus
