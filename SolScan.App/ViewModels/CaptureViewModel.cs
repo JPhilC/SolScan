@@ -38,6 +38,22 @@ public partial class CaptureViewModel : ObservableObject
     private bool _writerNeedsOpening;
     private DateTime _lastPreviewRedrawUtc = DateTime.MinValue;
 
+    // The most recently captured frame's full (un-cropped) dimensions - tracked so RoiWidth/
+    // RoiHeight can be (re)defaulted to "full sensor" the first time a frame arrives, and again
+    // whenever that geometry actually changes (a binning/colour-space change), without stomping a
+    // user-chosen ROI that's smaller than the frame. Only ever touched from the capture thread in
+    // OnFrameCaptured.
+    private int _lastFullFrameWidth;
+    private int _lastFullFrameHeight;
+
+    // The ROI actually applied to the file currently being recorded - captured once, from the first
+    // frame of the recording session (alongside _writerNeedsOpening below), rather than recomputed
+    // from RoiWidth/RoiHeight on every frame. A SER file's header fixes its geometry for the whole
+    // file, so the recording must keep using whatever ROI was in effect when it started even if the
+    // user manages to change RoiWidth/RoiHeight mid-recording (CaptureView.xaml disables those
+    // controls while IsRecording, but this is the guarantee, not the UI).
+    private RoiRect _activeRecordingRoi;
+
     // The actual camera capture rate (every frame, not just the throttled ~20fps preview redraw
     // above) - reported on the shared StatusBarViewModel roughly once a second. Only ever touched
     // from the capture thread (each device raises FrameCaptured from a single dedicated thread of
@@ -118,6 +134,27 @@ public partial class CaptureViewModel : ObservableObject
 
     [ObservableProperty]
     private int selectedBinning = 1;
+
+    /// <summary>Desired ROI width in full-frame sensor pixels, centred on the sensor - see
+    /// <see cref="FramePreview.ComputeCenteredRoi"/>. 0 (the default) means "not chosen yet/full
+    /// frame": <see cref="OnFrameCaptured"/> fills this in with the actual sensor width the first
+    /// time a frame arrives (and again after a binning/colour-space change), unless the user has
+    /// already picked something smaller. Drives the histogram (ROI-only, see
+    /// <see cref="ProcessPreviewFrame"/>), the ROI mask overlay, and - while recording - what's
+    /// actually cropped and written to the SER file.</summary>
+    [ObservableProperty]
+    private int roiWidth;
+
+    /// <summary>See <see cref="RoiWidth"/> - same idea, sensor height.</summary>
+    [ObservableProperty]
+    private int roiHeight;
+
+    /// <summary>A filled "donut" - the full preview bitmap dimmed by a translucent overlay
+    /// everywhere except the ROI itself, which is left unmasked - see
+    /// <see cref="BuildRoiMaskGeometry"/> and CaptureView.xaml. Null (no overlay drawn) before the
+    /// first preview frame.</summary>
+    [ObservableProperty]
+    private Geometry? roiMaskGeometry;
 
     /// <summary>Display-only contrast stretch (0-1, normalized to the frame's own bit depth) -
     /// never affects what's written to the SER file, see <see cref="FramePreview.Stretch"/>. Only
@@ -262,11 +299,15 @@ public partial class CaptureViewModel : ObservableObject
                 IsContrastAuto = savedSettings.IsContrastAuto;
                 SelectedColorSpace = savedSettings.OutputFormat;
                 SelectedBinning = savedSettings.Binning;
+                RoiWidth = savedSettings.RoiWidth;
+                RoiHeight = savedSettings.RoiHeight;
             }
             else
             {
                 SelectedColorSpace = SelectedCamera.OutputFormat;
                 SelectedBinning = SelectedCamera.Binning;
+                RoiWidth = 0;
+                RoiHeight = 0;
             }
             _syncingFromDevice = false;
 
@@ -449,6 +490,20 @@ public partial class CaptureViewModel : ObservableObject
         PersistSettingsIfConnected();
     }
 
+    partial void OnRoiWidthChanged(int value) => PersistSettingsIfConnected();
+
+    partial void OnRoiHeightChanged(int value) => PersistSettingsIfConnected();
+
+    /// <summary>Resets the ROI back to the full sensor - the "Full Frame" button on CaptureView.xaml.
+    /// Falls back to 0 (also "full frame" - see <see cref="RoiWidth"/>'s doc comment) if no frame's
+    /// been captured yet to know the real sensor dimensions from.</summary>
+    [RelayCommand]
+    private void ResetRoi()
+    {
+        RoiWidth = _lastFullFrameWidth;
+        RoiHeight = _lastFullFrameHeight;
+    }
+
     partial void OnContrastBlackPointChanged(double value) => PersistSettingsIfConnected();
 
     partial void OnContrastWhitePointChanged(double value) => PersistSettingsIfConnected();
@@ -516,7 +571,9 @@ public partial class CaptureViewModel : ObservableObject
             SelectedBinning,
             ContrastBlackPoint,
             ContrastWhitePoint,
-            IsContrastAuto));
+            IsContrastAuto,
+            RoiWidth,
+            RoiHeight));
     }
 
     private void OnFrameCaptured(object? sender, CameraFrame frame)
@@ -535,20 +592,44 @@ public partial class CaptureViewModel : ObservableObject
             _dispatcher.BeginInvoke(() => _statusBar.CaptureFrameRateText = $"Capture: {fps:0.0} fps");
         }
 
+        // (Re)default RoiWidth/RoiHeight to the full sensor the first time a frame arrives, and
+        // again whenever the full-frame geometry actually changes (a binning/colour-space change) -
+        // but only while the ROI was already tracking "full frame" (0, unset, or equal to the
+        // *previous* full geometry), so a user-chosen smaller ROI survives a geometry change (it's
+        // re-clamped per-frame by ComputeCenteredRoi below instead, not stomped here).
+        if (frame.Width != _lastFullFrameWidth || frame.Height != _lastFullFrameHeight)
+        {
+            var wasTrackingFullFrame = RoiWidth <= 0 || RoiHeight <= 0
+                || (RoiWidth == _lastFullFrameWidth && RoiHeight == _lastFullFrameHeight);
+            _lastFullFrameWidth = frame.Width;
+            _lastFullFrameHeight = frame.Height;
+            if (wasTrackingFullFrame)
+            {
+                var fullWidth = frame.Width;
+                var fullHeight = frame.Height;
+                _dispatcher.BeginInvoke(() =>
+                {
+                    RoiWidth = fullWidth;
+                    RoiHeight = fullHeight;
+                });
+            }
+        }
+
         ISerWriter? writer;
         lock (_recordingLock)
         {
             writer = _activeWriter;
             if (writer is not null && _writerNeedsOpening)
             {
-                writer.Open(RecordingFilePath!, frame.Width, frame.Height, frame.BitDepth);
+                _activeRecordingRoi = FramePreview.ComputeCenteredRoi(frame.Width, frame.Height, RoiWidth, RoiHeight);
+                writer.Open(RecordingFilePath!, _activeRecordingRoi.Width, _activeRecordingRoi.Height, frame.BitDepth);
                 _writerNeedsOpening = false;
             }
         }
 
         if (writer is not null)
         {
-            writer.WriteFrame(frame);
+            writer.WriteFrame(FramePreview.CropToRoi(frame, _activeRecordingRoi));
             _dispatcher.BeginInvoke(() => FrameCount++);
         }
 
@@ -583,7 +664,14 @@ public partial class CaptureViewModel : ObservableObject
     {
         try
         {
-            var stats = FramePreview.ComputeHistogramStats(frame);
+            // The histogram (and, below, the auto-stretch derived from it) is driven from the ROI
+            // only, not the whole frame - the point of an ROI is usually to frame the solar disk/
+            // spectral line, and a surrounding dark bezel outside it would otherwise skew both.
+            // CropToRoi is a no-op (returns frame itself) when the ROI covers the full frame, so
+            // this costs nothing extra in the default, no-ROI-chosen case.
+            var roi = FramePreview.ComputeCenteredRoi(frame.Width, frame.Height, RoiWidth, RoiHeight);
+            var roiFrame = FramePreview.CropToRoi(frame, roi);
+            var stats = FramePreview.ComputeHistogramStats(roiFrame);
 
             // Auto-stretch is computed fresh from *this* frame's histogram rather than read back
             // off the (UI-thread-owned) ContrastBlackPoint/WhitePoint properties, so the preview
@@ -595,7 +683,11 @@ public partial class CaptureViewModel : ObservableObject
                 ? FramePreview.ComputeAutoStretch(stats.Histogram)
                 : (ContrastBlackPoint, ContrastWhitePoint);
 
+            // The preview bitmap itself is still stretched from the *whole* frame, not the ROI crop
+            // - the mask overlay built below dims everything outside the ROI directly on top of it,
+            // rather than the live view only ever showing the cropped-down region.
             var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint);
+            var roiInPreview = FramePreview.ScaleRoiToPreview(roi, frame.Width, frame.Height, previewWidth, previewHeight);
             var droppedFrames = camera?.DroppedFrameCount ?? 0;
 
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
@@ -611,6 +703,7 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
+                RoiMaskGeometry = BuildRoiMaskGeometry(previewWidth, previewHeight, roiInPreview);
 
                 if (isContrastAuto)
                 {
@@ -655,6 +748,25 @@ public partial class CaptureViewModel : ObservableObject
         }
 
         PreviewBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width, offset: 0);
+    }
+
+    /// <summary>
+    /// A rectangular "donut": the full <paramref name="previewWidth"/> x <paramref name="previewHeight"/>
+    /// preview area filled, with <paramref name="roiInPreview"/> cut out of it as a hole - drawn on
+    /// top of the (un-cropped) preview bitmap in CaptureView.xaml so the ROI itself shows through
+    /// unmasked while everything around it is dimmed by the fill's own translucency. Two overlapping
+    /// axis-aligned rectangles under an even-odd fill rule is the standard WPF way to punch a hole
+    /// like this: a point inside the ROI crosses both rectangles' boundaries on the way out (even -
+    /// unfilled), a point outside it but still inside the preview crosses only the outer one (odd -
+    /// filled).
+    /// </summary>
+    private static Geometry BuildRoiMaskGeometry(int previewWidth, int previewHeight, RoiRect roiInPreview)
+    {
+        var group = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        group.Children.Add(new RectangleGeometry(new Rect(0, 0, previewWidth, previewHeight)));
+        group.Children.Add(new RectangleGeometry(new Rect(roiInPreview.X, roiInPreview.Y, roiInPreview.Width, roiInPreview.Height)));
+        group.Freeze();
+        return group;
     }
 
     /// <summary>

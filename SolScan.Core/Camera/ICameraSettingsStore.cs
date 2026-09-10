@@ -2,8 +2,11 @@ namespace SolScan.Core.Camera;
 
 /// <summary>The Capture view's per-camera-model dial-in state - everything a user tunes on
 /// CaptureView.xaml (gain/exposure/USB throttle and their Auto flags, colour space/binning,
-/// contrast stretch) - remembered so reconnecting the same camera later starts from where it was
-/// left, rather than the app's own defaults every time.</summary>
+/// contrast stretch, ROI) - remembered so reconnecting the same camera later starts from where it
+/// was left, rather than the app's own defaults every time.</summary>
+/// <remarks><see cref="RoiWidth"/>/<see cref="RoiHeight"/> default to 0 ("full frame" - see
+/// <see cref="FramePreview.ComputeCenteredRoi"/>) so settings files saved before the ROI feature
+/// existed still deserialize cleanly into "no ROI selected".</remarks>
 public sealed record CameraSettings(
     double Gain,
     double ExposureMicroseconds,
@@ -15,7 +18,9 @@ public sealed record CameraSettings(
     int Binning,
     double ContrastBlackPoint,
     double ContrastWhitePoint,
-    bool IsContrastAuto);
+    bool IsContrastAuto,
+    int RoiWidth = 0,
+    int RoiHeight = 0);
 
 /// <summary>
 /// Persists <see cref="CameraSettings"/> keyed by <see cref="ICameraDevice.Name"/> (e.g. "ZWO

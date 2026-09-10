@@ -48,10 +48,25 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
-                     (see FramePreview's class doc comment) and then magnified back up to fill this
-                     area, so a smooth scale looks right where NearestNeighbor would look blocky. -->
-                <Image Source="{Binding PreviewBitmap}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <!-- A single Viewbox scales the image and the ROI mask together, uniformly, so the
+                     mask always lines up with the preview pixels underneath it regardless of how big
+                     this Border ends up on screen - the inner Grid's Width/Height match the preview
+                     bitmap's own pixel size exactly (RoiMaskGeometry is built in that same preview
+                     pixel space, see CaptureViewModel.BuildRoiMaskGeometry), so Stretch="Fill" below
+                     is a 1:1 placement, not an actual resize. -->
+                <Viewbox Stretch="Uniform">
+                    <Grid Width="{Binding PreviewBitmap.PixelWidth}" Height="{Binding PreviewBitmap.PixelHeight}">
+                        <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately
+                             downsampled (see FramePreview's class doc comment) and then magnified
+                             back up to fill this area, so a smooth scale looks right where
+                             NearestNeighbor would look blocky. -->
+                        <Image Source="{Binding PreviewBitmap}" Stretch="Fill" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <!-- Dims everything outside the ROI via a translucent fill, leaving the ROI
+                             itself unmasked - see BuildRoiMaskGeometry. Empty (no visible dimming)
+                             whenever the ROI covers the full frame, e.g. before one's been chosen. -->
+                        <Path Data="{Binding RoiMaskGeometry}" Fill="#99000000" IsHitTestVisible="False"/>
+                    </Grid>
+                </Viewbox>
             </Border>
 
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
@@ -88,6 +103,41 @@
                             </Style>
                         </ComboBox.Style>
                     </ComboBox>
+
+                    <!-- Region of interest: width/height only (always centred on the sensor - see
+                         CaptureViewModel.RoiWidth/RoiHeight), applied to both the live view (as a
+                         dimming mask over the full frame, above) and - once cropped - what's
+                         actually written while recording. Locked while recording, same as colour
+                         space/binning above: a SER file's header can't represent a mid-file ROI
+                         change. -->
+                    <TextBlock Text="Region of Interest" FontWeight="Bold"/>
+                    <StackPanel Margin="0,4,0,12">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Width" FontSize="11" Opacity="0.8"/>
+                                <TextBox Text="{Binding RoiWidth, UpdateSourceTrigger=LostFocus}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Height" FontSize="11" Opacity="0.8"/>
+                                <TextBox Text="{Binding RoiHeight, UpdateSourceTrigger=LostFocus}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Button Content="Full Frame" Command="{Binding ResetRoiCommand}" HorizontalAlignment="Left"/>
+                    </StackPanel>
 
                     <Separator Margin="0,0,0,12"/>
 

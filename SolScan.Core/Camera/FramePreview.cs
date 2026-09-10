@@ -210,6 +210,72 @@ public static class FramePreview
         return (scale, Math.Max(1, frame.Width / scale), Math.Max(1, frame.Height / scale));
     }
 
+    /// <summary>
+    /// Centres a <paramref name="roiWidth"/> x <paramref name="roiHeight"/> region of interest on a
+    /// <paramref name="frameWidth"/> x <paramref name="frameHeight"/> frame, clamped to the frame's
+    /// own bounds. A non-positive width/height (the unset default - see
+    /// <c>CaptureViewModel.RoiWidth</c>/<c>RoiHeight</c>) means "full frame", so a freshly-connected
+    /// camera with no ROI chosen yet behaves exactly as if there were no ROI at all.
+    /// </summary>
+    public static RoiRect ComputeCenteredRoi(int frameWidth, int frameHeight, int roiWidth, int roiHeight)
+    {
+        var width = Math.Clamp(roiWidth <= 0 ? frameWidth : roiWidth, 1, frameWidth);
+        var height = Math.Clamp(roiHeight <= 0 ? frameHeight : roiHeight, 1, frameHeight);
+        var x = (frameWidth - width) / 2;
+        var y = (frameHeight - height) / 2;
+        return new RoiRect(x, y, width, height);
+    }
+
+    /// <summary>
+    /// Copies just the <paramref name="roi"/> region out of <paramref name="frame"/> into a new,
+    /// smaller <see cref="CameraFrame"/> - what actually gets histogrammed (see
+    /// <c>CaptureViewModel</c>'s "histogram driven from the ROI" requirement) and what gets written
+    /// to the SER file while recording with a non-full-frame ROI selected. Returns
+    /// <paramref name="frame"/> itself, untouched, when <paramref name="roi"/> already covers the
+    /// whole frame - the common case, and not worth an extra full-frame copy every call.
+    /// </summary>
+    public static CameraFrame CropToRoi(CameraFrame frame, RoiRect roi)
+    {
+        if (roi.X == 0 && roi.Y == 0 && roi.Width == frame.Width && roi.Height == frame.Height)
+        {
+            return frame;
+        }
+
+        var bytesPerPixel = frame.BitDepth > 8 ? 2 : 1;
+        var srcStride = frame.Width * bytesPerPixel;
+        var dstStride = roi.Width * bytesPerPixel;
+        var output = new byte[roi.Width * roi.Height * bytesPerPixel];
+
+        for (var row = 0; row < roi.Height; row++)
+        {
+            var srcOffset = ((roi.Y + row) * srcStride) + (roi.X * bytesPerPixel);
+            var dstOffset = row * dstStride;
+            Buffer.BlockCopy(frame.Data, srcOffset, output, dstOffset, dstStride);
+        }
+
+        return frame with { Data = output, Width = roi.Width, Height = roi.Height };
+    }
+
+    /// <summary>
+    /// Maps a full-frame <see cref="RoiRect"/> into the same downsampled preview pixel space
+    /// <see cref="Stretch"/>/<see cref="ComputeHistogram"/> render into, so a mask overlay drawn on
+    /// top of the (smaller) preview bitmap lines up with the actual ROI rather than the frame's own,
+    /// larger pixel coordinates - see <c>CaptureViewModel</c>'s ROI mask.
+    /// </summary>
+    public static RoiRect ScaleRoiToPreview(RoiRect roi, int frameWidth, int frameHeight, int previewWidth, int previewHeight)
+    {
+        if (frameWidth <= 0 || frameHeight <= 0)
+        {
+            return roi;
+        }
+
+        var x = (int)Math.Round(roi.X * previewWidth / (double)frameWidth);
+        var y = (int)Math.Round(roi.Y * previewHeight / (double)frameHeight);
+        var width = Math.Max(1, (int)Math.Round(roi.Width * previewWidth / (double)frameWidth));
+        var height = Math.Max(1, (int)Math.Round(roi.Height * previewHeight / (double)frameHeight));
+        return new RoiRect(x, y, width, height);
+    }
+
     private static int BucketFor(int value, int maxValue) =>
         Math.Min(value * HistogramBucketCount / (maxValue + 1), HistogramBucketCount - 1);
 
