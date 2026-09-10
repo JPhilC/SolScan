@@ -10,6 +10,19 @@
     <PlatformTarget>x64</PlatformTarget>
     <Platforms>AnyCPU;x64</Platforms>
     <ApplicationIcon>Assets\SolScan.ico</ApplicationIcon>
+    <!-- The default Workstation GC is tuned for a mostly-idle UI app, not the camera capture
+         thread's sustained high-throughput allocation (a fresh clone of each captured frame's
+         buffer, often several MB - see AsiCameraDevice.CaptureLoop/AltairCameraDevice.OnNativeEvent
+         - lands on the Large Object Heap every single frame at up to ~100fps). Server GC's
+         per-core heaps are what .NET recommends for exactly this "sustained high-allocation-rate
+         background workload" shape of problem; Concurrent GC (on by default, listed explicitly here
+         so the pairing is deliberate, not incidental) keeps most Gen2/LOH collection work off to
+         the side rather than blocking. Added to investigate a large observed fps gap
+         (SharpCap/ASICap ~100fps vs SolScan ~19fps at the same Mono16 3840x500 ROI) - see CLAUDE.md
+         for whether this closed the gap once validated against real hardware.
+    -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
