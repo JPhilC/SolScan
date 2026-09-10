@@ -448,6 +448,25 @@ aids, no live line-ID overlay yet (see the Phase 4 sub-items below).
      1 - always the same value in practice for cameras seen so far, but asks the camera rather than
      assuming.
 
+     `CaptureViewModel.AvailableBinningOptions` is repopulated per-connect via
+     `AddMissingBinningOptions`/`RemoveStaleBinningOptions` (add whatever's newly-supported first,
+     only remove what's stale *after* `SelectedBinning` has moved to a value in the new set) rather
+     than a plain `Clear()` + re-`Add()` - confirmed on real hardware that naively clearing first
+     momentarily left the ComboBox's bound `ItemsSource` empty while `SelectedBinning` (a plain,
+     non-nullable `int`) still pointed at the old value, and WPF's `SelectedItem` binding reacting to
+     that by trying to push `null` back into a non-nullable `int` threw and showed up as the
+     ComboBox's default red validation-error adorner on every single connect/Play.
+
+     `CaptureViewModel._recordingLock` covers the *actual* `SerWriter.WriteFrame`/`Close`/`Dispose`
+     calls now, not just the `_activeWriter` reference grab - `SerWriter` has no synchronization of
+     its own (`_frameTimestampsUtcTicks`, a plain `List<long>`, is `Add`-ed to by `WriteFrame` and
+     `foreach`-enumerated by `Close`), so with the narrower lock a frame arriving on the capture
+     thread at the same moment Stop Recording is pressed (UI thread) could call `WriteFrame`
+     concurrently with `Close`, throwing `InvalidOperationException: Collection was modified;
+     enumeration operation may not execute` - hit on real hardware. Widening the lock to cover the
+     I/O calls themselves only adds contention once per recording (when it stops), not per frame, so
+     it doesn't touch the throughput work above.
+
      Capture settings (Gain/Exposure/USB Turbo and their Auto flags, Colour Space, Binning,
      Contrast stretch) are remembered per camera *model* across sessions -
      `SolScan.Core.Camera.ICameraSettingsStore`/`CameraSettings`, backed by
@@ -470,9 +489,12 @@ aids, no live line-ID overlay yet (see the Phase 4 sub-items below).
      same pattern once those exist.
    - a wide/ROI ("crop") view toggle, with the ROI vertically positionable, for framing during setup
      vs. the tighter view actually used while recording. *(Partially landed: a centred, width/height
-     ROI - see the "What's real" note above - already drives the histogram, a dimming mask overlay,
-     and what's cropped while recording; still outstanding is the actual view-toggle UX itself and
-     vertical positioning of the ROI, rather than always-centred.)* The ROI's *height* has its own
+     ROI - see the "What's real" note above - is now a real hardware setting (`ASISetROIFormat`)
+     driving what the camera itself reads out, the histogram, the preview, and what's recorded, all
+     directly, with no separate crop/mask step; still outstanding is the actual view-toggle UX
+     itself and vertical positioning of the ROI, rather than always-centred - there's currently no
+     way to see the full sensor at all once a narrower ROI is applied, since the camera simply never
+     delivers that data.)* The ROI's *height* has its own
      recommended value, independent of `ExposureCalculator`'s sizing (which governs width/fps) - see
      "ROI height" under astro4j above: `RecommendedRoiHeight` = dispersion (Å/pixel, from
      `SpectrumAnalyzer.computeSpectralDispersion`) converted from a wanted Å range (line + wings +
