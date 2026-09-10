@@ -771,8 +771,12 @@ public partial class CaptureViewModel : ObservableObject
 
     /// <summary>
     /// Turns raw bucket counts into a filled step/bar-chart outline in a fixed
-    /// [bucket count]x[0,100] space, normalized against the tallest bucket so the peak always
-    /// reaches full height.
+    /// [bucket count]x[0,100] space. Bar heights come from
+    /// <see cref="FramePreview.ComputeHistogramBarHeights"/> - a *log* scale against the tallest
+    /// bucket, not linear - see its doc comment for why: on this panel's compact 60px height, a
+    /// linear scale left anything but the single dominant (usually background) bucket rendering
+    /// under a pixel tall, so a heavily overexposed frame's real, growing "clipping" hump would
+    /// appear to flatten to nothing instead of becoming visible.
     ///
     /// Deliberately a *stepped* outline (each bucket gets a full-width flat-topped rectangle) and
     /// not a line connecting bucket-centre points: a heavily overexposed frame can have virtually
@@ -784,13 +788,12 @@ public partial class CaptureViewModel : ObservableObject
     private static Geometry BuildHistogramGeometry(int[] rawHistogram)
     {
         const double PlotHeight = 100;
-        var maxCount = rawHistogram.Length == 0 ? 0 : rawHistogram.Max();
+        var barHeights = FramePreview.ComputeHistogramBarHeights(rawHistogram);
 
         var figure = new PathFigure { StartPoint = new Point(0, PlotHeight), IsClosed = true };
         for (var i = 0; i < rawHistogram.Length; i++)
         {
-            var ratio = maxCount == 0 ? 0 : rawHistogram[i] / (double)maxCount;
-            var barTop = PlotHeight - (ratio * PlotHeight);
+            var barTop = PlotHeight - (barHeights[i] * PlotHeight);
             figure.Segments.Add(new LineSegment(new Point(i, barTop), isStroked: true)); // rise/fall to this bucket's height
             figure.Segments.Add(new LineSegment(new Point(i + 1, barTop), isStroked: true)); // flat top across the full bucket width
         }

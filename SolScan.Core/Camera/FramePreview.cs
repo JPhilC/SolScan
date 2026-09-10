@@ -199,6 +199,43 @@ public static class FramePreview
         return (blackPoint, whitePoint);
     }
 
+    /// <summary>
+    /// Per-bucket bar heights for the histogram graph, in [0,1] against the tallest bucket - but on
+    /// a *log* scale (log(count+1) / log(maxCount+1)), not linear.
+    ///
+    /// SolScan's live view frame is overwhelmingly background/sky pixels around whatever genuinely
+    /// interesting content is in it (the slit's bright band, a disk edge starting to clip) - as
+    /// exposure rises toward overexposed, the dominant background bucket's pixel count grows faster
+    /// than the smaller "interesting" bucket's, so under *linear* normalization the interesting
+    /// bucket's relative height keeps shrinking even as its raw count (and <see cref="ComputeHistogramStats"/>'s
+    /// own Max/Avg readout) correctly climbs. On CaptureView.xaml's compact 60px-tall histogram
+    /// panel, anything under ~1.7% of the peak's count renders under a pixel tall - not small,
+    /// genuinely invisible - which is what makes a real, growing "overexposed" hump appear to
+    /// flatten out to nothing instead of building on the right as expected. A log scale is the
+    /// standard fix for exactly this ("background massively outnumbers signal") shape of problem in
+    /// astro-imaging histograms (SharpCap/PixInsight/ASICap all do this): it compresses the *count*
+    /// dynamic range so a bucket with even a small fraction of the peak's pixels still gets a
+    /// meaningful, visible bar rather than being sub-pixel next to whichever bucket happens to
+    /// dominate this particular frame.
+    /// </summary>
+    public static double[] ComputeHistogramBarHeights(int[] histogram)
+    {
+        var heights = new double[histogram.Length];
+        var maxCount = histogram.Length == 0 ? 0 : histogram.Max();
+        if (maxCount <= 0)
+        {
+            return heights;
+        }
+
+        var logMaxCountPlusOne = Math.Log(maxCount + 1);
+        for (var i = 0; i < histogram.Length; i++)
+        {
+            heights[i] = histogram[i] <= 0 ? 0 : Math.Log(histogram[i] + 1) / logMaxCountPlusOne;
+        }
+
+        return heights;
+    }
+
     /// <summary>How many source pixels to skip per sampled pixel (in both dimensions) so the
     /// longest side comes out at or under <paramref name="maxDimension"/>, plus the resulting
     /// sampled grid size. Nearest-neighbour (plain striding, no averaging) - simplest and fastest,

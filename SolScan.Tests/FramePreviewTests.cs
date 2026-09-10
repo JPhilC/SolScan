@@ -122,6 +122,33 @@ public class FramePreviewTests
     }
 
     [Fact]
+    public void ComputeHistogramBarHeights_GivesASmallButVisibleHeight_ToAFarSmallerBucket()
+    {
+        // A stand-in for a real live-view frame: an overwhelmingly dominant background bucket (the
+        // vast majority of pixels) plus a much smaller "interesting content" bucket (e.g. a
+        // clipping/overexposed disk edge) that's still a real, non-trivial number of pixels - just a
+        // tiny fraction of the background's count. Linear normalization would render this second
+        // bucket at 0.1% height - under a pixel tall on CaptureView.xaml's 60px panel, i.e.
+        // invisible - which is the bug being fixed here.
+        var histogram = new int[FramePreview.HistogramBucketCount];
+        histogram[10] = 500_000; // background
+        histogram[200] = 500; // clipping/overexposed content - 0.1% of the background's count
+
+        var heights = FramePreview.ComputeHistogramBarHeights(histogram);
+
+        Assert.Equal(1.0, heights[10], precision: 6); // the tallest bucket always reaches full height
+        Assert.True(heights[200] > 0.05, $"Expected a visibly non-trivial height, got {heights[200]}");
+    }
+
+    [Fact]
+    public void ComputeHistogramBarHeights_ReturnsAllZero_WhenHistogramIsEmpty()
+    {
+        var heights = FramePreview.ComputeHistogramBarHeights(new int[FramePreview.HistogramBucketCount]);
+
+        Assert.All(heights, h => Assert.Equal(0, h));
+    }
+
+    [Fact]
     public void ComputeCenteredRoi_CentresRequestedSizeOnTheFrame()
     {
         var roi = FramePreview.ComputeCenteredRoi(frameWidth: 100, frameHeight: 60, roiWidth: 40, roiHeight: 20);
