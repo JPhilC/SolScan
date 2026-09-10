@@ -240,8 +240,14 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   the default is picked up automatically for anyone who's never actually customized it.
   `CaptureViewModel.StartRecording` reads the setting fresh (a cheap JSON read) each time a
   recording starts, so a change in Options takes effect on the very next recording without a
-  restart; a customized folder is used exactly as chosen, with no further `SolScan\Captures`
-  subfolder appended underneath it.
+  restart; a customized folder is used exactly as chosen at that level (no further
+  `SolScan\Captures` appended) - the one thing always added underneath it, custom or default, is a
+  `yyyyMMdd` date subfolder (one `DateTime.Now` reused for both that and the filename's own
+  timestamp, so the two can't disagree across a midnight boundary) - matching sunscan-backend's own
+  `storage/scans/<date>/` layout, researched specifically for this (see `camera_controller.py`'s
+  `_initSerFile`), though sunscan's own SER file is always literally named `scan.ser` with
+  uniqueness coming entirely from its enclosing per-scan folder name, unlike SolScan's own
+  `SolScan_<timestamp>.ser` naming.
 
 ### What's real vs. placeholder right now
 

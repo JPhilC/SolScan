@@ -401,13 +401,18 @@ public partial class CaptureViewModel : ObservableObject
         // change made in Options > General takes effect on the very next recording without
         // requiring a restart. Falls back to SolScan's own default location - see
         // AppSettings.CapturesRootFolder's doc comment for why a customized value is used exactly
-        // as chosen (no further "SolScan\Captures" subfolder appended) rather than treated as a
-        // parent to nest under.
-        var directory = _appSettingsStore.Load().CapturesRootFolder is { Length: > 0 } customFolder
+        // as chosen at this level (no further "SolScan\Captures" appended) - the one thing always
+        // added underneath it, custom or default, is the date subfolder below.
+        var rootFolder = _appSettingsStore.Load().CapturesRootFolder is { Length: > 0 } customFolder
             ? customFolder
             : CaptureLocations.DefaultCapturesRootFolder;
+
+        // One timestamp for both the date subfolder and the filename, not two separate
+        // DateTime.Now calls, so the two can never disagree across a midnight boundary.
+        var now = DateTime.Now;
+        var directory = Path.Combine(rootFolder, now.ToString("yyyyMMdd"));
         Directory.CreateDirectory(directory);
-        RecordingFilePath = Path.Combine(directory, $"SolScan_{DateTime.Now:yyyyMMdd_HHmmss}.ser");
+        RecordingFilePath = Path.Combine(directory, $"SolScan_{now:yyyyMMdd_HHmmss}.ser");
 
         lock (_recordingLock)
         {
