@@ -1,15 +1,18 @@
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
+using SolScan.App.Services;
 using SolScan.App.ViewModels;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
+using SolScan.Core.Telescope;
 using SolScan.Infrastructure.Camera;
 using SolScan.Infrastructure.Camera.Altair;
 using SolScan.Infrastructure.Camera.Asi;
 using SolScan.Infrastructure.Capture;
 using SolScan.Infrastructure.Equipment;
+using SolScan.Infrastructure.Telescope;
 using SolScan.Simulators;
 
 namespace SolScan.App;
@@ -43,6 +46,11 @@ public partial class App : Application
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
 
+        // See OnMountConnectionLost below - fires on MountService's own polling background thread
+        // whenever a live mount call throws (the only signal available that the link has actually
+        // gone away).
+        _serviceProvider.GetRequiredService<MountService>().ConnectionLost += OnMountConnectionLost;
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         MainWindow = mainWindow;
         mainWindow.ContentRendered += async (_, _) =>
@@ -62,7 +70,13 @@ public partial class App : Application
 
     private static void ConfigureServices(IServiceCollection services)
     {
-        // TODO (Phase 2+): register ITelescopeMount from SolScan.Infrastructure once it exists.
+        // ASCOM Alpaca (REST) mount - see SolScan CLAUDE.md "Scope for v1" for why Alpaca-only, not
+        // direct COM. AscomTelescopeMount's base URL/device number are set from Options > General
+        // at connect time (PrepareViewModel), not here - see AscomTelescopeMount.SetBaseUrl.
+        services.AddSingleton<AscomAlpacaClient>();
+        services.AddSingleton<ITelescopeMount>(sp => new AscomTelescopeMount(sp.GetRequiredService<AscomAlpacaClient>()));
+        services.AddSingleton<MountState>();
+        services.AddSingleton<MountService>();
 
         services.AddSingleton<IEquipmentLibrary, JsonEquipmentLibrary>();
 
@@ -89,9 +103,17 @@ public partial class App : Application
         services.AddTransient<ISerWriter, SerWriter>();
         services.AddSingleton<Func<ISerWriter>>(sp => sp.GetRequiredService<ISerWriter>);
 
+        // Snapshots the SHG/telescope/camera used into a .equipment.json sidecar per recording -
+        // see CaptureViewModel.WriteCaptureEquipmentMetadata. Stateless, so a singleton is fine.
+        services.AddSingleton<ICaptureMetadataWriter, JsonCaptureMetadataWriter>();
+
         services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<NavigationViewModel>();
-        services.AddTransient<PrepareViewModel>();
+
+        // Singleton, not transient like the other stage view models - mount connection state
+        // (IsBusy, command CanExecute, the MountState.PropertyChanged subscription) must survive
+        // navigating away to Capture/Process/Options and back.
+        services.AddSingleton<PrepareViewModel>();
         services.AddTransient<CaptureViewModel>();
         services.AddTransient<ProcessViewModel>();
         services.AddTransient<OptionsViewModel>();
@@ -100,7 +122,48 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Stop MountService's poll loop before the service provider (and everything it owns) goes
+        // away - without this it keeps running past window close and can still try to marshal
+        // updates onto Application.Current.Dispatcher after Application.Current has already gone
+        // null. Best-effort: a shutdown-time failure here shouldn't block exit.
+        try
+        {
+            _serviceProvider?.GetService<MountService>()?.Stop();
+        }
+        catch
+        {
+            // Ignored - the app is exiting regardless.
+        }
+
         _serviceProvider?.Dispose();
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Fires when MountService's poll loop learns the mount is unreachable (a live ASCOM Alpaca
+    /// call throwing - network drop, mount powered off, Alpaca server gone). Unlike RASTA's
+    /// equivalent, this doesn't cancel any in-progress capture or force navigation back to Prepare -
+    /// SolScan's capture pipeline doesn't depend on mount state yet (that's Phase 5, "Automated
+    /// acquisition"). Fires on MountService's own background polling thread, so everything here is
+    /// marshaled onto the UI thread first.
+    /// </summary>
+    private void OnMountConnectionLost(Exception ex)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_serviceProvider is null)
+                return;
+
+            _serviceProvider.GetRequiredService<ITelescopeMount>().MarkDisconnected();
+            _serviceProvider.GetRequiredService<MountState>().IsConnected = false;
+
+            MessageBox.Show(
+                $"The connection to the telescope mount was lost:\n\n{ex.Message}\n\n" +
+                "The mount has been marked as disconnected. Check the mount/Alpaca connection and " +
+                "reconnect from Prepare when ready.",
+                "Telescope Connection Lost",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        });
     }
 }

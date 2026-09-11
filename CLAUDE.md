@@ -191,25 +191,42 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   `ITelescopeMount` (connect/disconnect, current position, slew, tracking, park/unpark, site
   lat/lon/elevation - RA/Dec-only by design, see "Scope for v1" above), `ICameraDevice` (streaming
   frame capture only, no long-exposure-still path by design - see "Video vs. long-exposure stills"
-  under Phase 4; gain/exposure, `UsbBandwidthPercent`, `DroppedFrameCount`), `ISerWriter`
-  (writes a live frame stream to a `.ser` file). References `CommunityToolkit.Mvvm` for
-  `ObservableObject`/`RelayCommand` base classes on domain models that need change notification
-  (e.g. live capture/session state), without pulling in WPF itself. Also carries the `Equipment`
-  namespace's equipment-profile records, adapted from astro4j's shape: `SpectrographProfile`
-  (Sol'ex-equivalent to `SpectroHeliograph.java`: total angle, camera/collimator focal lengths,
-  grating density/order, slit size) and `EquipmentProfile` (telescope-equivalent to `Setup.java`:
-  telescope/camera names, focal length, aperture, pixel size, mount, site lat/long). Unlike astro4j,
-  where `SpectroHeliograph` and `Setup` are two independently-selected libraries with no persisted
-  link between them, SolScan adds a third record, `EquipmentSetup` - a saved "this SHG is mounted
-  behind this telescope/camera" combination, referencing the other two by `Id` - plus
-  `IEquipmentLibrary`, the persistence abstraction for all three libraries (implemented by
-  `SolScan.Infrastructure`'s `JsonEquipmentLibrary`, one JSON file per library under
-  `%LocalAppData%\SolScan\equipment\`, mirroring astro4j's `SpectroHeliographsIO`/`SetupsIO`). Backs the
-  Options view - see below.
-- **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca telescope client (to be
-  ported from RASTA's `AscomAlpacaClient`/`AscomTelescopeMount`), a ZWO ASI camera wrapper (native
-  SDK P/Invoke), a `.ser` file writer/reader - none of those three implemented yet. `JsonEquipmentLibrary`
-  (see above) is implemented.
+  under Phase 4; gain/exposure, `UsbBandwidthPercent`, `DroppedFrameCount`, `PixelSizeMicrons` -
+  sensor pixel size where the vendor SDK exposes one, feeding the camera-profile auto-add described
+  below), `ISerWriter` (writes a live frame stream to a `.ser` file). References
+  `CommunityToolkit.Mvvm` for `ObservableObject`/`RelayCommand` base classes on domain models that
+  need change notification (e.g. live capture/session state), without pulling in WPF itself. Also
+  carries the `Equipment` namespace's equipment records, adapted from astro4j's shape:
+  `SpectrographProfile` (Sol'ex-equivalent to `SpectroHeliograph.java`: total angle, camera/
+  collimator focal lengths, grating density/order, slit size), `TelescopeProfile` (name, focal
+  length, aperture, energy rejection filter - partial translation of `Setup.java`, scoped to just the
+  fields it shares with this record), and `CameraProfile` (name, pixel size). Telescope and camera are two separate
+  library entries, not one combined record - unlike astro4j's `Setup.java` (telescope+camera+mount+
+  site as one record), SolScan splits them because the camera isn't picked from a library by hand at
+  all: `SolScan.App`'s `CaptureViewModel` auto-adds a `CameraProfile` the first time a given camera
+  model connects (matched by `Label` against `ICameraDevice.Name` - the same "key by Name, not Id"
+  reasoning as `ICameraSettingsStore`'s own doc comment), filling in `PixelSizeMicrons` from the
+  connected hardware rather than asking the user to type it in; `TelescopeProfile` still is a normal
+  hand-edited library entry. Neither carries `Setup.java`'s old mount/site fields - `Mount` was
+  unused free text, and site geometry now lives on `AppSettings`/`Telescope.MountState` (see the
+  mount-control work below) rather than a second, unsynced copy here. Unlike astro4j, where
+  `SpectroHeliograph` and `Setup` are two independently-selected libraries with no persisted link
+  between them, SolScan adds a fourth record, `EquipmentSetup` - a saved "this SHG is mounted on
+  this telescope" combination, referencing `SpectrographProfile`/`TelescopeProfile` by `Id` (no
+  camera reference - see above) - plus `IEquipmentLibrary`, the persistence abstraction for all four
+  libraries (implemented by `SolScan.Infrastructure`'s `JsonEquipmentLibrary`, one JSON file per
+  library under `%LocalAppData%\SolScan\equipment\`, mirroring astro4j's
+  `SpectroHeliographsIO`/`SetupsIO`). Backs the Options view - see below - and Prepare's Equipment
+  Setup picker. Also carries `CaptureEquipmentMetadata`/`ICaptureMetadataWriter` (`Capture`
+  namespace): a snapshot (real field values, not IDs, so it survives the source library entries
+  later being edited/deleted) of the SHG/telescope/camera used for one recording, written by
+  `CaptureViewModel` alongside every `.ser` file so a future `SolScan.Processing` phase can read back
+  what equipment produced it.
+- **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca telescope client
+  (`AscomAlpacaClient`/`AscomTelescopeMount`, ported from RASTA - see the mount-control entry below),
+  a ZWO ASI/Altair camera wrapper (native SDK P/Invoke), a `.ser` file writer (`SerWriter`) - all
+  implemented. `JsonEquipmentLibrary` (see above) and `JsonCaptureMetadataWriter` (writes
+  `CaptureEquipmentMetadata` to a `<recording>.equipment.json` sidecar) are implemented too.
 - **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline. Not
   yet implemented — starts as a wrapper shelling out to `jsolex-cli`, then incrementally replaced
   with native ports of `SolexVideoProcessor`'s individual workflow steps (spectral line detection,
@@ -220,16 +237,20 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   `NavigationViewModel.NavigateTo<TViewModel>()` (resolves from the DI container) - no
   router/framework, deliberately, same as RASTA. The left-hand nav sidebar (mirroring RASTA's
   `MainWindow.xaml`) has four buttons - Prepare/Capture/Process plus Options, docked to the bottom
-  of the sidebar. `PrepareViewModel`/`ProcessViewModel` remain placeholders, each currently just a
-  `StatusText` string bound into its view. `CaptureViewModel` is real as of the camera
-  discovery/live-view/recording work below. `OptionsViewModel` is real: it's
-  SolScan's equivalent of JSolex's "Equipment" menu (`SpectroHeliographEditor.java` +
-  `SetupEditor.java`) plus a General tab for app-wide settings that aren't equipment at all,
-  embedded as four tabs (General / Spectrographs / Telescopes & Cameras / Setups) rather than
-  separate modal dialogs. The three equipment tabs are each backed by their own list-view-model
-  (`SpectrographLibraryViewModel`, `EquipmentProfileLibraryViewModel`, `EquipmentSetupLibraryViewModel`
-  under `ViewModels/Equipment`) editing `SolScan.Core.Equipment` records through `IEquipmentLibrary`.
-  General is backed by `GeneralSettingsViewModel` editing `SolScan.Core.Capture.AppSettings` through
+  of the sidebar. `ProcessViewModel` remains a placeholder, just a `StatusText` string bound into its
+  view. `PrepareViewModel`/`CaptureViewModel` are real - see the mount-control and camera-discovery/
+  live-view/recording entries below. `OptionsViewModel` is real: it's SolScan's equivalent of
+  JSolex's "Equipment" menu (`SpectroHeliographEditor.java` + `SetupEditor.java`) plus a General tab
+  for app-wide settings that aren't equipment at all, embedded as five tabs (General / SHGs /
+  Telescopes / Cameras / Setups - "SHGs" rather than "Spectrographs" as the tab header, though the
+  underlying view-model/type names still say Spectrograph throughout) rather than separate modal
+  dialogs. The four equipment tabs are
+  each backed by their own list-view-model (`SpectrographLibraryViewModel`,
+  `TelescopeLibraryViewModel`, `CameraLibraryViewModel`, `EquipmentSetupLibraryViewModel` under
+  `ViewModels/Equipment`) editing `SolScan.Core.Equipment` records through `IEquipmentLibrary` - the
+  Cameras tab is mostly populated by `CaptureViewModel`'s auto-add rather than typed in by hand (see
+  above), though it still supports adding/editing/removing entries manually too, same as the other
+  three. General is backed by `GeneralSettingsViewModel` editing `SolScan.Core.Capture.AppSettings` through
   `IAppSettingsStore` (`SolScan.Infrastructure.Capture.JsonAppSettingsStore`, one JSON file under
   `%LocalAppData%\SolScan\`, same per-machine-data rationale as `JsonEquipmentLibrary`/
   `JsonCameraSettingsStore`) - currently just where new recordings are saved
@@ -254,8 +275,10 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
 Real: the solution/project scaffolding, the three-project dependency layering, the DI composition
 root, the nav shell (Prepare/Capture/Process/Options buttons swap the content pane), the
 `ITelescopeMount`/`ICameraDevice`/`ISerWriter` contracts in Core, and the Options view's equipment
-library (`SpectrographProfile`/`EquipmentProfile`/`EquipmentSetup` + `IEquipmentLibrary`, backed by
-`JsonEquipmentLibrary`). Also real: camera discovery/live view/manual SER recording (the first slice
+library (`SpectrographProfile`/`TelescopeProfile`/`CameraProfile`/`EquipmentSetup` +
+`IEquipmentLibrary`, backed by `JsonEquipmentLibrary`) - Prepare's own Equipment Setup picker (see
+the mount-control entry below) and Capture's camera auto-add (see the manual-capture entry below)
+both real too. Also real: camera discovery/live view/manual SER recording (the first slice
 of Phase 4, "Manual capture" below) - `ICameraProvider`/`ICameraDiscoveryService` in Core;
 `SolScan.Infrastructure.Camera.Asi`/`.Camera.Altair` (hand-written P/Invoke against each vendor's
 native SDK - no vendor DLLs committed, see `SolScan.Infrastructure/ASICamera2.README.md`/
@@ -264,7 +287,18 @@ native SDK - no vendor DLLs committed, see `SolScan.Infrastructure/ASICamera2.RE
 `SimulatedCameraProvider` (a hardware-free camera so the above works with zero hardware attached);
 and `CaptureViewModel`/`CaptureView.xaml` wiring it all into a SharpCap-style live view (camera
 picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop recording). Also real:
-per-camera-model settings persistence (`ICameraSettingsStore`/`JsonCameraSettingsStore`) and a
+camera-profile auto-add - the first time a given camera model connects, `CaptureViewModel.
+ResolveCameraProfile` matches it against `IEquipmentLibrary.LoadCameras()` by `Label`/`Name` (adding
+a new `CameraProfile`, filled in from `ICameraDevice.PixelSizeMicrons`, if none matches yet -
+backfilling that field on an existing entry that's missing it, but never overwriting a non-null,
+possibly hand-corrected value) - visible afterwards in Options > Cameras like any other entry there.
+The resolved `CameraProfile` plus whatever `EquipmentSetup` is picked on Prepare (see the mount-
+control entry above) are snapshotted by `CaptureViewModel.WriteCaptureEquipmentMetadata` into a
+`CaptureEquipmentMetadata`, written via `ICaptureMetadataWriter` to a `<recording>.equipment.json`
+sidecar right when a recording starts - real field values, not IDs, so a later `SolScan.Processing`
+phase can read back what equipment produced a recording independent of whether those library entries
+still exist/are unchanged by then. Also real: per-camera-model settings persistence
+(`ICameraSettingsStore`/`JsonCameraSettingsStore`) and a
 RASTA-style `StatusBarViewModel`/`StatusBar.xaml` docked at the bottom of `MainWindow.xaml`,
 currently just showing the live capture frame rate. Also real: a centred, width/height-only ROI
 (`CaptureViewModel.RoiWidth`/`RoiHeight`, defaulting to the full sensor) - a genuine *hardware*
@@ -319,15 +353,47 @@ deliberate zoom-in can make the *preview* redraw feel slower but can't affect ca
 `ComputeHistogramStats`' own sampling is untouched by zoom - it's a statistical summary, not a
 spatial one, so the downsampled default remains accurate and cheap regardless.
 
-Placeholder: everything else behind those contracts. No ASCOM client, no solar ephemeris, no
-processing pipeline, and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle*
-(see the centred ROI note above for what's real there instead), no camera-focus/collimator-focus
-aids, no live line-ID overlay yet (see the Phase 4 sub-items below).
+Also real: Phase 2, mount control - `SolScan.Infrastructure.Telescope.AscomAlpacaClient`/
+`AscomTelescopeMount` (ported from RASTA's own Alpaca client/`ITelescopeMount` implementation,
+trimmed to SolScan's equatorial-only interface - no coordinate-mode detection/AltAz slewing) connect
+over ASCOM Alpaca (REST, via the ASCOM Remote Server) to a real mount, registered as `ITelescopeMount`
+in `App.xaml.cs`. `SolScan.Core.Telescope.MountState` is the live, poll-refreshed status singleton
+(`SolScan.App.Services.MountService`, 1s cadence) that `PrepareViewModel`/`StatusBarViewModel` read
+reactively; `PrepareView.xaml` is a real Connect/Disconnect + Park/Unpark + manual tracking-toggle UI
+with live RA/Dec, alongside an editable, persisted Site Settings panel (latitude/longitude/elevation)
+that reconciles against the mount's own site settings on connect (prompting to decide which side
+wins when they disagree, mirroring RASTA's `SettingsViewModel.ConnectTelescopeAsync`). `PrepareViewModel`
+is registered `AddSingleton` (unlike the other, still-transient stage view models) so this connection
+state survives navigating away and back. The ASCOM Alpaca base URL/device number live in Options >
+General (`AppSettings.AlpacaBaseUrl`/`AlpacaDeviceNumber`, same null-means-default convention as
+`CapturesRootFolder`), read fresh at connect time rather than cached. A live poll call throwing
+(`MountService.ConnectionLost`) is handled once, at the `App.xaml.cs` composition root - marks the
+mount locally disconnected and shows an informational `MessageBox`, deliberately without RASTA's own
+capture-cancel/forced-navigation coupling, since SolScan's capture pipeline doesn't depend on mount
+state yet (that's Phase 5).
+
+Also real: Prepare's Equipment section - an `EquipmentSetup` picker (`PrepareViewModel.
+AvailableEquipmentSetups`/`SelectedEquipmentSetup`, loaded from `IEquipmentLibrary`, reloadable via a
+`RefreshEquipment` command since `PrepareViewModel`'s own singleton lifetime means it isn't
+naturally re-constructed on navigating back here after an Options edit) resolving to a read-only
+SHG/telescope label pair for confirmation. The picked Setup's `Id` is persisted on
+`AppSettings.SelectedEquipmentSetupId`, read fresh by `CaptureViewModel` when a recording starts to
+build that recording's `CaptureEquipmentMetadata` (see the manual-capture entry below for the camera
+side of that same metadata). This is a single global "current rig" choice, not per-`TelescopeProfile`
+site data - `TelescopeProfile` carries no site fields at all (unlike astro4j's `Setup.java`), so
+there's no risk of it disagreeing with `AppSettings`' own site geometry.
+
+Placeholder: everything else behind those contracts. No solar ephemeris, no processing pipeline, and
+within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle* (see the centred ROI
+note above for what's real there instead), no camera-focus/collimator-focus aids, no live line-ID
+overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also doesn't yet cover Az/Alt
+slewing, "find the sun" ephemeris/lead-offset slewing, visual fine-centering, custom tracking rates,
+or FindHome/AtHome - all later phases per the build plan below.
 
 ## Phased build plan
 
 1. **Scaffolding** *(done)* — solution + projects, DI composition root, nav shell.
-2. **Mount control** — port RASTA's Alpaca client into `SolScan.Infrastructure`, implement
+2. **Mount control** *(done)* — port RASTA's Alpaca client into `SolScan.Infrastructure`, implement
    `ITelescopeMount`, wire a real Prepare-stage connect/disconnect/site-settings UI.
 3. **Find the sun** — add a solar ephemeris (`SunPosition`, low-precision analytic, arc-minute
    accuracy is enough for a slit-width offset) to `SolScan.Core`, add a "slew to sun + lead offset"
@@ -376,7 +442,7 @@ aids, no live line-ID overlay yet (see the Phase 4 sub-items below).
    - an exposure/fps calculator (port `ExposureCalculator.java`'s physics - apparent disk size at
      the slit, through the SHG's camera/collimator focal-length ratio, to pixels on the sensor,
      divided by scan time from the mount's scan-rate multiplier) suggesting a starting point before
-     the sliders below are hand-tuned; needs `SpectrographProfile`/`EquipmentProfile` data from Core
+     the sliders below are hand-tuned; needs `SpectrographProfile`/`TelescopeProfile` data from Core
    - live gain/exposure/USB-bandwidth sliders driving the camera in real time (each with a SharpCap-
      style "Auto" toggle handing that control to the camera's own algorithm), not a separate
      settings dialog. Ranges are calibrated to the ASI678MM specifically, matching SharpCap: gain

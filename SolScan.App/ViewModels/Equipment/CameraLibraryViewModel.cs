@@ -6,24 +6,25 @@ using SolScan.Core.Equipment;
 namespace SolScan.App.ViewModels.Equipment;
 
 /// <summary>
-/// Backs the Options view's "Telescopes &amp; Cameras" tab - SolScan's equivalent of JSolex's
-/// SetupEditor.java, embedded directly in the Options view rather than a separate modal dialog.
+/// Backs the Options view's "Cameras" tab. Most entries here come from CaptureViewModel's camera
+/// auto-add rather than being typed in by hand (see CameraProfile's doc comment), but this tab still
+/// allows adding/editing/removing one by hand too, same as SHGs/telescopes.
 /// </summary>
-public partial class EquipmentProfileLibraryViewModel : ObservableObject
+public partial class CameraLibraryViewModel : ObservableObject
 {
     private readonly IEquipmentLibrary _library;
 
-    public ObservableCollection<EquipmentProfileEditor> Items { get; } = [];
+    public ObservableCollection<CameraProfileEditor> Items { get; } = [];
 
     [ObservableProperty]
-    private EquipmentProfileEditor? selectedItem;
+    private CameraProfileEditor? selectedItem;
 
-    public EquipmentProfileLibraryViewModel(IEquipmentLibrary library)
+    public CameraLibraryViewModel(IEquipmentLibrary library)
     {
         _library = library;
-        foreach (var profile in _library.LoadEquipmentProfiles())
+        foreach (var profile in _library.LoadCameras())
         {
-            Items.Add(new EquipmentProfileEditor(profile));
+            Items.Add(new CameraProfileEditor(profile));
         }
 
         SelectedItem = Items.FirstOrDefault();
@@ -36,9 +37,9 @@ public partial class EquipmentProfileLibraryViewModel : ObservableObject
     {
         var reference = SelectedItem?.ToModel();
         var copy = reference is null
-            ? EquipmentProfile.CreateDefault($"My setup {Items.Count + 1}")
+            ? CameraProfile.CreateDefault($"My camera {Items.Count + 1}")
             : reference with { Id = Guid.NewGuid(), Label = reference.Label + " (Copy)" };
-        var item = new EquipmentProfileEditor(copy);
+        var item = new CameraProfileEditor(copy);
         Items.Add(item);
         SelectedItem = item;
     }
@@ -56,8 +57,8 @@ public partial class EquipmentProfileLibraryViewModel : ObservableObject
         SelectedItem = Items.Count == 0 ? null : Items[Math.Min(index, Items.Count - 1)];
     }
 
-    partial void OnSelectedItemChanged(EquipmentProfileEditor? value) =>
+    partial void OnSelectedItemChanged(CameraProfileEditor? value) =>
         RemoveCommand.NotifyCanExecuteChanged();
 
-    public void Save() => _library.SaveEquipmentProfiles(Items.Select(i => i.ToModel()).ToList());
+    public void Save() => _library.SaveCameras(Items.Select(i => i.ToModel()).ToList());
 }

@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
+using SolScan.Core.Equipment;
 
 namespace SolScan.App.ViewModels;
 
@@ -30,11 +31,19 @@ public partial class CaptureViewModel : ObservableObject
     private readonly Func<ISerWriter> _serWriterFactory;
     private readonly ICameraSettingsStore _cameraSettingsStore;
     private readonly IAppSettingsStore _appSettingsStore;
+    private readonly IEquipmentLibrary _equipmentLibrary;
+    private readonly ICaptureMetadataWriter _captureMetadataWriter;
     private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private readonly Lock _recordingLock = new();
 
     private ICameraDevice? _connectedCamera;
+
+    /// <summary>The CameraProfile resolved (auto-added or matched by name) for
+    /// <see cref="_connectedCamera"/> - see the camera auto-add block in <see cref="ToggleLiveViewAsync"/>.
+    /// Snapshotted into a recording's CaptureEquipmentMetadata by <see cref="StartRecording"/>.</summary>
+    private CameraProfile? _connectedCameraProfile;
+
     private ISerWriter? _activeWriter;
     private bool _writerNeedsOpening;
     private DateTime _lastPreviewRedrawUtc = DateTime.MinValue;
@@ -224,12 +233,16 @@ public partial class CaptureViewModel : ObservableObject
         Func<ISerWriter> serWriterFactory,
         ICameraSettingsStore cameraSettingsStore,
         IAppSettingsStore appSettingsStore,
+        IEquipmentLibrary equipmentLibrary,
+        ICaptureMetadataWriter captureMetadataWriter,
         StatusBarViewModel statusBar)
     {
         _discoveryService = discoveryService;
         _serWriterFactory = serWriterFactory;
         _cameraSettingsStore = cameraSettingsStore;
         _appSettingsStore = appSettingsStore;
+        _equipmentLibrary = equipmentLibrary;
+        _captureMetadataWriter = captureMetadataWriter;
         _statusBar = statusBar;
         _dispatcher = Dispatcher.CurrentDispatcher;
         RefreshCameras();
@@ -321,6 +334,7 @@ public partial class CaptureViewModel : ObservableObject
             await SelectedCamera.ConnectAsync();
             _connectedCamera = SelectedCamera;
             IsConnected = true;
+            _connectedCameraProfile = ResolveCameraProfile(SelectedCamera);
 
             // SupportedBinning is camera-specific, so the dropdown is (re)populated on every
             // connect regardless of whether saved settings exist. Adds anything newly-supported
@@ -418,7 +432,39 @@ public partial class CaptureViewModel : ObservableObject
         await _connectedCamera.DisconnectAsync();
         IsConnected = false;
         _connectedCamera = null;
+        _connectedCameraProfile = null;
         StatusText = "Camera disconnected.";
+    }
+
+    /// <summary>
+    /// Looks up a <see cref="CameraProfile"/> matching <paramref name="camera"/>'s
+    /// <see cref="ICameraDevice.Name"/> in the equipment library (case-insensitive - same "key by
+    /// Name, not Id" reasoning as <see cref="ICameraSettingsStore"/>'s own per-camera-model
+    /// settings), auto-adding one - filled in from the connected hardware - the first time this
+    /// camera model is ever seen. If a matching entry already exists but is missing
+    /// <see cref="CameraProfile.PixelSizeMicrons"/> while the device now reports one, backfills and
+    /// saves it - never overwrites an existing non-null value, which may have been corrected by hand.
+    /// </summary>
+    private CameraProfile ResolveCameraProfile(ICameraDevice camera)
+    {
+        var cameras = _equipmentLibrary.LoadCameras();
+        var existing = cameras.FirstOrDefault(c => string.Equals(c.Label, camera.Name, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is null)
+        {
+            var added = new CameraProfile(Guid.NewGuid(), camera.Name, camera.PixelSizeMicrons);
+            _equipmentLibrary.SaveCameras([.. cameras, added]);
+            return added;
+        }
+
+        if (existing.PixelSizeMicrons is null && camera.PixelSizeMicrons is not null)
+        {
+            var backfilled = existing with { PixelSizeMicrons = camera.PixelSizeMicrons };
+            _equipmentLibrary.SaveCameras(cameras.Select(c => c.Id == backfilled.Id ? backfilled : c).ToList());
+            return backfilled;
+        }
+
+        return existing;
     }
 
     [RelayCommand(CanExecute = nameof(CanStartRecording))]
@@ -446,6 +492,8 @@ public partial class CaptureViewModel : ObservableObject
         Directory.CreateDirectory(directory);
         RecordingFilePath = Path.Combine(directory, $"SolScan_{now:yyyyMMdd_HHmmss}.ser");
 
+        WriteCaptureEquipmentMetadata(RecordingFilePath);
+
         lock (_recordingLock)
         {
             _activeWriter = _serWriterFactory();
@@ -457,6 +505,31 @@ public partial class CaptureViewModel : ObservableObject
         FrameCount = 0;
         IsRecording = true;
         StatusText = $"Recording to {RecordingFilePath}";
+    }
+
+    /// <summary>
+    /// Snapshots whichever SHG/telescope (from the Equipment Setup picked on Prepare - see
+    /// AppSettings.SelectedEquipmentSetupId) and camera (see <see cref="_connectedCameraProfile"/>)
+    /// are current right now into a CaptureEquipmentMetadata, and writes it alongside the .ser file
+    /// - so SolScan.Processing can read back what equipment produced this recording later, even if
+    /// the library entries themselves are since edited or deleted. Any of the three can end up null
+    /// (e.g. no Equipment Setup ever picked) - written anyway, rather than skipped, so a recording
+    /// still gets a metadata file either way.
+    /// </summary>
+    private void WriteCaptureEquipmentMetadata(string serFilePath)
+    {
+        var selectedSetupId = _appSettingsStore.Load().SelectedEquipmentSetupId;
+        var setup = selectedSetupId is { } id ? _equipmentLibrary.LoadSetups().FirstOrDefault(s => s.Id == id) : null;
+
+        SpectrographProfile? spectrograph = null;
+        TelescopeProfile? telescope = null;
+        if (setup is not null)
+        {
+            spectrograph = _equipmentLibrary.LoadSpectrographs().FirstOrDefault(s => s.Id == setup.SpectrographProfileId);
+            telescope = _equipmentLibrary.LoadTelescopes().FirstOrDefault(t => t.Id == setup.TelescopeProfileId);
+        }
+
+        _captureMetadataWriter.Write(serFilePath, new CaptureEquipmentMetadata(spectrograph, telescope, _connectedCameraProfile, DateTime.UtcNow));
     }
 
     [RelayCommand(CanExecute = nameof(IsRecording))]

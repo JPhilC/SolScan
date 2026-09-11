@@ -45,6 +45,15 @@ public interface ICameraDevice
     bool IsConnected { get; }
     bool IsStreaming { get; }
 
+    /// <summary>Sensor pixel size in microns, read from the vendor SDK where it exposes one -
+    /// available once connected. Null if the vendor SDK doesn't expose it (e.g. <c>AltairCameraDevice</c>,
+    /// whose native model-info struct is deliberately left undereferenced - see its own remarks).
+    /// Feeds SolScan.App's camera-profile auto-add: the first time a given camera model connects,
+    /// CaptureViewModel adds a <see cref="Equipment.CameraProfile"/> for it in
+    /// <see cref="Equipment.IEquipmentLibrary"/>, filled in from this rather than left for the user
+    /// to type in by hand.</summary>
+    double? PixelSizeMicrons { get; }
+
     /// <summary>Raw sensor gain. Range/units are vendor- (really sensor-) specific - the ASI678MM
     /// (0-600, 0.1dB/step, matching what SharpCap shows for it) is what SolScan.App's sliders are
     /// currently calibrated to; a different sensor's real range may not match.</summary>

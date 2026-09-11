@@ -38,6 +38,11 @@ public sealed class SimulatedCameraDevice : ICameraDevice
     public bool IsConnected { get; private set; }
     public bool IsStreaming { get; private set; }
 
+    /// <summary>A plausible constant (ASI678MM-ballpark), not read from anything real - so the
+    /// camera-profile auto-add flow (see CaptureViewModel) is exercisable/testable without real
+    /// hardware attached.</summary>
+    public double? PixelSizeMicrons => 2.0;
+
     /// <summary>Accepted and reflected in the generated frame's brightness, but not backed by any
     /// real sensor - purely so the Gain slider visibly does something during dev/testing. Range
     /// matches the ASI678MM (0-600) so the slider behaves the same regardless of which camera is

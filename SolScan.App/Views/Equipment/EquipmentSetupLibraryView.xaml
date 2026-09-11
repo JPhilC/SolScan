@@ -22,7 +22,7 @@
                      DisplayMemberPath="Label"/>
         </DockPanel>
 
-        <!-- Selected setup: which spectrograph is mounted with which telescope/camera profile -->
+        <!-- Selected setup: which spectrograph is paired with which telescope -->
         <StackPanel Grid.Column="2" DataContext="{Binding SelectedItem}">
             <TextBlock Text="Label" Margin="0,0,0,4"/>
             <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" Width="280" HorizontalAlignment="Left"/>
@@ -33,11 +33,11 @@
                       DisplayMemberPath="Label"
                       SelectedItem="{Binding Spectrograph}"/>
 
-            <TextBlock Text="Telescope / camera" Margin="0,16,0,4"/>
+            <TextBlock Text="Telescope" Margin="0,16,0,4"/>
             <ComboBox Width="280" HorizontalAlignment="Left"
-                      ItemsSource="{Binding DataContext.AvailableEquipmentProfiles, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                      ItemsSource="{Binding DataContext.AvailableTelescopes, RelativeSource={RelativeSource AncestorType=UserControl}}"
                       DisplayMemberPath="Label"
-                      SelectedItem="{Binding EquipmentProfile}"/>
+                      SelectedItem="{Binding Telescope}"/>
         </StackPanel>
     </Grid>
 </UserControl>

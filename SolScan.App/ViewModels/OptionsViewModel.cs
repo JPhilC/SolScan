@@ -9,9 +9,9 @@ namespace SolScan.App.ViewModels;
 /// <summary>
 /// SolScan's equivalent of JSolex's "Equipment" menu (SpectroHeliographEditor.java +
 /// SetupEditor.java), embedded directly in the Options view rather than opened as separate modal
-/// dialogs: a library of spectrographs, a library of telescope/camera equipment profiles, and -
-/// new to SolScan, see EquipmentSetup - a library of saved SHG+equipment combinations that
-/// Prepare/Capture will pick from once those stages exist (Phase 2+ of SolScan CLAUDE.md). Also
+/// dialogs: a library of spectrographs, a library of telescopes, a library of cameras (mostly
+/// populated automatically - see CameraProfile's doc comment), and - new to SolScan, see
+/// EquipmentSetup - a library of saved SHG+telescope combinations that Prepare picks from. Also
 /// carries a General tab (<see cref="General"/>) for app-wide settings that aren't equipment at
 /// all - currently just where recordings are saved.
 /// </summary>
@@ -19,7 +19,8 @@ public partial class OptionsViewModel : ObservableObject
 {
     public GeneralSettingsViewModel General { get; }
     public SpectrographLibraryViewModel Spectrographs { get; }
-    public EquipmentProfileLibraryViewModel EquipmentProfiles { get; }
+    public TelescopeLibraryViewModel Telescopes { get; }
+    public CameraLibraryViewModel Cameras { get; }
     public EquipmentSetupLibraryViewModel Setups { get; }
 
     [ObservableProperty]
@@ -29,8 +30,9 @@ public partial class OptionsViewModel : ObservableObject
     {
         General = new GeneralSettingsViewModel(appSettingsStore);
         Spectrographs = new SpectrographLibraryViewModel(library);
-        EquipmentProfiles = new EquipmentProfileLibraryViewModel(library);
-        Setups = new EquipmentSetupLibraryViewModel(library, Spectrographs.Items, EquipmentProfiles.Items);
+        Telescopes = new TelescopeLibraryViewModel(library);
+        Cameras = new CameraLibraryViewModel(library);
+        Setups = new EquipmentSetupLibraryViewModel(library, Spectrographs.Items, Telescopes.Items);
     }
 
     [RelayCommand]
@@ -38,7 +40,8 @@ public partial class OptionsViewModel : ObservableObject
     {
         General.Save();
         Spectrographs.Save();
-        EquipmentProfiles.Save();
+        Telescopes.Save();
+        Cameras.Save();
         Setups.Save();
         StatusText = "Saved.";
     }

@@ -22,6 +22,7 @@ public sealed class AsiCameraDevice : ICameraDevice
     // dimensions actually being streamed, which shrink as Binning goes up.
     private int _nativeMaxWidth;
     private int _nativeMaxHeight;
+    private double? _pixelSizeMicrons;
 
     private int _width;
     private int _height;
@@ -58,6 +59,7 @@ public sealed class AsiCameraDevice : ICameraDevice
 
     public bool IsConnected { get; private set; }
     public bool IsStreaming { get; private set; }
+    public double? PixelSizeMicrons => _pixelSizeMicrons;
 
     public double Gain
     {
@@ -147,6 +149,7 @@ public sealed class AsiCameraDevice : ICameraDevice
 
         _nativeMaxWidth = info.MaxWidth;
         _nativeMaxHeight = info.MaxHeight;
+        _pixelSizeMicrons = info.PixelSize;
 
         IsConnected = true;
         // First entry in SupportedBinning rather than a hardcoded 1 - matches whatever the camera

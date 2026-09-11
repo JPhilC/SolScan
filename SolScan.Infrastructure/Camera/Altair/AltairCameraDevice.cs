@@ -47,6 +47,12 @@ public sealed class AltairCameraDevice : ICameraDevice
     public bool IsConnected { get; private set; }
     public bool IsStreaming { get; private set; }
 
+    /// <summary>Always null - the vendor's model-info struct (which carries pixel size) is
+    /// deliberately left undereferenced (see <see cref="AltairNative.DeviceInfo.Model"/>'s doc
+    /// comment) and there's no real Altair hardware in this environment to develop/verify a binding
+    /// for it against - same honesty-over-guessing stance as this class's ROI handling.</summary>
+    public double? PixelSizeMicrons => null;
+
     public double Gain
     {
         get
