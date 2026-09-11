@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Linq;
 using SolScan.Core.Telescope;
 
 namespace SolScan.Infrastructure.Telescope;
@@ -17,6 +18,11 @@ public class AscomTelescopeMount : ITelescopeMount
     // (see SolScan CLAUDE.md Phase 3's "find the sun") - not tuned against any real mount yet.
     private static readonly TimeSpan SlewTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan SlewPollInterval = TimeSpan.FromMilliseconds(500);
+
+    // Fallback used by GetMaxSlewRateDegPerSecAsync when the mount's own AxisRates can't be read -
+    // GSServer's own default maximum slew rate setting (SkySettings.MaximumSlewRate), reused here so
+    // a hand control still has a sane speed scale even against a mount that doesn't report one.
+    private const double DefaultMaxSlewRateDegPerSec = 3.5;
 
     private readonly AscomAlpacaClient _client;
     private int _deviceNumber;
@@ -175,5 +181,45 @@ public class AscomTelescopeMount : ITelescopeMount
     {
         await _client.PutAsync("siteelevation", cancellationToken, ("SiteElevation", elevationM.ToString(CultureInfo.InvariantCulture)));
         SiteElevationM = elevationM;
+    }
+
+    // -------------------------
+    // Manual hand control
+    // -------------------------
+
+    /// <summary>Queries the Primary (RA) axis's AxisRates - a list of {Minimum, Maximum} deg/sec
+    /// ranges the mount reports it supports - and returns the largest Maximum across them. Falls
+    /// back to <see cref="DefaultMaxSlewRateDegPerSec"/> on any failure, or if the mount reports
+    /// nothing usable (an empty list, or every range topping out at 0).</summary>
+    public async Task<double> GetMaxSlewRateDegPerSecAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var ranges = await _client.GetAsync<List<AxisRateRange>>("axisrates", cancellationToken, ("Axis", "0"));
+            var max = ranges is { Count: > 0 } ? ranges.Max(r => r.Maximum) : 0;
+            return max > 0 ? max : DefaultMaxSlewRateDegPerSec;
+        }
+        catch
+        {
+            // The mount not reporting AxisRates usably shouldn't block hand control entirely - fall
+            // back to a sane default speed scale instead.
+            return DefaultMaxSlewRateDegPerSec;
+        }
+    }
+
+    public Task MoveAxisAsync(TelescopeAxis axis, double rateDegPerSec, CancellationToken cancellationToken = default) =>
+        _client.PutAsync("moveaxis", cancellationToken,
+            ("Axis", ((int)axis).ToString(CultureInfo.InvariantCulture)),
+            ("Rate", rateDegPerSec.ToString(CultureInfo.InvariantCulture)));
+
+    public Task AbortSlewAsync(CancellationToken cancellationToken = default) =>
+        _client.PutAsync("abortslew", cancellationToken);
+
+    /// <summary>Alpaca's AxisRates JSON shape - a list of {Minimum, Maximum} deg/sec range pairs for
+    /// one axis (many mounts just report a single range spanning their full jog-speed capability).</summary>
+    private sealed class AxisRateRange
+    {
+        public double Minimum { get; set; }
+        public double Maximum { get; set; }
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -7,9 +8,11 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using SolScan.App.Views;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
+using SolScan.Core.Telescope;
 
 namespace SolScan.App.ViewModels;
 
@@ -33,9 +36,16 @@ public partial class CaptureViewModel : ObservableObject
     private readonly IAppSettingsStore _appSettingsStore;
     private readonly IEquipmentLibrary _equipmentLibrary;
     private readonly ICaptureMetadataWriter _captureMetadataWriter;
+    private readonly MountState _mountState;
+    private readonly Func<HandControlWindow> _handControlWindowFactory;
     private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private readonly Lock _recordingLock = new();
+
+    /// <summary>The currently-open Hand Control window, if any - tracked so a second click on
+    /// "Hand Control…" brings the existing one to front instead of opening a duplicate (two windows
+    /// independently sending MoveAxis would race each other).</summary>
+    private HandControlWindow? _handControlWindow;
 
     private ICameraDevice? _connectedCamera;
 
@@ -74,6 +84,11 @@ public partial class CaptureViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isConnected;
+
+    /// <summary>Mirrors <see cref="MountState.IsConnected"/> - gates the "Hand Control…" button,
+    /// since jogging the mount only makes sense once it's actually connected (see PrepareViewModel).</summary>
+    [ObservableProperty]
+    private bool isMountConnected;
 
     [ObservableProperty]
     private bool isLive;
@@ -235,6 +250,8 @@ public partial class CaptureViewModel : ObservableObject
         IAppSettingsStore appSettingsStore,
         IEquipmentLibrary equipmentLibrary,
         ICaptureMetadataWriter captureMetadataWriter,
+        MountState mountState,
+        Func<HandControlWindow> handControlWindowFactory,
         StatusBarViewModel statusBar)
     {
         _discoveryService = discoveryService;
@@ -243,9 +260,42 @@ public partial class CaptureViewModel : ObservableObject
         _appSettingsStore = appSettingsStore;
         _equipmentLibrary = equipmentLibrary;
         _captureMetadataWriter = captureMetadataWriter;
+        _mountState = mountState;
+        _handControlWindowFactory = handControlWindowFactory;
         _statusBar = statusBar;
         _dispatcher = Dispatcher.CurrentDispatcher;
+
+        IsMountConnected = _mountState.IsConnected;
+        _mountState.PropertyChanged += MountStatePropertyChanged;
+
         RefreshCameras();
+    }
+
+    private void MountStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MountState.IsConnected))
+        {
+            IsMountConnected = _mountState.IsConnected;
+        }
+    }
+
+    partial void OnIsMountConnectedChanged(bool value) => OpenHandControlCommand.NotifyCanExecuteChanged();
+
+    /// <summary>Opens the pop-out, modeless Hand Control window (see Views/HandControlWindow.xaml) -
+    /// brings the existing one to front instead of opening a second if one's already open, since two
+    /// would independently race each other sending MoveAxis commands.</summary>
+    [RelayCommand(CanExecute = nameof(IsMountConnected))]
+    private void OpenHandControl()
+    {
+        if (_handControlWindow is not null)
+        {
+            _handControlWindow.Activate();
+            return;
+        }
+
+        _handControlWindow = _handControlWindowFactory();
+        _handControlWindow.Closed += (_, _) => _handControlWindow = null;
+        _handControlWindow.Show();
     }
 
     private bool CanToggleLiveView => SelectedCamera is not null && !IsRecording;

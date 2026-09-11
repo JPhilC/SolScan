@@ -383,6 +383,27 @@ side of that same metadata). This is a single global "current rig" choice, not p
 site data - `TelescopeProfile` carries no site fields at all (unlike astro4j's `Setup.java`), so
 there's no risk of it disagreeing with `AppSettings`' own site geometry.
 
+Also real: a pop-out, modeless Hand Control window (`Views/HandControlWindow.xaml`/
+`ViewModels/HandControlViewModel.cs`) for manually jogging the mount - a "Hand Control…" button on
+the Capture view (not Prepare - the user will typically be watching the live preview while jogging),
+enabled only once the mount is connected. Visually modelled on GSServer's `HandControlV`/
+`HandController` (`C:\Source\Repos\JPhilC\GSServer`) - a compass of Up/Down/Left/Right buttons around
+a central Stop, plus a vertical 1-8 speed slider - but GSServer *is* the ASCOM driver talking to a
+mount's motor controller directly, so only its UI *layout* carries over; the actual mechanism is
+`ITelescopeMount`'s new manual-hand-control primitives (`GetMaxSlewRateDegPerSecAsync`/
+`MoveAxisAsync`/`AbortSlewAsync`, backed by Alpaca's own standard `axisrates`/`moveaxis`/`abortslew`
+endpoints in `AscomTelescopeMount`), not a port of GSServer's internal motor-timing code. The 1-8
+speed levels themselves *are* a direct port, though: traced through GSServer's
+`SkyServer.SetSlewRates`/`HcMoves`, each level is a fixed fraction of the mount's own maximum slew
+rate - 0.34%, 0.68%, 4.7%, 6.8%, 20%, 40%, 80%, 100% for levels 1-8 (`HandControlViewModel.
+SpeedLevelFractions`), defaulting to level 7 (GSServer's own default). Where GSServer gets "max rate"
+from a user-configurable setting (defaulting to 3.5°/s), SolScan queries it live from the mount's own
+Alpaca `AxisRates` instead (same "ask the hardware, don't assume" ethos as `ICameraDevice.
+SupportedBinning`/`PixelSizeMicrons`), falling back to GSServer's own 3.5°/s default if that fails.
+Directional buttons jog only while held (`Mouse.Capture` on press/release so a drag off the button
+before releasing still stops it), and closing the window - even via Alt+F4 mid-press - always calls
+`AbortSlewAsync` plus zeroes both axes as a safety net, so it can never leave a motor running.
+
 Placeholder: everything else behind those contracts. No solar ephemeris, no processing pipeline, and
 within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle* (see the centred ROI
 note above for what's real there instead), no camera-focus/collimator-focus aids, no live line-ID

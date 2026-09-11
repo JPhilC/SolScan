@@ -32,13 +32,30 @@ public class AscomAlpacaClient
         return _transactionId;
     }
 
-    private string BuildUrl(string endpoint) =>
-        $"{BaseUrl}/{endpoint}?ClientID={_clientId}&ClientTransactionID={NextTransactionId()}";
+    private string BuildUrl(string endpoint, params (string key, string value)[] extraQueryParams)
+    {
+        var query = string.Concat(extraQueryParams.Select(p => $"&{p.key}={Uri.EscapeDataString(p.value)}"));
+        return $"{BaseUrl}/{endpoint}?ClientID={_clientId}&ClientTransactionID={NextTransactionId()}{query}";
+    }
 
     public async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken = default)
     {
         var url = BuildUrl(endpoint);
+        return await GetFromUrlAsync<T>(url, endpoint, cancellationToken);
+    }
 
+    /// <summary>Overload for endpoints that need an extra query parameter beyond ClientID/
+    /// ClientTransactionID - e.g. Alpaca's <c>axisrates?Axis=0</c>. A separate overload (not an
+    /// optional params array tacked onto the existing one) so every current call site - which all
+    /// pass just (endpoint, ct) - keeps resolving to the plain overload above unambiguously.</summary>
+    public async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken, params (string key, string value)[] extraQueryParams)
+    {
+        var url = BuildUrl(endpoint, extraQueryParams);
+        return await GetFromUrlAsync<T>(url, endpoint, cancellationToken);
+    }
+
+    private async Task<T> GetFromUrlAsync<T>(string url, string endpoint, CancellationToken cancellationToken)
+    {
         var response = await _httpClient.GetAsync(url, cancellationToken);
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
 

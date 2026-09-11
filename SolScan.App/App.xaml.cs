@@ -3,6 +3,7 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using SolScan.App.Services;
 using SolScan.App.ViewModels;
+using SolScan.App.Views;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
@@ -106,6 +107,14 @@ public partial class App : Application
         // Snapshots the SHG/telescope/camera used into a .equipment.json sidecar per recording -
         // see CaptureViewModel.WriteCaptureEquipmentMetadata. Stateless, so a singleton is fine.
         services.AddSingleton<ICaptureMetadataWriter, JsonCaptureMetadataWriter>();
+
+        // The pop-out, modeless Hand Control window (see HandControlWindow.xaml) - transient, one
+        // fresh instance per open, resolved via a factory delegate rather than an injected
+        // IServiceProvider, same "keep the view model out of the service-locator pattern" reasoning
+        // as ISerWriter's factory above. CaptureViewModel tracks whether one's already open itself.
+        services.AddTransient<HandControlViewModel>();
+        services.AddTransient<HandControlWindow>();
+        services.AddSingleton<Func<HandControlWindow>>(sp => sp.GetRequiredService<HandControlWindow>);
 
         services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<NavigationViewModel>();
