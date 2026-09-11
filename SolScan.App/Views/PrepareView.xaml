@@ -4,11 +4,108 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d">
-    <Grid>
-        <TextBlock Text="{Binding StatusText}"
-                   FontSize="18"
-                   Margin="24"
-                   HorizontalAlignment="Left"
-                   VerticalAlignment="Top" />
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="24"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ========================= -->
+        <!--  EQUIPMENT                -->
+        <!-- ========================= -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="Equipment" FontSize="20" FontWeight="Bold" Margin="0,0,0,12"/>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Setup" VerticalAlignment="Center" Width="60"/>
+                <ComboBox Width="280"
+                          ItemsSource="{Binding AvailableEquipmentSetups}"
+                          SelectedItem="{Binding SelectedEquipmentSetup}"
+                          DisplayMemberPath="Label"/>
+                <Button Content="Refresh" Width="70" Margin="8,0,0,0"
+                        Command="{Binding RefreshEquipmentCommand}"/>
+            </StackPanel>
+            <TextBlock Margin="68,6,0,0">
+                <Run Text="SHG: "/><Run Text="{Binding SelectedSpectrographLabel, Mode=OneWay}"/>
+                <Run Text="   Telescope: "/><Run Text="{Binding SelectedTelescopeLabel, Mode=OneWay}"/>
+            </TextBlock>
+        </StackPanel>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ========================= -->
+            <!--  TELESCOPE CONNECTION     -->
+            <!-- ========================= -->
+            <StackPanel Grid.Column="0" Margin="0,0,24,0" MaxWidth="360" HorizontalAlignment="Left">
+                <TextBlock Text="Telescope" FontSize="20" FontWeight="Bold" Margin="0,0,0,12"/>
+
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Connect" Width="110" Height="32"
+                            Command="{Binding ConnectCommand}"/>
+                    <Button Content="Disconnect" Width="110" Height="32" Margin="8,0,0,0"
+                            Command="{Binding DisconnectCommand}"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button Content="Park" Width="110" Height="32"
+                            Command="{Binding ParkCommand}"/>
+                    <Button Content="Unpark" Width="110" Height="32" Margin="8,0,0,0"
+                            Command="{Binding UnparkCommand}"/>
+                </StackPanel>
+
+                <CheckBox Content="Tracking" Margin="0,12,0,0"
+                          IsChecked="{Binding IsTracking}"
+                          IsEnabled="{Binding IsConnected}"/>
+
+                <TextBlock Text="{Binding StatusText}" Margin="0,16,0,0" Foreground="Gray"/>
+
+                <TextBlock Margin="0,16,0,0" FontWeight="Bold" Text="Live Position"/>
+                <TextBlock Margin="0,4,0,0">
+                    <Run Text="RA: "/><Run Text="{Binding RightAscensionHours, StringFormat={}{0:F2}h, Mode=OneWay}"/>
+                    <Run Text="   Dec: "/><Run Text="{Binding DeclinationDeg, StringFormat={}{0:F2}°, Mode=OneWay}"/>
+                </TextBlock>
+                <TextBlock Margin="0,4,0,0">
+                    <Run Text="Slewing: "/><Run Text="{Binding IsSlewing, Mode=OneWay}"/>
+                    <Run Text="   Parked: "/><Run Text="{Binding IsParked, Mode=OneWay}"/>
+                </TextBlock>
+            </StackPanel>
+
+            <!-- ========================= -->
+            <!--  SITE SETTINGS            -->
+            <!-- ========================= -->
+            <StackPanel Grid.Column="1" MaxWidth="320" HorizontalAlignment="Left">
+                <TextBlock Text="Site Settings" FontSize="20" FontWeight="Bold" Margin="0,0,0,4"/>
+                <TextBlock Text="Editable at any time; reconciled against the mount's own site settings on connect."
+                           Opacity="0.8" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude (deg)" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Width="120" HorizontalAlignment="Left" Margin="8,0,0,6"
+                             Text="{Binding SiteLatitudeDeg, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Longitude (deg)" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Width="120" HorizontalAlignment="Left" Margin="8,0,0,6"
+                             Text="{Binding SiteLongitudeDeg, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Elevation (m)" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Width="120" HorizontalAlignment="Left" Margin="8,0,0,6"
+                             Text="{Binding SiteElevationM, UpdateSourceTrigger=PropertyChanged}"/>
+                </Grid>
+            </StackPanel>
+        </Grid>
     </Grid>
 </UserControl>

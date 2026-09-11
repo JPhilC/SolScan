@@ -45,6 +45,7 @@ public class CameraDiscoveryServiceTests
         public string Name => id;
         public bool IsConnected => false;
         public bool IsStreaming => false;
+        public double? PixelSizeMicrons => null;
         public double Gain { get; set; }
         public double ExposureMicroseconds { get; set; }
         public int UsbBandwidthPercent { get; set; }

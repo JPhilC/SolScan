@@ -2,9 +2,9 @@ using System.Windows.Controls;
 
 namespace SolScan.App.Views.Equipment;
 
-public partial class EquipmentProfileLibraryView : UserControl
+public partial class CameraLibraryView : UserControl
 {
-    public EquipmentProfileLibraryView()
+    public CameraLibraryView()
     {
         InitializeComponent();
     }

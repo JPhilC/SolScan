@@ -54,13 +54,13 @@
             <TextBox Grid.Row="0" Grid.Column="2" Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}"/>
 
             <TextBlock Grid.Row="2" Grid.Column="0" Text="Total prism/grating angle (°)"/>
-            <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding TotalAngleDegrees, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding TotalAngleDegrees, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
 
             <TextBlock Grid.Row="4" Grid.Column="0" Text="Camera focal length (mm)"/>
-            <TextBox Grid.Row="4" Grid.Column="2" Text="{Binding CameraFocalLengthMm, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Grid.Row="4" Grid.Column="2" Text="{Binding CameraFocalLengthMm, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
 
             <TextBlock Grid.Row="6" Grid.Column="0" Text="Collimator focal length (mm)"/>
-            <TextBox Grid.Row="6" Grid.Column="2" Text="{Binding CollimatorFocalLengthMm, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Grid.Row="6" Grid.Column="2" Text="{Binding CollimatorFocalLengthMm, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
 
             <TextBlock Grid.Row="8" Grid.Column="0" Text="Grating density (lines/mm)"/>
             <TextBox Grid.Row="8" Grid.Column="2" Text="{Binding GratingDensityLinesPerMm, UpdateSourceTrigger=PropertyChanged}"/>
@@ -69,10 +69,10 @@
             <TextBox Grid.Row="10" Grid.Column="2" Text="{Binding DiffractionOrder, UpdateSourceTrigger=PropertyChanged}"/>
 
             <TextBlock Grid.Row="12" Grid.Column="0" Text="Slit width (µm)"/>
-            <TextBox Grid.Row="12" Grid.Column="2" Text="{Binding SlitWidthMicrons, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Grid.Row="12" Grid.Column="2" Text="{Binding SlitWidthMicrons, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
 
             <TextBlock Grid.Row="14" Grid.Column="0" Text="Slit height (mm)"/>
-            <TextBox Grid.Row="14" Grid.Column="2" Text="{Binding SlitHeightMm, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Grid.Row="14" Grid.Column="2" Text="{Binding SlitHeightMm, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
 
             <CheckBox Grid.Row="16" Grid.Column="2" Content="Spectrum flipped vertically"
                       IsChecked="{Binding SpectrumVFlip}"/>

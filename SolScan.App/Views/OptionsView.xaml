@@ -32,13 +32,36 @@
                     </DockPanel>
                     <Button Content="Reset to Default" HorizontalAlignment="Left"
                             Command="{Binding ResetCapturesRootFolderToDefaultCommand}"/>
+
+                    <TextBlock Text="Mount Connection" FontWeight="Bold" Margin="0,20,0,0"/>
+                    <TextBlock Text="The ASCOM Alpaca (REST) endpoint for the telescope device - see the ASCOM Remote Server."
+                               Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                    <TextBlock Text="Base URL"/>
+                    <TextBox Text="{Binding AlpacaBaseUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4"/>
+                    <Button Content="Reset to Default" HorizontalAlignment="Left" Margin="0,0,0,8"
+                            Command="{Binding ResetAlpacaBaseUrlToDefaultCommand}"/>
+                    <TextBlock Text="Device Number"/>
+                    <TextBox Text="{Binding AlpacaDeviceNumber, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left" Margin="0,2,0,0"/>
+
+                    <TextBlock Text="Site Location" FontWeight="Bold" Margin="0,20,0,0"/>
+                    <TextBlock Text="Reconciled against the mount's own site settings when Prepare connects to it."
+                               Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                    <TextBlock Text="Latitude (deg)"/>
+                    <TextBox Text="{Binding SiteLatitudeDeg, UpdateSourceTrigger=PropertyChanged}" Width="120" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+                    <TextBlock Text="Longitude (deg)"/>
+                    <TextBox Text="{Binding SiteLongitudeDeg, UpdateSourceTrigger=PropertyChanged}" Width="120" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+                    <TextBlock Text="Elevation (m)"/>
+                    <TextBox Text="{Binding SiteElevationM, UpdateSourceTrigger=PropertyChanged}" Width="120" HorizontalAlignment="Left" Margin="0,2,0,0"/>
                 </StackPanel>
             </TabItem>
-            <TabItem Header="Spectrographs">
+            <TabItem Header="SHGs">
                 <equipment:SpectrographLibraryView DataContext="{Binding Spectrographs}"/>
             </TabItem>
-            <TabItem Header="Telescopes &amp; Cameras">
-                <equipment:EquipmentProfileLibraryView DataContext="{Binding EquipmentProfiles}"/>
+            <TabItem Header="Telescopes">
+                <equipment:TelescopeLibraryView DataContext="{Binding Telescopes}"/>
+            </TabItem>
+            <TabItem Header="Cameras">
+                <equipment:CameraLibraryView DataContext="{Binding Cameras}"/>
             </TabItem>
             <TabItem Header="Setups">
                 <equipment:EquipmentSetupLibraryView DataContext="{Binding Setups}"/>

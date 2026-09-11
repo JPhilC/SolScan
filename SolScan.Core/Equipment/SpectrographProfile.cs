@@ -2,9 +2,9 @@ namespace SolScan.Core.Equipment;
 
 /// <summary>
 /// A spectroheliograph's own optical/mechanical parameters - independent of whatever telescope,
-/// camera, or mount it happens to be bolted to for a given session. See <see cref="EquipmentProfile"/>
-/// for the telescope/camera side, and <see cref="EquipmentSetup"/> for a saved SHG+equipment
-/// combination.
+/// camera, or mount it happens to be bolted to for a given session. See <see cref="TelescopeProfile"/>
+/// and <see cref="CameraProfile"/> for those sides, and <see cref="EquipmentSetup"/> for a saved
+/// SHG+telescope combination.
 ///
 /// Close translation of astro4j's SpectroHeliograph.java (jsolex-core, Apache-2.0) - see NOTICE.
 /// Field names are adapted to be self-describing (e.g. FocalLength -> CameraFocalLengthMm) rather

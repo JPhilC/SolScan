@@ -6,10 +6,11 @@ using SolScan.Core.Equipment;
 namespace SolScan.App.ViewModels.Equipment;
 
 /// <summary>
-/// Backs the Options view's "Setups" tab - a library of saved SHG+telescope+camera combinations,
-/// each referencing one entry from the Spectrographs tab and one from the Telescopes &amp;
-/// Cameras tab. New to SolScan: astro4j/JSolex has no equivalent, since SpectroHeliograph and
-/// Setup are picked independently there (see EquipmentSetup's doc comment).
+/// Backs the Options view's "Setups" tab - a library of saved SHG+telescope combinations, each
+/// referencing one entry from the Spectrographs tab and one from the Telescopes tab. New to SolScan:
+/// astro4j/JSolex has no equivalent, since SpectroHeliograph and Setup are picked independently
+/// there (see EquipmentSetup's doc comment). This is also what Prepare's own Equipment Setup picker
+/// selects from.
 /// </summary>
 public partial class EquipmentSetupLibraryViewModel : ObservableObject
 {
@@ -21,9 +22,9 @@ public partial class EquipmentSetupLibraryViewModel : ObservableObject
     /// offers whatever spectrographs currently exist (including ones added but not yet saved).</summary>
     public ObservableCollection<SpectrographProfileEditor> AvailableSpectrographs { get; }
 
-    /// <summary>The live Telescopes &amp; Cameras-tab collection - same sharing rationale as
+    /// <summary>The live Telescopes-tab collection - same sharing rationale as
     /// <see cref="AvailableSpectrographs"/>.</summary>
-    public ObservableCollection<EquipmentProfileEditor> AvailableEquipmentProfiles { get; }
+    public ObservableCollection<TelescopeProfileEditor> AvailableTelescopes { get; }
 
     [ObservableProperty]
     private EquipmentSetupEditor? selectedItem;
@@ -31,15 +32,15 @@ public partial class EquipmentSetupLibraryViewModel : ObservableObject
     public EquipmentSetupLibraryViewModel(
         IEquipmentLibrary library,
         ObservableCollection<SpectrographProfileEditor> availableSpectrographs,
-        ObservableCollection<EquipmentProfileEditor> availableEquipmentProfiles)
+        ObservableCollection<TelescopeProfileEditor> availableTelescopes)
     {
         _library = library;
         AvailableSpectrographs = availableSpectrographs;
-        AvailableEquipmentProfiles = availableEquipmentProfiles;
+        AvailableTelescopes = availableTelescopes;
 
         foreach (var setup in _library.LoadSetups())
         {
-            Items.Add(new EquipmentSetupEditor(setup, AvailableSpectrographs, AvailableEquipmentProfiles));
+            Items.Add(new EquipmentSetupEditor(setup, AvailableSpectrographs, AvailableTelescopes));
         }
 
         SelectedItem = Items.FirstOrDefault();
@@ -47,7 +48,7 @@ public partial class EquipmentSetupLibraryViewModel : ObservableObject
 
     private bool HasSelection => SelectedItem is not null;
 
-    private bool CanAdd => AvailableSpectrographs.Count > 0 && AvailableEquipmentProfiles.Count > 0;
+    private bool CanAdd => AvailableSpectrographs.Count > 0 && AvailableTelescopes.Count > 0;
 
     [RelayCommand(CanExecute = nameof(CanAdd))]
     private void Add()
@@ -55,7 +56,7 @@ public partial class EquipmentSetupLibraryViewModel : ObservableObject
         var item = new EquipmentSetupEditor(
             $"Setup {Items.Count + 1}",
             AvailableSpectrographs.FirstOrDefault(),
-            AvailableEquipmentProfiles.FirstOrDefault());
+            AvailableTelescopes.FirstOrDefault());
         Items.Add(item);
         SelectedItem = item;
     }
