@@ -41,11 +41,23 @@
                           ItemsSource="{Binding AvailableZoomOptions}"
                           SelectedItem="{Binding SelectedZoomOption}"
                           DisplayMemberPath="Label"/>
+                <!-- Slew-to-computed-position + optional camera fine-tune + optional Alpaca sync
+                     (see CaptureViewModel.FindSunAsync) - lives here, not on Prepare, since the
+                     fine-tune step needs whatever camera is live in this view. Enabled only once
+                     the mount is connected. -->
+                <Button Content="Find Sun…" Width="90" Margin="0,0,8,0"
+                        Command="{Binding FindSunCommand}"/>
                 <!-- Pop-out, modeless hand control (see HandControlWindow.xaml) - lives here rather
                      than on Prepare since the user will typically be watching this live preview
                      while jogging the mount. Enabled only once the mount is connected. -->
                 <Button Content="Hand Control…" Width="110" Margin="0,0,8,0"
                         Command="{Binding OpenHandControlCommand}"/>
+                <!-- Manual counterpart to Find Sun's own end-of-flow sync offer - for when the user
+                     has aligned the Sun in the preview themselves (e.g. via Hand Control) and just
+                     wants to sync the mount's pointing model to that alignment now. -->
+                <Button Content="Sync" Width="60" Margin="0,0,8,0"
+                        Command="{Binding SyncMountCommand}"
+                        ToolTip="Sync the mount's pointing model to today's computed Sun position - use once the Sun is centred in the live view."/>
                 <Button Content="Disconnect" Width="80" Command="{Binding DisconnectCommand}"/>
             </StackPanel>
         </DockPanel>

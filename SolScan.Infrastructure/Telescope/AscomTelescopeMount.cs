@@ -104,12 +104,29 @@ public class AscomTelescopeMount : ITelescopeMount
 
     public async Task SlewToCoordinatesAsync(double raHours, double decDeg, CancellationToken cancellationToken = default)
     {
+        // Most mounts refuse (or silently no-op) an equatorial SlewToCoordinates while tracking is
+        // off - confirmed the hard way via CaptureViewModel.FindSunAsync landing a mount motionless
+        // at its previous position. Rather than push that quirk onto every caller, switch tracking
+        // on here first if it isn't already - matching what a person driving the mount by hand would
+        // just do anyway before a goto.
+        if (!await GetTrackingAsync(cancellationToken))
+        {
+            await SetTrackingAsync(true, cancellationToken);
+        }
+
         await _client.PutAsync("slewtocoordinates", cancellationToken,
             ("RightAscension", raHours.ToString(CultureInfo.InvariantCulture)),
             ("Declination", decDeg.ToString(CultureInfo.InvariantCulture)));
 
         await WaitForSlewCompleteAsync(cancellationToken);
     }
+
+    /// <summary>Alpaca's "synctocoordinates" - instantaneous, no polling to wait out (unlike
+    /// <see cref="SlewToCoordinatesAsync"/>, which physically moves the mount).</summary>
+    public Task SyncToCoordinatesAsync(double raHours, double decDeg, CancellationToken cancellationToken = default) =>
+        _client.PutAsync("synctocoordinates", cancellationToken,
+            ("RightAscension", raHours.ToString(CultureInfo.InvariantCulture)),
+            ("Declination", decDeg.ToString(CultureInfo.InvariantCulture)));
 
     /// <summary>Polls "slewing" until it clears, bounded by <see cref="SlewTimeout"/> - the
     /// interface's own SlewToCoordinatesAsync doc comment promises the slew is complete by the time

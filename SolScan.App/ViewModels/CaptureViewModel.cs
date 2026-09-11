@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SolScan.App.Views;
+using SolScan.Core.Astronomy;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
@@ -30,17 +31,44 @@ public partial class CaptureViewModel : ObservableObject
     private static readonly TimeSpan PreviewRedrawInterval = TimeSpan.FromMilliseconds(50); // ~20fps cap
     private static readonly TimeSpan FrameRateUpdateInterval = TimeSpan.FromSeconds(1);
 
+    // "Find Sun" fine-tune (see FindSunAsync) - a simple brightness hill-climb, not the full
+    // spiral-search-then-hill-climb algorithm CLAUDE.md's "Visual fine-centering" describes: the
+    // ephemeris slew should already land the Sun somewhere in frame, so there's no need for a
+    // from-zero-signal search phase for v1.
+    //
+    // UNTESTED against real hardware - the constants below are unvalidated first guesses (see
+    // FindSunAsync's own doc comment) and may well need retuning once tried against a real mount +
+    // camera pointed at the actual Sun.
+    private const double FindSunCoarseNudgeFraction = 0.01; // ~1% of the mount's own max slew rate
+    private const double FindSunFineNudgeFraction = 0.3; // second pass, relative to the coarse rate
+    private static readonly TimeSpan FindSunPulseDuration = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan FindSunSettleDelay = TimeSpan.FromMilliseconds(400); // let a couple of throttled preview frames catch up
+    private const int FindSunMaxStepsPerAxis = 8;
+    // Relative, not absolute - Mono16's raw average sits ~256x higher than Mono8's for the same
+    // scene, so a fixed absolute threshold would be far too twitchy in one format and far too
+    // insensitive in the other.
+    private const double FindSunRelativeImprovementThreshold = 0.005;
+    private const double FindSunFallbackMaxSlewRateDegPerSec = 3.5; // matches AscomTelescopeMount's own hand-control fallback
+
     private readonly ICameraDiscoveryService _discoveryService;
     private readonly Func<ISerWriter> _serWriterFactory;
     private readonly ICameraSettingsStore _cameraSettingsStore;
     private readonly IAppSettingsStore _appSettingsStore;
     private readonly IEquipmentLibrary _equipmentLibrary;
     private readonly ICaptureMetadataWriter _captureMetadataWriter;
+    private readonly ITelescopeMount _mount;
     private readonly MountState _mountState;
     private readonly Func<HandControlWindow> _handControlWindowFactory;
     private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private readonly Lock _recordingLock = new();
+
+    /// <summary>Total-frame average sensor value from the most recently processed preview frame
+    /// (see <see cref="ProcessPreviewFrame"/>) - the same total-brightness-as-slit-overlap proxy
+    /// CLAUDE.md's "Visual fine-centering" note describes. Only ever read/written on the UI thread
+    /// (set from <see cref="ProcessPreviewFrame"/>'s dispatcher callback, read from
+    /// <see cref="FindSunAsync"/>'s own UI-thread async continuations), so no locking is needed.</summary>
+    private double _lastFrameAverageBrightness;
 
     /// <summary>The currently-open Hand Control window, if any - tracked so a second click on
     /// "Hand Control…" brings the existing one to front instead of opening a duplicate (two windows
@@ -95,6 +123,11 @@ public partial class CaptureViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isRecording;
+
+    /// <summary>True while <see cref="FindSunAsync"/> is running - gates re-entry and disables the
+    /// camera/mount controls it relies on staying put mid-run (live view, disconnect, recording).</summary>
+    [ObservableProperty]
+    private bool isFindingSun;
 
     /// <summary>Raw gain, 0-600 (0.1dB/step) - the ASI678MM's own range, matching what SharpCap
     /// shows for it (see <see cref="ICameraDevice.Gain"/>).</summary>
@@ -250,6 +283,7 @@ public partial class CaptureViewModel : ObservableObject
         IAppSettingsStore appSettingsStore,
         IEquipmentLibrary equipmentLibrary,
         ICaptureMetadataWriter captureMetadataWriter,
+        ITelescopeMount mount,
         MountState mountState,
         Func<HandControlWindow> handControlWindowFactory,
         StatusBarViewModel statusBar)
@@ -260,6 +294,7 @@ public partial class CaptureViewModel : ObservableObject
         _appSettingsStore = appSettingsStore;
         _equipmentLibrary = equipmentLibrary;
         _captureMetadataWriter = captureMetadataWriter;
+        _mount = mount;
         _mountState = mountState;
         _handControlWindowFactory = handControlWindowFactory;
         _statusBar = statusBar;
@@ -279,7 +314,12 @@ public partial class CaptureViewModel : ObservableObject
         }
     }
 
-    partial void OnIsMountConnectedChanged(bool value) => OpenHandControlCommand.NotifyCanExecuteChanged();
+    partial void OnIsMountConnectedChanged(bool value)
+    {
+        OpenHandControlCommand.NotifyCanExecuteChanged();
+        FindSunCommand.NotifyCanExecuteChanged();
+        SyncMountCommand.NotifyCanExecuteChanged();
+    }
 
     /// <summary>Opens the pop-out, modeless Hand Control window (see Views/HandControlWindow.xaml) -
     /// brings the existing one to front instead of opening a second if one's already open, since two
@@ -298,9 +338,211 @@ public partial class CaptureViewModel : ObservableObject
         _handControlWindow.Show();
     }
 
-    private bool CanToggleLiveView => SelectedCamera is not null && !IsRecording;
-    private bool CanDisconnect => IsConnected && !IsRecording;
-    private bool CanStartRecording => IsLive && !IsRecording;
+    private bool CanToggleLiveView => SelectedCamera is not null && !IsRecording && !IsFindingSun;
+    private bool CanDisconnect => IsConnected && !IsRecording && !IsFindingSun;
+    private bool CanStartRecording => IsLive && !IsRecording && !IsFindingSun;
+    private bool CanFindSun => IsMountConnected && !IsRecording && !IsFindingSun;
+    private bool CanSyncMount => IsMountConnected && !IsFindingSun;
+
+    /// <summary>
+    /// Manual counterpart to <see cref="FindSunAsync"/>'s own end-of-flow sync offer: for when the
+    /// user has aligned the Sun in the live preview themselves (e.g. via Hand Control) rather than
+    /// through the automatic fine-tune, and just wants to sync the mount's pointing model to that
+    /// now-correct alignment. Syncs to a freshly computed ephemeris position, same reasoning as
+    /// <see cref="SyncMountToSunPositionAsync"/>'s own doc comment.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanSyncMount))]
+    private async Task SyncMountAsync()
+    {
+        try
+        {
+            var (raHours, decDeg) = await SyncMountToSunPositionAsync();
+            StatusText = $"Synced mount to today's computed Sun position (RA {raHours:F3}h, Dec {decDeg:F2}°).";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Sync failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Syncs the mount to a *freshly* computed ephemeris position (not one computed earlier and
+    /// reused, since even a short delay lets the Sun's real position drift by a meaningful amount -
+    /// see <see cref="FindSunAsync"/>'s own call site) and deliberately not
+    /// <see cref="ITelescopeMount.GetCurrentPositionAsync"/>'s readback: syncing the mount to its own
+    /// existing belief about where it's pointed would be a no-op, since that belief already differs
+    /// from the truth by whatever error a sync exists to correct.
+    /// </summary>
+    private async Task<(double RaHours, double DecDeg)> SyncMountToSunPositionAsync()
+    {
+        var (raHours, decDeg) = SunPosition.GetApparentRaDecJNow(DateTime.UtcNow);
+        await _mount.SyncToCoordinatesAsync(raHours, decDeg);
+        return (raHours, decDeg);
+    }
+
+    /// <summary>
+    /// "Find Sun" - see SolScan CLAUDE.md Phase 3. Slews the mount to today's computed solar
+    /// position (<see cref="SunPosition"/>), then - only if a camera is live here - offers to
+    /// fine-tune pointing using the live view's total frame brightness as a slit-overlap proxy
+    /// (<see cref="RunFineTuneAsync"/>), then offers to sync the mount's pointing model to the
+    /// result via Alpaca. No camera live, or the user declines the fine-tune, and the flow stops
+    /// right after the ephemeris slew - there's nothing more automatic to offer without a camera to
+    /// judge alignment by.
+    ///
+    /// NOT YET VERIFIED against real hardware: the ephemeris slew + tracking-on fix + manual Sync
+    /// button have been (see CLAUDE.md's "Also real" note), but the camera-driven fine-tune itself
+    /// (<see cref="RunFineTuneAsync"/>/<see cref="ClimbAxisAsync"/>) has only been exercised by
+    /// build/unit tests, not against a real mount+camera pointed at the actual Sun - in particular
+    /// the nudge rate/pulse duration/settle delay constants near the top of this class are
+    /// unvalidated guesses, and may need retuning once it's actually tried.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanFindSun))]
+    private async Task FindSunAsync()
+    {
+        try
+        {
+            IsFindingSun = true;
+
+            var (raHours, decDeg) = SunPosition.GetApparentRaDecJNow(DateTime.UtcNow);
+
+            StatusText = $"Find Sun: slewing to RA {raHours:F3}h, Dec {decDeg:F2}°…";
+            await _mount.SlewToCoordinatesAsync(raHours, decDeg);
+            StatusText = $"Find Sun: slewed to the computed position (RA {raHours:F3}h, Dec {decDeg:F2}°).";
+
+            if (!(IsLive && _connectedCamera is not null))
+            {
+                StatusText += " No live camera - stopping here.";
+                return;
+            }
+
+            var fineTune = MessageBox.Show(
+                "Slewed to the Sun's computed position. Fine-tune pointing now using the live camera view?",
+                "Find Sun",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
+
+            if (!fineTune)
+            {
+                StatusText = "Find Sun: done (camera fine-tune skipped).";
+                return;
+            }
+
+            StatusText = "Find Sun: fine-tuning using the live camera view…";
+            var improved = await RunFineTuneAsync();
+            StatusText = improved
+                ? "Find Sun: fine-tune improved centring on the live view."
+                : "Find Sun: fine-tune made no further improvement (already well centred).";
+
+            var doSync = MessageBox.Show(
+                "Sync the mount's pointing to this position via Alpaca now?",
+                "Find Sun",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
+
+            if (!doSync)
+            {
+                StatusText = "Find Sun: complete.";
+                return;
+            }
+
+            var (syncRaHours, syncDecDeg) = await SyncMountToSunPositionAsync();
+            StatusText = $"Find Sun: mount synced to RA {syncRaHours:F3}h, Dec {syncDecDeg:F2}°.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Find Sun failed: {ex.Message}";
+        }
+        finally
+        {
+            IsFindingSun = false;
+        }
+    }
+
+    /// <summary>Two coarse-then-fine hill-climb passes over RA then Dec - see
+    /// <see cref="ClimbAxisAsync"/>. Returns whether any pass actually improved brightness.</summary>
+    private async Task<bool> RunFineTuneAsync()
+    {
+        double maxRateDegPerSec;
+        try
+        {
+            maxRateDegPerSec = await _mount.GetMaxSlewRateDegPerSecAsync();
+        }
+        catch
+        {
+            // GetMaxSlewRateDegPerSecAsync already falls back internally on failure (see its own
+            // doc comment) - reaching here means something else entirely went wrong; fall back the
+            // same way HandControlViewModel does rather than aborting the whole fine-tune.
+            maxRateDegPerSec = FindSunFallbackMaxSlewRateDegPerSec;
+        }
+
+        var coarseRate = maxRateDegPerSec * FindSunCoarseNudgeFraction;
+        var fineRate = coarseRate * FindSunFineNudgeFraction;
+
+        var improved = await ClimbAxisAsync(TelescopeAxis.Primary, coarseRate);
+        improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, coarseRate);
+        improved |= await ClimbAxisAsync(TelescopeAxis.Primary, fineRate);
+        improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, fineRate);
+        return improved;
+    }
+
+    /// <summary>
+    /// One-dimensional brightness hill-climb on a single mount axis: nudges in one direction while
+    /// <see cref="_lastFrameAverageBrightness"/> keeps improving, backs off the final (non-improving)
+    /// step so the axis ends up at the peak rather than one step past it, and tries the opposite
+    /// direction first if the very first nudge didn't help at all. Bounded by
+    /// <see cref="FindSunMaxStepsPerAxis"/> so a flat/noisy signal can't loop indefinitely.
+    /// </summary>
+    private async Task<bool> ClimbAxisAsync(TelescopeAxis axis, double rateDegPerSec)
+    {
+        var direction = 1.0;
+        var best = _lastFrameAverageBrightness;
+
+        var first = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
+        if (!IsBrighterThan(first, best))
+        {
+            // That direction didn't help - undo it and try the opposite one instead.
+            await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
+            direction = -1.0;
+            first = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
+
+            if (!IsBrighterThan(first, best))
+            {
+                // Neither direction helped - undo and give up on this axis for this pass.
+                await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
+                return false;
+            }
+        }
+
+        best = first;
+        for (var step = 0; step < FindSunMaxStepsPerAxis; step++)
+        {
+            var after = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
+            if (!IsBrighterThan(after, best))
+            {
+                // Overshot the peak - undo this last step and stop.
+                await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
+                break;
+            }
+            best = after;
+        }
+
+        return true;
+    }
+
+    private static bool IsBrighterThan(double after, double before) =>
+        after > before * (1 + FindSunRelativeImprovementThreshold);
+
+    /// <summary>Pulses <paramref name="axis"/> at <paramref name="rateDegPerSec"/> * <paramref name="direction"/>
+    /// for <see cref="FindSunPulseDuration"/>, stops it, waits <see cref="FindSunSettleDelay"/> for a
+    /// couple of throttled preview frames to catch up, then returns the freshly-measured brightness.</summary>
+    private async Task<double> NudgeAndMeasureAsync(TelescopeAxis axis, double direction, double rateDegPerSec)
+    {
+        await _mount.MoveAxisAsync(axis, direction * rateDegPerSec);
+        await Task.Delay(FindSunPulseDuration);
+        await _mount.MoveAxisAsync(axis, 0);
+        await Task.Delay(FindSunSettleDelay);
+        return _lastFrameAverageBrightness;
+    }
 
     [RelayCommand]
     private void RefreshCameras()
@@ -612,6 +854,16 @@ public partial class CaptureViewModel : ObservableObject
         DisconnectCommand.NotifyCanExecuteChanged();
         StartRecordingCommand.NotifyCanExecuteChanged();
         StopRecordingCommand.NotifyCanExecuteChanged();
+        FindSunCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsFindingSunChanged(bool value)
+    {
+        ToggleLiveViewCommand.NotifyCanExecuteChanged();
+        DisconnectCommand.NotifyCanExecuteChanged();
+        StartRecordingCommand.NotifyCanExecuteChanged();
+        FindSunCommand.NotifyCanExecuteChanged();
+        SyncMountCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnGainChanged(double value)
@@ -928,6 +1180,7 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramGeometry = BuildHistogramGeometry(stats.Histogram);
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
+                _lastFrameAverageBrightness = stats.AverageValue; // see FindSunAsync's fine-tune hill-climb
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
 
                 if (isContrastAuto)

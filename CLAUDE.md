@@ -404,40 +404,86 @@ Directional buttons jog only while held (`Mouse.Capture` on press/release so a d
 before releasing still stops it), and closing the window - even via Alt+F4 mid-press - always calls
 `AbortSlewAsync` plus zeroes both axes as a safety net, so it can never leave a motor running.
 
-Placeholder: everything else behind those contracts. No solar ephemeris, no processing pipeline, and
-within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view toggle* (see the centred ROI
-note above for what's real there instead), no camera-focus/collimator-focus aids, no live line-ID
-overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also doesn't yet cover Az/Alt
-slewing, "find the sun" ephemeris/lead-offset slewing, visual fine-centering, custom tracking rates,
-or FindHome/AtHome - all later phases per the build plan below.
+Also real: Phase 3's first slice, "Find Sun" - a `SolScan.Core.Astronomy.SunPosition` low-precision
+analytic solar ephemeris (Meeus ch. 25, ~0.01° accuracy 1950-2050, geocentric - the Sun's parallax is
+below this algorithm's own error margin, so site lat/long/elevation add nothing) plus a "Find Sun…"
+button on the Capture view (`CaptureViewModel.FindSunAsync`) - lives there, not Prepare, since the
+camera-fine-tune step needs whatever camera is already live in that view. Slews to today's computed
+RA/Dec first (no lead-offset yet - that needs Phase 4's still-outstanding exposure/scan-speed
+calculator to know how far "ahead" means, so it's deferred rather than guessed at); then, only if a
+camera is actually live, offers (`MessageBox`) to fine-tune pointing using it. The fine-tune itself is
+a simple brightness hill-climb, not yet the full two-phase spiral-search-then-hill-climb the build
+plan below still describes: `ClimbAxisAsync` nudges one axis at a time (`ITelescopeMount.MoveAxisAsync`
+pulses, ~1% of the mount's own max slew rate, then a finer ~0.3%-of-that second pass) while total
+live-preview frame brightness (`FramePreview.ComputeHistogramStats.AverageValue`, sampled off the
+existing throttled preview pipeline - see `_lastFrameAverageBrightness`) keeps improving, backing off
+the final non-improving step so each axis ends up at its peak rather than one step past it. Compares
+brightness *relatively* (±0.5%), not by a fixed absolute delta - Mono16's raw average sits ~256x
+higher than Mono8's for the same scene, so a fixed threshold would be wrong for one format or the
+other. No zero-signal spiral-search phase - the ephemeris slew is assumed to already land the Sun
+somewhere in frame - and no dedicated low search-phase exposure/gain; both remain real gaps versus the
+full design below. Once the fine-tune finishes (whether or not it found any improvement), offers
+(`MessageBox`) to sync the mount's pointing model via the new `ITelescopeMount.SyncToCoordinatesAsync`
+(Alpaca's `synctocoordinates`, `AscomTelescopeMount` - instant, no physical motion, unlike
+`SlewToCoordinatesAsync`) - a quick substitute for a manual star-alignment routine, since the Sun's
+position is already known precisely from the ephemeris. Synced to a *freshly recomputed*
+`SunPosition.GetApparentRaDecJNow(DateTime.UtcNow)` at that moment, not the value from the top of this
+method (fine-tuning can take long enough for the real position to have moved meaningfully) and
+deliberately not `ITelescopeMount.GetCurrentPositionAsync()`'s own readback - syncing the mount to its
+own existing belief about where it's pointed would be a no-op, since that belief already differs from
+the truth by whatever error a sync is meant to correct. `IsFindingSun` gates re-entry and disables
+live-view toggle/disconnect/start-recording for the duration, since the fine-tune loop depends on the
+live view staying exactly as it is mid-run.
+
+A standalone "Sync" button sits alongside it (`CaptureViewModel.SyncMountAsync`, sharing the same
+`SyncMountToSunPositionAsync` helper `FindSunAsync` uses) - the manual counterpart, for when the user
+aligns the Sun in the live preview themselves (e.g. via Hand Control) rather than through the automatic
+fine-tune, and just wants to sync to that alignment. Gated on the mount being connected only - not on
+a camera being live, since it doesn't look at the preview itself at all, just recomputes the ephemeris
+and syncs.
+
+`AscomTelescopeMount.SlewToCoordinatesAsync` also now switches tracking on first if it isn't already
+(see `ITelescopeMount.SlewToCoordinatesAsync`'s own doc comment) - found via `FindSunAsync` landing a
+real mount motionless at its previous position when tracking was off, since most mounts refuse (or
+silently no-op) an equatorial slew in that state, same as a person would just switch tracking on by
+hand before a goto.
+
+Placeholder: everything else behind those contracts. No processing pipeline, and within Phase 4
+itself: no exposure/fps calculator, no wide/ROI *view toggle* (see the centred ROI note above for what's
+real there instead), no camera-focus/collimator-focus aids, no live line-ID overlay yet (see the Phase
+4 sub-items below). Phase 2's mount control also doesn't yet cover Az/Alt slewing or custom tracking
+rates/FindHome/AtHome; Phase 3's ephemeris slew doesn't yet include a lead-offset, and its fine-tune
+is the simple hill-climb described above, not yet the full spiral-search-then-hill-climb design - all
+later phases per the build plan below.
 
 ## Phased build plan
 
 1. **Scaffolding** *(done)* — solution + projects, DI composition root, nav shell.
 2. **Mount control** *(done)* — port RASTA's Alpaca client into `SolScan.Infrastructure`, implement
    `ITelescopeMount`, wire a real Prepare-stage connect/disconnect/site-settings UI.
-3. **Find the sun** — add a solar ephemeris (`SunPosition`, low-precision analytic, arc-minute
-   accuracy is enough for a slit-width offset) to `SolScan.Core`, add a "slew to sun + lead offset"
-   command to the Capture stage. Build the apparent-disk-size/declination part so Phase 4's exposure
-   calculator can reuse it rather than duplicating the ephemeris. The ephemeris slew is always the
-   starting point - it's what gets the mount close enough for anything below to have signal to work
-   with in the first place.
-   - **Visual fine-centering** (refinement, depends on Phase 4's camera capture landing first -
-     either build a minimal frame-streaming capability ahead of the rest of Phase 4's UI, or treat
-     this as a Phase 3 addition once Phase 4 exists rather than a hard blocker): an SHG only ever
-     sees whatever light passes through its slit, so total brightness in the live frame is a direct,
-     unimodal proxy for how well the sun's disk currently overlaps the slit - no risk of locking onto
-     the wrong source, since nothing else in a daytime sky is remotely as bright as the sun. Two
-     phases: an expanding-spiral/raster search first, in case the ephemeris slew leaves the frame at
-     zero signal (gradient-climbing needs *some* nonzero signal to follow - it can't recover from a
-     flat-zero frame on its own); then a hill-climb/P-controller phase nudging both mount axes to
-     maximize total frame brightness once signal exists. Needs a deliberately low search-phase
-     exposure/gain, separate from the capture-ready exposure the Phase 4 calculator recommends, so
-     the signal doesn't saturate and flatten out near the peak. Keep tracking on throughout (ideally
-     already at a rate accounting for the sun's faster-than-sidereal motion) so the target doesn't
-     drift away mid-search. Refines pointing precision only - the ephemeris still supplies the lead-
-     offset direction/distance, which brightness-peaking alone can't tell you. No prior art for this
-     one in RASTA/sunscan-backend/astro4j - genuinely new to SolScan, not a port.
+3. **Find the sun** *(core landed)* — `SolScan.Core.Astronomy.SunPosition` (low-precision analytic,
+   ~0.01° accuracy) plus `CaptureViewModel.FindSunAsync`/its "Find Sun…" button, slewing to today's
+   computed position, then (only if a camera is live) a simple brightness hill-climb fine-tune, then
+   an optional Alpaca sync - see the "Also real" note above for what's actually implemented and what
+   of the below remains outstanding. Still missing: the lead-offset itself (needs Phase 4's exposure/
+   scan-speed calculator to know how far "ahead" means), and the apparent-disk-size/declination part
+   that calculator is meant to share with this same ephemeris rather than duplicating it.
+   - **Visual fine-centering, full design** (the simple hill-climb above is a first cut of this, not
+     the complete version): an SHG only ever sees whatever light passes through its slit, so total
+     brightness in the live frame is a direct, unimodal proxy for how well the sun's disk currently
+     overlaps the slit - no risk of locking onto the wrong source, since nothing else in a daytime sky
+     is remotely as bright as the sun. Two phases: an expanding-spiral/raster search first, in case
+     the ephemeris slew leaves the frame at zero signal (gradient-climbing needs *some* nonzero signal
+     to follow - it can't recover from a flat-zero frame on its own - not yet built, since the
+     ephemeris slew is assumed to already land the Sun in frame); then a hill-climb/P-controller phase
+     nudging both mount axes to maximize total frame brightness once signal exists (the part that's
+     landed, as a simpler per-axis step-and-check rather than a true P-controller). Still needed: a
+     deliberately low search-phase exposure/gain, separate from the capture-ready exposure the Phase 4
+     calculator recommends, so the signal doesn't saturate and flatten out near the peak. Keep tracking
+     on throughout (ideally already at a rate accounting for the sun's faster-than-sidereal motion) so
+     the target doesn't drift away mid-search. Refines pointing precision only - the ephemeris still
+     supplies the lead-offset direction/distance, which brightness-peaking alone can't tell you. No
+     prior art for this one in RASTA/sunscan-backend/astro4j - genuinely new to SolScan, not a port.
 4. **Manual capture** *(core landed)* — camera discovery + ZWO ASI/Altair SDK wrappers implementing
    `ICameraDevice` (plus a hardware-free `SolScan.Simulators` camera), live preview in the Capture
    view, manual start/stop recording through a real `ISerWriter` implementation, gain/exposure/
@@ -636,3 +682,19 @@ or FindHome/AtHome - all later phases per the build plan below.
 8. **Polish** — output styles/palettes, dark/flat calibration, session/plan management, installer
    (WiX, mirroring RASTA's `Setup`/`Bundle` projects), `SolScan.Simulators` fleshed out for offline
    dev/tests.
+
+## Future ideas (not yet scheduled)
+
+Captured here so they aren't lost, not yet assigned to a phase above or designed in any depth.
+
+- **ASCOM-controlled lens cap / slit cover.** An SHG's slit sits at (or very near) a real focal
+  point - exactly where the telescope concentrates the Sun's light and heat - so leaving it uncovered
+  whenever a scan isn't actively in progress risks heat damage, the same reason Sol'ex users keep a
+  physical cap on by hand between scans. ASCOM already has a standard device type for this -
+  `CoverCalibrator` (Alpaca `covercalibrator`: `opencover`/`closecover`/`haltcover`, a `coverstate`
+  property) - so this would likely be a new `SolScan.Core.Telescope.ICoverDevice` (or similar)
+  implemented the same Alpaca-REST way as `ITelescopeMount`, rather than inventing a bespoke
+  protocol. The interesting part isn't the device wrapper itself but *when* SolScan would drive it
+  automatically - open just before a "Find Sun"/slew-and-scan sequence actually needs light through
+  the slit, and close again afterward, on error, or on cancellation - a safety interlock tied into
+  the Prepare/Capture lifecycle rather than a manual button only.
