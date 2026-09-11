@@ -1,0 +1,17 @@
+<UserControl x:Class="SolScan.App.Views.Processing.ImageSelectionView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <StackPanel Margin="16" MaxWidth="420" HorizontalAlignment="Left">
+        <TextBlock Text="Basic Images" FontWeight="Bold"/>
+        <TextBlock Text="Which built-in output images to generate. Advanced Images, Debug Options and custom ImageMath scripts aren't ported yet."
+                   Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+        <CheckBox Content="Raw image" IsChecked="{Binding IsRawSelected}" Margin="0,0,0,4"/>
+        <CheckBox Content="Reconstruction (progressive)" IsChecked="{Binding IsReconstructionSelected}" Margin="0,0,0,4"/>
+        <CheckBox Content="Continuum" IsChecked="{Binding IsContinuumSelected}" Margin="0,0,0,4"/>
+        <CheckBox Content="Geometry corrected image" IsChecked="{Binding IsGeometryCorrectedSelected}" Margin="0,0,0,4"/>
+        <CheckBox Content="Geometry corrected image (processed)" IsChecked="{Binding IsGeometryCorrectedProcessedSelected}"/>
+    </StackPanel>
+</UserControl>

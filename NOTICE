@@ -23,13 +23,40 @@ astro4j does not ship a NOTICE file of its own to propagate. Per-file attributio
 retained in the header of each SolScan source file that closely translates a specific astro4j
 source file, pointing back to the original.
 
-Specifically adapted, at time of writing (see CLAUDE.md for the full, current list):
+Specifically adapted, at time of writing (see CLAUDE.md for the full, current list; not yet
+implemented, still on the roadmap):
   - DeepLineIdentifier (spectral line identification via reference-atlas correlation)
   - SpectralLineCatalog (interesting-lines.txt secondary-line lookup)
   - SpectrumBrowser (dispersion-aware reference-spectrum rendering)
   - ExposureCalculator (recommended exposure/fps from instrument optics and solar ephemeris)
   - SpectroHeliograph / Setup (equipment-profile data shapes)
-  - SolexVideoProcessor and related workflow steps (SHG reconstruction pipeline)
+  - SolexVideoProcessor's wider pipeline (geometry/ellipse-fitting correction, banding/jagging/
+    distortion corrections, Advanced Images/Debug image kinds, ImageMath scripts) - its
+    processSingleFrame reconstruction loop specifically has landed, see below
+
+Specifically adapted, actually landed (each also carries its own per-file header comment pointing
+back to the original Java source, per CLAUDE.md):
+  - SpectralRay (predefined spectral line catalog - SolScan.Core.Processing.SpectralRay)
+  - LineDetectionMode, RotationKind, AutocropMode, ContrastEnhancement, GeneratedImageKind (process
+    parameter enums - SolScan.Core.Processing)
+  - SpectrumParams, GeometryParams, RequestedImages, ProcessParams (process parameter records,
+    trimmed to the fields SolScan currently uses - see each type's own doc comment for what's
+    deliberately excluded - SolScan.Core.Processing)
+  - AverageImageCreator.computeAverageImage (SolScan.Processing.Shg.FrameAverager - ported as a
+    sequential two-pass version, see its own doc comment)
+  - SpectrumFrameAnalyzer's curve-fitting pipeline - findLocalMinimum/findMinima/
+    findDistortionPolynomial/findPolynomialAround/refineFit/depthWeightedCenter/sigmaClippedFit
+    (SolScan.Processing.Shg.SpectralLineCurvatureDetector - disk left/right border detection not
+    ported, see its own doc comment for why that's a real, supported fallback mode of the original
+    algorithm, not an invented shortcut)
+  - LinearRegression.secondOrderRegression, both overloads (math module -
+    SolScan.Processing.Math.LinearRegression)
+  - SolexVideoProcessor.processSingleFrame - the 5-tap Gaussian-weighted reconstruction loop
+    (SolScan.Processing.Shg.DiskReconstructor)
+  - DirectoryKind, and GeneratedImageKind's own per-constant directoryKind() mapping (which output
+    subfolder each generated image kind belongs in - SolScan.Core.Processing.DirectoryKind /
+    GeneratedImageKindExtensions.GetDirectoryKind, folder-naming convention confirmed against
+    NamingStrategyAwareImageEmitter.java)
 
 ================================================================================
 RASTA

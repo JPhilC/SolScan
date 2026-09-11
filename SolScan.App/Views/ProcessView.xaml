@@ -4,11 +4,68 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d">
-    <Grid>
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    </UserControl.Resources>
+    <StackPanel Margin="24" HorizontalAlignment="Left">
         <TextBlock Text="{Binding StatusText}"
                    FontSize="18"
-                   Margin="24"
-                   HorizontalAlignment="Left"
-                   VerticalAlignment="Top" />
-    </Grid>
+                   Margin="0,0,0,16" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <Button Content="Browse…"
+                    Command="{Binding BrowseForSerFileCommand}"
+                    Padding="12,4" />
+            <TextBlock Text="{Binding SelectedFilePath}"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center" />
+        </StackPanel>
+
+        <TextBlock Text="{Binding FileInfoText}"
+                   Margin="0,8,0,0"
+                   FontWeight="SemiBold" />
+        <TextBlock Text="{Binding EquipmentInfoText}"
+                   Margin="0,4,0,0" />
+        <TextBlock Text="{Binding CaptureDetailsText}"
+                   Margin="0,4,0,0"
+                   Opacity="0.8" />
+        <TextBlock Text="{Binding OutputFolderText}"
+                   Margin="0,4,0,0"
+                   Opacity="0.8" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+            <Button Content="Process"
+                    Command="{Binding ProcessCommand}"
+                    Padding="12,4" />
+            <Button Content="Cancel"
+                    Command="{Binding CancelProcessingCommand}"
+                    Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    Margin="8,0,0,0"
+                    Padding="12,4" />
+        </StackPanel>
+
+        <!-- Empty (no items, no image) until an output folder actually has .png files in it - a bare
+             ComboBox and an Image with no Source both collapse to their minimal/zero size, so this
+             stays unobtrusive rather than needing extra visibility plumbing for the "nothing yet"
+             case. Disk-based, not tied to the most recent Process click - see ProcessViewModel's own
+             class doc comment. -->
+        <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
+            <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox ItemsSource="{Binding AvailableProcessedImages}"
+                      SelectedItem="{Binding SelectedProcessedImage}"
+                      DisplayMemberPath="Label"
+                      Width="200" />
+        </StackPanel>
+
+        <!-- Auto-stretched (see ProcessViewModel.UpdateProcessedImagePreview) - the saved PNGs are
+             deliberately unstretched real sensor-scale values, which would look flat/washed here
+             without this. HighQuality scaling since the preview is downsampled then magnified back
+             up, same reasoning as CaptureView's own live-preview Image. -->
+        <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left">
+            <Image Source="{Binding ProcessedImagePreview}"
+                   Stretch="Uniform"
+                   MaxWidth="640" MaxHeight="640"
+                   RenderOptions.BitmapScalingMode="HighQuality" />
+        </Border>
+    </StackPanel>
 </UserControl>

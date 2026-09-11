@@ -7,13 +7,16 @@ using SolScan.App.Views;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
+using SolScan.Core.Processing;
 using SolScan.Core.Telescope;
 using SolScan.Infrastructure.Camera;
 using SolScan.Infrastructure.Camera.Altair;
 using SolScan.Infrastructure.Camera.Asi;
 using SolScan.Infrastructure.Capture;
 using SolScan.Infrastructure.Equipment;
+using SolScan.Infrastructure.Processing;
 using SolScan.Infrastructure.Telescope;
+using SolScan.Processing.Shg;
 using SolScan.Simulators;
 
 namespace SolScan.App;
@@ -104,9 +107,25 @@ public partial class App : Application
         services.AddTransient<ISerWriter, SerWriter>();
         services.AddSingleton<Func<ISerWriter>>(sp => sp.GetRequiredService<ISerWriter>);
 
-        // Snapshots the SHG/telescope/camera used into a .equipment.json sidecar per recording -
-        // see CaptureViewModel.WriteCaptureEquipmentMetadata. Stateless, so a singleton is fine.
-        services.AddSingleton<ICaptureMetadataWriter, JsonCaptureMetadataWriter>();
+        // Read-side counterpart, used by ProcessViewModel to open a finished capture rather than a
+        // live camera stream - same factory-delegate shape as ISerWriter above, for the same
+        // "fresh instance per file, view model stays out of the service-locator pattern" reasoning.
+        services.AddTransient<ISerReader, SerReader>();
+        services.AddSingleton<Func<ISerReader>>(sp => sp.GetRequiredService<ISerReader>);
+
+        // One global set of processing defaults (which images to generate, spectral line/geometry
+        // setup, contrast method) - edited across three Options tabs, see OptionsViewModel.
+        services.AddSingleton<IProcessParamsStore, JsonProcessParamsStore>();
+
+        // Real spectral-line-curvature detection + reconstruction (Raw/Reconstruction/Continuum) -
+        // see ShgProcessor's own doc comment for what it does and doesn't cover yet. Transient: no
+        // state to share across uses, each Process click gets a fresh instance.
+        services.AddTransient<IShgProcessor, ShgProcessor>();
+
+        // Snapshots the SHG/telescope/camera used (plus camera dial-in settings/mount pointing at
+        // recording start - see CaptureMetadata) into a .equipment.json sidecar per recording - see
+        // CaptureViewModel.WriteCaptureMetadata. Stateless, so a singleton is fine.
+        services.AddSingleton<ICaptureMetadataStore, JsonCaptureMetadataStore>();
 
         // The pop-out, modeless Hand Control window (see HandControlWindow.xaml) - transient, one
         // fresh instance per open, resolved via a factory delegate rather than an injected

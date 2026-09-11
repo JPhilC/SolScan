@@ -28,7 +28,7 @@ namespace SolScan.Core.Capture;
 /// <param name="SelectedEquipmentSetupId">The <see cref="Equipment.EquipmentSetup"/> (SHG+telescope
 /// combo) currently picked on Prepare - null means nothing's been picked yet. Read fresh by
 /// CaptureViewModel when a recording starts, to snapshot into that recording's
-/// <see cref="CaptureEquipmentMetadata"/>.</param>
+/// <see cref="CaptureMetadata"/>.</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,

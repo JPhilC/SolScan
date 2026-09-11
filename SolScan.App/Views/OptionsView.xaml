@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:equipment="clr-namespace:SolScan.App.Views.Equipment"
+             xmlns:processing="clr-namespace:SolScan.App.Views.Processing"
              mc:Ignorable="d">
     <DockPanel>
         <TextBlock DockPanel.Dock="Top"
@@ -65,6 +66,15 @@
             </TabItem>
             <TabItem Header="Setups">
                 <equipment:EquipmentSetupLibraryView DataContext="{Binding Setups}"/>
+            </TabItem>
+            <TabItem Header="Process Parameters">
+                <processing:ProcessParametersView DataContext="{Binding ProcessParameters}"/>
+            </TabItem>
+            <TabItem Header="Image Enhancement">
+                <processing:ImageEnhancementView DataContext="{Binding ImageEnhancement}"/>
+            </TabItem>
+            <TabItem Header="Image Selection">
+                <processing:ImageSelectionView DataContext="{Binding ImageSelection}"/>
             </TabItem>
         </TabControl>
     </DockPanel>

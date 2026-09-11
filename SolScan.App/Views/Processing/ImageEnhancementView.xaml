@@ -1,0 +1,15 @@
+<UserControl x:Class="SolScan.App.Views.Processing.ImageEnhancementView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <StackPanel Margin="16" MaxWidth="420" HorizontalAlignment="Left">
+        <TextBlock Text="Contrast Enhancement" FontWeight="Bold"/>
+        <TextBlock Text="Applied to the geometry-corrected (processed) image. Tuning parameters for each method aren't exposed yet - a future processing pipeline uses built-in defaults for those."
+                   Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+        <ComboBox ItemsSource="{Binding AvailableContrastEnhancementModes}"
+                  SelectedItem="{Binding SelectedContrastEnhancement}"
+                  Width="160" HorizontalAlignment="Left"/>
+    </StackPanel>
+</UserControl>

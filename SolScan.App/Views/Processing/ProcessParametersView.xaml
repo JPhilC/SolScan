@@ -1,0 +1,37 @@
+<UserControl x:Class="SolScan.App.Views.Processing.ProcessParametersView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <StackPanel Margin="16" MaxWidth="420" HorizontalAlignment="Left">
+        <TextBlock Text="Spectral Line" FontWeight="Bold"/>
+        <TextBlock Text="Which line is being studied, and how it's located in the frame." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+        <TextBlock Text="Line"/>
+        <ComboBox ItemsSource="{Binding AvailableRays}" SelectedItem="{Binding SelectedRay}"
+                  DisplayMemberPath="Label" Margin="0,2,0,8"/>
+        <TextBlock Text="Detection mode"/>
+        <ComboBox ItemsSource="{Binding AvailableDetectionModes}" SelectedItem="{Binding DetectionMode}" Margin="0,2,0,0"/>
+
+        <TextBlock Text="Pixel Shifts" FontWeight="Bold" Margin="0,20,0,0"/>
+        <TextBlock Text="Relative to the detected line centre." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+        <TextBlock Text="Reconstruction pixel shift"/>
+        <TextBox Text="{Binding PixelShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+        <TextBlock Text="Doppler pixel shift"/>
+        <TextBox Text="{Binding DopplerShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+        <TextBlock Text="Continuum pixel shift"/>
+        <TextBox Text="{Binding ContinuumShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+        <CheckBox Content="Switch red/blue channels" IsChecked="{Binding SwitchRedBlueChannels}" Margin="0,4,0,0"/>
+
+        <TextBlock Text="Geometry" FontWeight="Bold" Margin="0,20,0,0"/>
+        <TextBlock Text="Applied to the geometry-corrected image." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+        <TextBlock Text="Rotation"/>
+        <ComboBox ItemsSource="{Binding AvailableRotations}" SelectedItem="{Binding Rotation}" Margin="0,2,0,8"/>
+        <TextBlock Text="Autocrop"/>
+        <ComboBox ItemsSource="{Binding AvailableAutocropModes}" SelectedItem="{Binding SelectedAutocropMode}" Margin="0,2,0,4"/>
+        <TextBlock Text="Fixed width (px) - only used when Autocrop is FixedWidth"/>
+        <TextBox Text="{Binding FixedWidth, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"/>
+        <CheckBox Content="Mirror horizontally" IsChecked="{Binding HorizontalMirror}" Margin="0,0,0,4"/>
+        <CheckBox Content="Mirror vertically" IsChecked="{Binding VerticalMirror}"/>
+    </StackPanel>
+</UserControl>

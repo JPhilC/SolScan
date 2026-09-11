@@ -41,7 +41,7 @@
             <TextBox Grid.Row="0" Grid.Column="2" Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}"/>
 
             <TextBlock Grid.Row="2" Grid.Column="0" Text="Pixel size (µm)"/>
-            <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding PixelSizeMicrons, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F1}}"/>
+            <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding PixelSizeMicrons, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"/>
         </Grid>
     </Grid>
 </UserControl>

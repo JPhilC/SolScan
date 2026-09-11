@@ -12,9 +12,9 @@ architecture and phased build plan.
 
 ## Status
 
-Past scaffolding now — mount control and manual camera capture both work end-to-end against real
-hardware; the SHG reconstruction pipeline itself hasn't started. See `CLAUDE.md`'s phased build plan
-for the full detail on what's real vs. placeholder.
+Past scaffolding now — mount control, manual camera capture, and a first real slice of the SHG
+reconstruction pipeline all work end-to-end against real hardware. See `CLAUDE.md`'s phased build
+plan for the full detail on what's real vs. placeholder.
 
 - **Prepare** — connect/disconnect a mount over ASCOM Alpaca, Park/Unpark, a manual tracking toggle,
   live RA/Dec, and editable site settings that reconcile against the mount's own on connect. Also
@@ -23,16 +23,25 @@ for the full detail on what's real vs. placeholder.
   manually jogging the mount while watching the live preview on Capture.
 - **Capture** — camera discovery (ZWO ASI via its native SDK, Altair, or a hardware-free simulator),
   a SharpCap-style live preview (gain/exposure/USB-bandwidth/contrast sliders, a histogram, ROI,
-  zoom, colour space/binning), and manual start/stop recording to standard `.ser` files. Connecting a
+  zoom, colour space/binning), and manual start/stop recording to standard `.ser` files. A "Find
+  Sun…" button slews to today's computed solar position (a ported low-precision analytic ephemeris)
+  and offers a camera-brightness hill-climb fine-tune plus an Alpaca pointing sync. Connecting a
   camera auto-registers it in the equipment library (pixel size queried straight from the hardware);
-  every recording gets a `.equipment.json` sidecar snapshotting the SHG/telescope/camera used, for
-  the processing stage to read back later.
+  every recording gets a `.equipment.json` sidecar snapshotting the SHG/telescope/camera used, the
+  camera settings dialled in, and the mount's pointing at the time.
 - **Options** — a full equipment library (SHGs, telescopes, cameras, and saved SHG+telescope
-  "Setups"), plus general settings (capture save location, ASCOM Alpaca connection, site location).
-- **Process** — not started yet; still a placeholder view.
+  "Setups"), general settings (capture save location, ASCOM Alpaca connection, site location), and
+  process parameters (which line was studied, geometry/contrast choices, which output images to
+  generate) feeding the Process stage below.
+- **Process** — pick a `.ser` file and run it through a real (not simplified) SHG reconstruction
+  pipeline: spectral-line-curvature detection and disk reconstruction, both ported from astro4j/
+  JSol'Ex, producing real `Raw`/`Reconstruction`/`Continuum` output images viewable right in the app.
+  Geometry-corrected/contrast-enhanced output still needs ellipse-fitting geometry correction - a
+  separate, not-yet-built piece of work - and is reported as not yet implemented rather than faked.
 
-There's no solar ephemeris ("find the sun") or automated acquisition pipeline yet, so slewing/
-recording are both entirely manual for now - that's the next piece of work.
+There's no automated acquisition pipeline yet (slewing and recording are both manually triggered),
+and processing is kicked off by hand rather than automatically once a recording finishes - both are
+still ahead, see `CLAUDE.md`.
 
 ## Building
 
@@ -51,13 +60,15 @@ real or simulated) - point Options > General's Alpaca settings at it.
 ## Architecture
 
 - **SolScan.Core** — domain models & interfaces only, no hardware/IO dependencies: `ITelescopeMount`,
-  `ICameraDevice`, `ISerWriter`, and the equipment library records (`SpectrographProfile`/
-  `TelescopeProfile`/`CameraProfile`/`EquipmentSetup`) plus per-recording equipment metadata.
+  `ICameraDevice`, `ISerWriter`/`ISerReader`, the equipment library records (`SpectrographProfile`/
+  `TelescopeProfile`/`CameraProfile`/`EquipmentSetup`), per-recording `CaptureMetadata`, and the
+  process-parameter records (`ProcessParams`/`SpectrumParams`/`GeometryParams`/...).
 - **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca mount client, ZWO ASI and
-  Altair camera wrappers (native SDK P/Invoke), a `.ser` file writer, and JSON-file-backed equipment/
-  settings storage.
-- **SolScan.Processing** — pure algorithms: the SHG reconstruction pipeline. Not started yet - will
-  begin as a wrapper around JSolex's `jsolex-cli`, incrementally replaced with native ports.
+  Altair camera wrappers (native SDK P/Invoke), `.ser` file reader/writer, and JSON-file-backed
+  equipment/settings/process-parameter storage.
+- **SolScan.Processing** — pure algorithms, no UI/hardware deps: the SHG reconstruction pipeline,
+  natively ported from astro4j/JSol'Ex (spectral-line-curvature detection, disk reconstruction;
+  ellipse-fitting geometry correction is still ahead).
 - **SolScan.App** — the WPF MVVM shell (Prepare/Capture/Process/Options).
 - **SolScan.Simulators** — a hardware-free camera implementation for development without real
   hardware.

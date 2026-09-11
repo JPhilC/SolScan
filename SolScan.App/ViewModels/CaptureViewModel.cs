@@ -55,7 +55,7 @@ public partial class CaptureViewModel : ObservableObject
     private readonly ICameraSettingsStore _cameraSettingsStore;
     private readonly IAppSettingsStore _appSettingsStore;
     private readonly IEquipmentLibrary _equipmentLibrary;
-    private readonly ICaptureMetadataWriter _captureMetadataWriter;
+    private readonly ICaptureMetadataStore _captureMetadataStore;
     private readonly ITelescopeMount _mount;
     private readonly MountState _mountState;
     private readonly Func<HandControlWindow> _handControlWindowFactory;
@@ -79,7 +79,7 @@ public partial class CaptureViewModel : ObservableObject
 
     /// <summary>The CameraProfile resolved (auto-added or matched by name) for
     /// <see cref="_connectedCamera"/> - see the camera auto-add block in <see cref="ToggleLiveViewAsync"/>.
-    /// Snapshotted into a recording's CaptureEquipmentMetadata by <see cref="StartRecording"/>.</summary>
+    /// Snapshotted into a recording's CaptureMetadata by <see cref="StartRecording"/>.</summary>
     private CameraProfile? _connectedCameraProfile;
 
     private ISerWriter? _activeWriter;
@@ -282,7 +282,7 @@ public partial class CaptureViewModel : ObservableObject
         ICameraSettingsStore cameraSettingsStore,
         IAppSettingsStore appSettingsStore,
         IEquipmentLibrary equipmentLibrary,
-        ICaptureMetadataWriter captureMetadataWriter,
+        ICaptureMetadataStore captureMetadataStore,
         ITelescopeMount mount,
         MountState mountState,
         Func<HandControlWindow> handControlWindowFactory,
@@ -293,7 +293,7 @@ public partial class CaptureViewModel : ObservableObject
         _cameraSettingsStore = cameraSettingsStore;
         _appSettingsStore = appSettingsStore;
         _equipmentLibrary = equipmentLibrary;
-        _captureMetadataWriter = captureMetadataWriter;
+        _captureMetadataStore = captureMetadataStore;
         _mount = mount;
         _mountState = mountState;
         _handControlWindowFactory = handControlWindowFactory;
@@ -784,7 +784,7 @@ public partial class CaptureViewModel : ObservableObject
         Directory.CreateDirectory(directory);
         RecordingFilePath = Path.Combine(directory, $"SolScan_{now:yyyyMMdd_HHmmss}.ser");
 
-        WriteCaptureEquipmentMetadata(RecordingFilePath);
+        WriteCaptureMetadata(RecordingFilePath);
 
         lock (_recordingLock)
         {
@@ -801,14 +801,17 @@ public partial class CaptureViewModel : ObservableObject
 
     /// <summary>
     /// Snapshots whichever SHG/telescope (from the Equipment Setup picked on Prepare - see
-    /// AppSettings.SelectedEquipmentSetupId) and camera (see <see cref="_connectedCameraProfile"/>)
-    /// are current right now into a CaptureEquipmentMetadata, and writes it alongside the .ser file
-    /// - so SolScan.Processing can read back what equipment produced this recording later, even if
-    /// the library entries themselves are since edited or deleted. Any of the three can end up null
-    /// (e.g. no Equipment Setup ever picked) - written anyway, rather than skipped, so a recording
-    /// still gets a metadata file either way.
+    /// AppSettings.SelectedEquipmentSetupId), camera (see <see cref="_connectedCameraProfile"/>),
+    /// camera dial-in settings (see <see cref="BuildCurrentCameraSettings"/>) and mount pointing (see
+    /// <see cref="BuildMountPointingSnapshot"/>) are current right now into a
+    /// <see cref="CaptureMetadata"/>, and writes it alongside the .ser file - so SolScan.Processing
+    /// can read back what produced this recording later, even if the library entries/live state it
+    /// was snapshotted from have since changed. Any field can end up null (e.g. no Equipment Setup
+    /// ever picked, or the mount wasn't connected) - written anyway, rather than skipped, so a
+    /// recording still gets a metadata file either way. <see cref="CaptureMetadata.StudiedRay"/> is
+    /// always null for now - see that field's own doc comment for why.
     /// </summary>
-    private void WriteCaptureEquipmentMetadata(string serFilePath)
+    private void WriteCaptureMetadata(string serFilePath)
     {
         var selectedSetupId = _appSettingsStore.Load().SelectedEquipmentSetupId;
         var setup = selectedSetupId is { } id ? _equipmentLibrary.LoadSetups().FirstOrDefault(s => s.Id == id) : null;
@@ -821,8 +824,27 @@ public partial class CaptureViewModel : ObservableObject
             telescope = _equipmentLibrary.LoadTelescopes().FirstOrDefault(t => t.Id == setup.TelescopeProfileId);
         }
 
-        _captureMetadataWriter.Write(serFilePath, new CaptureEquipmentMetadata(spectrograph, telescope, _connectedCameraProfile, DateTime.UtcNow));
+        _captureMetadataStore.Write(serFilePath, new CaptureMetadata(
+            spectrograph,
+            telescope,
+            _connectedCameraProfile,
+            DateTime.UtcNow,
+            _connectedCamera is not null ? BuildCurrentCameraSettings() : null,
+            BuildMountPointingSnapshot()));
     }
+
+    /// <summary>The mount's RA/Dec and site location right now, or null if it isn't connected - see
+    /// <see cref="MountPointingSnapshot"/>'s own doc comment for why this reads <see cref="_mountState"/>
+    /// (already poll-refreshed) rather than making a fresh Alpaca query.</summary>
+    private MountPointingSnapshot? BuildMountPointingSnapshot() =>
+        _mountState.IsConnected
+            ? new MountPointingSnapshot(
+                _mountState.RightAscensionHours,
+                _mountState.DeclinationDeg,
+                _mountState.SiteLatitudeDeg,
+                _mountState.SiteLongitudeDeg,
+                _mountState.SiteElevationM)
+            : null;
 
     [RelayCommand(CanExecute = nameof(IsRecording))]
     private void StopRecording()
@@ -1016,21 +1038,28 @@ public partial class CaptureViewModel : ObservableObject
             return;
         }
 
-        _cameraSettingsStore.Save(_connectedCamera.Name, new CameraSettings(
-            Gain,
-            ExposureMicroseconds,
-            UsbBandwidthPercent,
-            IsGainAuto,
-            IsExposureAuto,
-            IsUsbBandwidthAuto,
-            SelectedColorSpace,
-            SelectedBinning,
-            ContrastBlackPoint,
-            ContrastWhitePoint,
-            IsContrastAuto,
-            RoiWidth,
-            RoiHeight));
+        _cameraSettingsStore.Save(_connectedCamera.Name, BuildCurrentCameraSettings());
     }
+
+    /// <summary>Builds a <see cref="CameraSettings"/> snapshot from the view model's current dial-in
+    /// properties - shared by <see cref="PersistSettingsIfConnected"/> (the per-camera-*model* saved
+    /// preferences) and <see cref="WriteCaptureMetadata"/> (the per-*recording* snapshot in
+    /// <see cref="CaptureMetadata.CameraSettingsUsed"/>), so the two field lists can't drift apart.
+    /// Callers are responsible for only calling this while <see cref="_connectedCamera"/> is set.</summary>
+    private CameraSettings BuildCurrentCameraSettings() => new(
+        Gain,
+        ExposureMicroseconds,
+        UsbBandwidthPercent,
+        IsGainAuto,
+        IsExposureAuto,
+        IsUsbBandwidthAuto,
+        SelectedColorSpace,
+        SelectedBinning,
+        ContrastBlackPoint,
+        ContrastWhitePoint,
+        IsContrastAuto,
+        RoiWidth,
+        RoiHeight);
 
     private void OnFrameCaptured(object? sender, CameraFrame frame)
     {

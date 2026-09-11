@@ -22,8 +22,10 @@ ports code and ideas from (RASTA - AGPL-3.0, sunscan-backend/sunscan-app - GPL-3
 Apache-2.0). When actually porting a specific astro4j file (a close translation, not just an idea),
 add a short header comment on the new C# file pointing back to the original Java source file and
 its Apache-2.0 status, and add the new file to the `NOTICE` file's "Specifically adapted" list under
-astro4j - that list currently only reflects what's been *discussed*, not what's actually been
-ported, so it will need updating as Phases 2+ land real code.
+astro4j - that list is now split into two groups: items still only *discussed* (not yet ported -
+e.g. `DeepLineIdentifier`, `SolexVideoProcessor`) and items actually landed (`SpectralRay`/
+`SpectrumParams`/`GeometryParams`/etc. from the Processing v1 work below, each also carrying its own
+per-file header comment) - keep both groups accurate as more phases land real code.
 
 It's early-stage scaffolding as of this writing — see "Phased build plan" below for what's actually
 implemented vs. still a placeholder. Don't assume a component is wired up just because a project or
@@ -217,16 +219,18 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   libraries (implemented by `SolScan.Infrastructure`'s `JsonEquipmentLibrary`, one JSON file per
   library under `%LocalAppData%\SolScan\equipment\`, mirroring astro4j's
   `SpectroHeliographsIO`/`SetupsIO`). Backs the Options view - see below - and Prepare's Equipment
-  Setup picker. Also carries `CaptureEquipmentMetadata`/`ICaptureMetadataWriter` (`Capture`
-  namespace): a snapshot (real field values, not IDs, so it survives the source library entries
-  later being edited/deleted) of the SHG/telescope/camera used for one recording, written by
-  `CaptureViewModel` alongside every `.ser` file so a future `SolScan.Processing` phase can read back
-  what equipment produced it.
+  Setup picker. Also carries `CaptureMetadata`/`ICaptureMetadataStore` (`Capture` namespace,
+  originally named `CaptureEquipmentMetadata`/`ICaptureMetadataWriter` before it grew beyond just
+  equipment - see the Processing entries below): a snapshot (real field values, not IDs/live
+  references, so it survives the source data later being edited/deleted/changing) of the SHG/
+  telescope/camera used, the camera dial-in settings actually in effect, and the mount's pointing/
+  site location at the moment recording started, written by `CaptureViewModel` alongside every `.ser`
+  file so a future `SolScan.Processing` phase can read back what produced it.
 - **SolScan.Infrastructure** — concrete implementations: an ASCOM Alpaca telescope client
   (`AscomAlpacaClient`/`AscomTelescopeMount`, ported from RASTA - see the mount-control entry below),
   a ZWO ASI/Altair camera wrapper (native SDK P/Invoke), a `.ser` file writer (`SerWriter`) - all
-  implemented. `JsonEquipmentLibrary` (see above) and `JsonCaptureMetadataWriter` (writes
-  `CaptureEquipmentMetadata` to a `<recording>.equipment.json` sidecar) are implemented too.
+  implemented. `JsonEquipmentLibrary` (see above) and `JsonCaptureMetadataStore` (writes
+  `CaptureMetadata` to a `<recording>.equipment.json` sidecar) are implemented too.
 - **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline. Not
   yet implemented — starts as a wrapper shelling out to `jsolex-cli`, then incrementally replaced
   with native ports of `SolexVideoProcessor`'s individual workflow steps (spectral line detection,
@@ -293,8 +297,8 @@ a new `CameraProfile`, filled in from `ICameraDevice.PixelSizeMicrons`, if none 
 backfilling that field on an existing entry that's missing it, but never overwriting a non-null,
 possibly hand-corrected value) - visible afterwards in Options > Cameras like any other entry there.
 The resolved `CameraProfile` plus whatever `EquipmentSetup` is picked on Prepare (see the mount-
-control entry above) are snapshotted by `CaptureViewModel.WriteCaptureEquipmentMetadata` into a
-`CaptureEquipmentMetadata`, written via `ICaptureMetadataWriter` to a `<recording>.equipment.json`
+control entry above) are snapshotted by `CaptureViewModel.WriteCaptureMetadata` into a
+`CaptureMetadata`, written via `ICaptureMetadataStore` to a `<recording>.equipment.json`
 sidecar right when a recording starts - real field values, not IDs, so a later `SolScan.Processing`
 phase can read back what equipment produced a recording independent of whether those library entries
 still exist/are unchanged by then. Also real: per-camera-model settings persistence
@@ -378,7 +382,7 @@ AvailableEquipmentSetups`/`SelectedEquipmentSetup`, loaded from `IEquipmentLibra
 naturally re-constructed on navigating back here after an Options edit) resolving to a read-only
 SHG/telescope label pair for confirmation. The picked Setup's `Id` is persisted on
 `AppSettings.SelectedEquipmentSetupId`, read fresh by `CaptureViewModel` when a recording starts to
-build that recording's `CaptureEquipmentMetadata` (see the manual-capture entry below for the camera
+build that recording's `CaptureMetadata` (see the manual-capture entry below for the camera
 side of that same metadata). This is a single global "current rig" choice, not per-`TelescopeProfile`
 site data - `TelescopeProfile` carries no site fields at all (unlike astro4j's `Setup.java`), so
 there's no risk of it disagreeing with `AppSettings`' own site geometry.
@@ -448,13 +452,101 @@ real mount motionless at its previous position when tracking was off, since most
 silently no-op) an equatorial slew in that state, same as a person would just switch tracking on by
 hand before a goto.
 
-Placeholder: everything else behind those contracts. No processing pipeline, and within Phase 4
-itself: no exposure/fps calculator, no wide/ROI *view toggle* (see the centred ROI note above for what's
-real there instead), no camera-focus/collimator-focus aids, no live line-ID overlay yet (see the Phase
-4 sub-items below). Phase 2's mount control also doesn't yet cover Az/Alt slewing or custom tracking
-rates/FindHome/AtHome; Phase 3's ephemeris slew doesn't yet include a lead-offset, and its fine-tune
-is the simple hill-climb described above, not yet the full spiral-search-then-hill-climb design - all
-later phases per the build plan below.
+Also real: Processing's first slice - a manual SER file picker on the Process view, ported/native
+code rather than a stub (see Phase 6/7 below, which now skips the `jsolex-cli` shell-out step
+entirely and starts native porting straight away). `SolScan.Core.Capture.ISerReader`/
+`SolScan.Infrastructure.Capture.SerReader` are the read-side counterpart to the existing
+`ISerWriter`/`SerWriter` - same 178-byte-header layout, byte-for-byte inverse of what `SerWriter`
+writes, but deliberately tolerant of real-world files it didn't produce (verified against an old real
+Sunscan capture: `PixelDepth` isn't assumed to be exactly 8 or 16, and a missing per-frame timestamp
+trailer - which that Sunscan file genuinely doesn't have - falls back to `DateTime.MinValue` per
+frame rather than throwing). `ICaptureMetadataStore` (then still named `ICaptureMetadataWriter`)
+gained a `TryRead` alongside its existing `Write`, so a `.equipment.json` sidecar can be read back
+the same way it's written (never throws -
+`null` on a missing or corrupt sidecar). `ProcessViewModel.BrowseForSerFile` wires both together:
+pick a `.ser` file, see its header (dimensions/bit depth/frame count/recorded time) and its equipment
+sidecar's SHG/telescope/camera labels if one exists alongside it. No reconstruction (spectral line
+detection, geometry correction, disk reconstruction, etc.) exists yet - this is groundwork only, and
+processing is entirely manual (pick a file, inspect it) rather than kicked off automatically when a
+capture finishes, which is real future work, not yet built.
+
+Also real: enough process-parameters groundwork to make a "which images to generate" checklist mean
+something, even before a real pipeline exists to act on it - added as three new Options tabs (Process
+Parameters/Image Enhancement/Image Selection) rather than a separate modal dialog like JSolex's own
+"Process parameters" dialog, since SolScan persists one global default the same way JSolex's dialog
+does on every OK anyway, and that fits Options' existing tabbed layout directly. `SolScan.Core.Processing`
+carries the ported types: `SpectralRay` (JSolex's 12 predefined lines + "Other"), `SpectrumParams`
+(line/detection mode/pixel/Doppler/continuum shift), a deliberately trimmed `GeometryParams`
+(rotation/autocrop/fixed-width/mirror flags only - forced tilt/XY-ratio overrides and other
+Advanced-tab fields are excluded until there's real ellipse-fitting to override; `spectrumVFlip` is
+excluded because it's already captured at the equipment level, `SpectrographProfile.SpectrumVFlip`),
+`ContrastEnhancementMode` (just the method choice - Auto/CLAHE/CLAHE2/AutoStretch - not their tuning
+parameters), `RequestedImages` (the 5 Basic Images kinds only - Advanced Images/Debug/scripts/presets
+are all still out of scope), and the top-level `ProcessParams` + `IProcessParamsStore`
+(`JsonProcessParamsStore`, one JSON file under `%LocalAppData%\SolScan\`, same single-record shape as
+`IAppSettingsStore`). Because all three new Options tabs edit different slices of that one shared
+record, they don't each save through the store independently the way the equipment tabs do -
+`OptionsViewModel` loads `ProcessParams` once, seeds all three child view models from it, and
+reassembles + saves one new record when Save is clicked (see `OptionsViewModel`'s own doc comment).
+Also real: `SolScan.Core.Processing.ProcessingLocations.GetOutputFolder` - the fixed convention that
+processing output goes in a folder next to the source `.ser` file, named after it.
+
+Also real: `CaptureMetadata` (`Capture` namespace, renamed from `CaptureEquipmentMetadata` -
+`ICaptureMetadataWriter` similarly renamed `ICaptureMetadataStore` - once it grew beyond just
+equipment) now also snapshots what a recording's `.equipment.json` sidecar genuinely couldn't say
+before: `CameraSettingsUsed` (a `CameraSettings` snapshot of the actual Gain/Exposure/Binning/output
+format/ROI/contrast dial-in at the moment recording started - `ICameraSettingsStore` only remembers a
+camera *model*'s current settings, not what a specific past recording used) and `MountPointing` (a
+new `MountPointingSnapshot` - RA/Dec plus site lat/long/elevation - read from the already
+poll-refreshed `MountState` rather than a fresh Alpaca query, so it costs nothing extra at
+recording-start time; null if the mount wasn't connected then). `CaptureViewModel.BuildCurrentCameraSettings`
+is shared by both this and the existing per-camera-model settings persistence
+(`PersistSettingsIfConnected`), so the two field lists can't drift apart. Also carries a `StudiedRay`
+field (`SolScan.Core.Processing.SpectralRay`) - always null today, reserved for once Capture's live
+line-identification overlay (Phase 4) can set it automatically rather than it only ever being picked
+by hand in Options > Process Parameters. A sidecar written before any of this landed still reads back
+fine - the new fields just come back null, same as any other field a given recording never had a
+value for.
+
+Also real: a genuine (not simplified/placeholder) processing pipeline - `SolScan.Processing.Shg`'s
+first real content, and the biggest single port in the project so far. `IShgProcessor`/`ShgProcessor`
+orchestrate: `FrameAverager` (averages frames whose mean intensity beats half the brightest frame's -
+ported from `AverageImageCreator.computeAverageImage`, sequential two-pass rather than the original's
+parallel-lane/sampled-max version) → `SpectralLineCurvatureDetector` (a real 2nd-order polynomial fit
+to how the studied line's row position curves/"smiles" across the frame's width, with sigma-clipped
+robust refitting and sub-pixel centroid refinement - method-for-method port of
+`SpectrumFrameAnalyzer`'s curve-fitting pipeline; disk left/right border detection isn't ported, using
+the full frame width instead - the original algorithm's own signature already treats borders as
+optional, so this is a real supported fallback mode, not an invented shortcut) → `DiskReconstructor`
+(the actual reconstruction - 5-tap Gaussian-weighted anti-aliased row extraction per frame, direct
+port of `SolexVideoProcessor.processSingleFrame`). Verified against the user's real Sunscan capture
+(2028×110, 1533 frames): detection lands on a genuinely curved line (row ~16 at the left edge, ~52 at
+mid-frame, ~7 at the right edge - real "smile" distortion, not noise) in ~11 seconds. Produces real
+`Raw`/`Continuum` output images (`Reconstruction` is saved as the same pixel data as `Raw` - in JSolex
+it's actually a progressive *live-display* variant of the same reconstruction, not a separately
+computed image, and SolScan has no live progress view yet to make that distinction meaningful).
+`GeometryCorrected`/`GeometryCorrectedProcessed` need ellipse-fitting geometry correction - a
+deliberately separate, not-yet-built piece of work (ellipse fitting is a genuinely different algorithm
+from line-curvature detection) - requesting either is reported back as "not yet implemented" rather
+than silently skipped or faked. `SolScan.Processing` itself has zero file IO (returns in-memory
+`ushort[,]` pixel buffers, native sensor range scaled up to a 16-bit container) - the actual PNG
+encode/save (`raw.png`/`reconstruction.png`/`continuum.png`) happens in `ProcessViewModel` via WPF's
+own `PngBitmapEncoder`/`PixelFormats.Gray16`, not `System.Drawing.Common` (GDI+'s 16-bit-grayscale
+*save* path is a well-known reliability problem) - verified byte-for-byte correct via three
+independent checks (the file's own IHDR chunk, WPF's own decoder via `FormatConvertedBitmap`, and a
+completely independent GDI+ read-back) after an initial false alarm from decoder-side gamma/
+color-management reinterpretation that turned out not to reflect the actual on-disk bytes. `Process`/
+`Cancel` buttons on the Process view mirror `CaptureViewModel.FindSunAsync`'s busy-flag shape
+(`IsProcessing`, disables Browse mid-run) plus real `CancellationToken` support (worth having given a
+650MB+ file can take a while) that `FindSunAsync` itself doesn't have.
+
+Placeholder: `GeometryCorrected`/`GeometryCorrectedProcessed` (needs ellipse fitting - a separate
+future piece of work), and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
+toggle* (see the centred ROI note above for what's real there instead), no camera-focus/collimator-
+focus aids, no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
+doesn't yet cover Az/Alt slewing or custom tracking rates/FindHome/AtHome; Phase 3's ephemeris slew
+doesn't yet include a lead-offset, and its fine-tune is the simple hill-climb described above, not yet
+the full spiral-search-then-hill-climb design - all later phases per the build plan below.
 
 ## Phased build plan
 
@@ -664,21 +756,45 @@ later phases per the build plan below.
      labels from `SpectralLineCatalog`'s `interesting-lines.txt`), but identification logic modelled
      on `DeepLineIdentifier`'s confidence-gated correlation rather than `SpectrumBrowser`'s own
      ungated brute-force scan - needs its own reference solar-flux atlas and dispersion calibration
-     for the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants
+     for the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants. Once this exists, it should
+     also be able to *drive* `SpectrumParams.Ray` (Phase 6, Options > Process Parameters) rather than
+     that staying a manual-only pick - whichever labeled line sits nearest the ROI's vertical centre
+     is the one actually being studied, so the overlay could set it automatically instead of asking
+     the user to also tell SolScan what it just showed them - not yet wired, noted for when the
+     overlay itself is built
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
    the disk entering/centred on/leaving the slit from the live preview (port `focus_analyzer.py`'s
    edge-detection technique), tie into step 3's slew-ahead-and-drift logic as one "Capture" action
    requiring no further manual intervention.
-6. **Processing v1 (shell-out)** — `JSolexCliProcessor` in `SolScan.Processing`, invokes `jsolex-cli`
-   against a finished SER file as a background `Task`, parses/display results, progress surfaced in
-   the Process view.
-7. **Processing v2 (native, incremental)** — port `SolexVideoProcessor`'s workflow steps into
-   `SolScan.Processing` one at a time, behind the same `IShgProcessor`-shaped interface, validated
-   against the CLI's output as ground truth for each. Goal: processing running concurrently with
-   capture on its own thread, not waiting on a full external pass over the finished file. Includes
-   porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
-   identification, and a results panel mirroring JSolex's two-part info view (detected line +
-   geometry tilt/xyRatio).
+6. **Processing v1 (native, incremental)** — originally planned as a `jsolex-cli` shell-out step
+   first; skipped in favour of porting/translating JSolex's own Java straight into C#, since the
+   shell-out would've just been thrown away once native code landed anyway. First slice (real - see
+   "What's real vs. placeholder" above): `ISerReader`/`SerReader` (read-side counterpart to
+   `ISerWriter`), `ICaptureMetadataStore.TryRead`, and a manual SER file picker on the Process view
+   showing header + equipment info for a chosen file - no actual reconstruction yet. Second slice
+   (also real): process parameters - `SpectralRay`/`SpectrumParams`/`GeometryParams`/
+   `ContrastEnhancementMode`/`RequestedImages`/`ProcessParams` in `SolScan.Core.Processing`, persisted
+   via `IProcessParamsStore` and edited across three new Options tabs (Process Parameters/Image
+   Enhancement/Image Selection) rather than a separate dialog, plus `ProcessingLocations.GetOutputFolder`'s
+   fixed "output folder sits next to the source .ser file, named after it" convention - still no
+   reconstruction, just enough of the parameter surface to make a future one's output meaningful.
+   Third slice (real - see "What's real vs. placeholder" above for the full picture): `IShgProcessor`/
+   `ShgProcessor` in `SolScan.Processing.Shg` - real spectral-line-curvature detection
+   (`SpectralLineCurvatureDetector`, ported from `SpectrumFrameAnalyzer`) and real reconstruction
+   (`DiskReconstructor`, ported from `SolexVideoProcessor.processSingleFrame`), producing real
+   `Raw`/`Reconstruction`/`Continuum` output images from a Process button, verified against the user's
+   real Sunscan capture. `GeometryCorrected`/`GeometryCorrectedProcessed` still need ellipse-fitting
+   geometry correction - deliberately deferred as its own next slice (a genuinely separate algorithm
+   from line-curvature detection), reported as "not yet implemented" rather than faked. Also still
+   needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
+   identification, and a results panel mirroring JSolex's two-part info view (detected line + geometry
+   tilt/xyRatio) - `ShgProcessingResult.DetectedLinePolynomial` exists but isn't shown anywhere richer
+   than a one-line status-text summary yet.
+7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
+   background thread as soon as a capture finishes recording (rather than the current manual file
+   picker), so a new capture can start immediately without waiting on the previous one's processing to
+   finish. `CaptureViewModel.StopRecording` doesn't currently raise any "recording finished" event to
+   hook this from - that's part of this phase's own work, not yet built.
 8. **Polish** — output styles/palettes, dark/flat calibration, session/plan management, installer
    (WiX, mirroring RASTA's `Setup`/`Bundle` projects), `SolScan.Simulators` fleshed out for offline
    dev/tests.
