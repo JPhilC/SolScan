@@ -1,0 +1,3 @@
+[submodule "SolScan.External"]
+	path = SolScan.External
+	url = https://github.com/JPhilC/SolScan.External.git
