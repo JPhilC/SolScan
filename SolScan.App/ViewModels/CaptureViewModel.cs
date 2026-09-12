@@ -100,6 +100,9 @@ public partial class CaptureViewModel : ObservableObject
     private bool _syncingFromDevice;
     private bool _syncingExposureLink;
 
+    // Debounces PersistSettingsIfConnected - see that method's own doc comment for why.
+    private DispatcherTimer? _persistSettingsDebounceTimer;
+
     // 0 = idle, 1 = a background preview-processing Task is currently running - see
     // OnFrameCaptured/ProcessPreviewFrame. Interlocked rather than a plain bool since it's read and
     // written from whichever thread the connected device raises FrameCaptured on.
@@ -713,6 +716,8 @@ public partial class CaptureViewModel : ObservableObject
             return;
         }
 
+        FlushPendingCameraSettings();
+
         if (IsLive)
         {
             await _connectedCamera.StopStreamingAsync();
@@ -1030,7 +1035,15 @@ public partial class CaptureViewModel : ObservableObject
     /// <see cref="ICameraSettingsStore"/>) - a no-op while nothing's connected, or while a
     /// property is being set *from* the device rather than by the user (loading previously-saved
     /// settings back in on connect, or live auto-readback while an Auto flag is on - neither of
-    /// those should immediately re-save what was just read).</summary>
+    /// those should immediately re-save what was just read).
+    ///
+    /// Debounced rather than written synchronously on every call: a Slider raises its bound
+    /// property's setter on every pixel of drag movement, and dragging one quickly can fire this
+    /// dozens of times a second - writing camera-settings.json that fast was seen in practice to
+    /// throw an IOException ("The requested operation cannot be performed on a file with a
+    /// user-mapped section open") when a rapid preceding write was still being scanned/indexed by
+    /// something else (e.g. antivirus) at the moment the next one tried to open the same file.
+    /// Only the value still current 300ms after the last change actually gets saved.</summary>
     private void PersistSettingsIfConnected()
     {
         if (_connectedCamera is null || _syncingFromDevice)
@@ -1038,6 +1051,39 @@ public partial class CaptureViewModel : ObservableObject
             return;
         }
 
+        _persistSettingsDebounceTimer ??= CreatePersistSettingsDebounceTimer();
+        _persistSettingsDebounceTimer.Stop();
+        _persistSettingsDebounceTimer.Start();
+    }
+
+    private DispatcherTimer CreatePersistSettingsDebounceTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (_connectedCamera is not null)
+            {
+                _cameraSettingsStore.Save(_connectedCamera.Name, BuildCurrentCameraSettings());
+            }
+        };
+        return timer;
+    }
+
+    /// <summary>Immediately performs any save <see cref="PersistSettingsIfConnected"/>'s debounce
+    /// timer is still waiting to run, so a change made just before disconnecting isn't lost. Called
+    /// from <see cref="DisconnectCoreAsync"/> while <see cref="_connectedCamera"/> is still set.</summary>
+    private void FlushPendingCameraSettings()
+    {
+        if (_persistSettingsDebounceTimer is not { IsEnabled: true } timer || _connectedCamera is null)
+        {
+            return;
+        }
+
+        timer.Stop();
         _cameraSettingsStore.Save(_connectedCamera.Name, BuildCurrentCameraSettings());
     }
 

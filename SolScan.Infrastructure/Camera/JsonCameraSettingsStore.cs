@@ -33,8 +33,26 @@ public sealed class JsonCameraSettingsStore : ICameraSettingsStore
         var all = ReadAll();
         all[cameraName] = settings;
 
-        using var stream = File.Create(_file);
-        JsonSerializer.Serialize(stream, all, SerializerOptions);
+        // Retries on IOException: this file gets rewritten in quick succession while a user drags a
+        // capture slider (see CaptureViewModel.PersistSettingsIfConnected's debounce, which is the
+        // primary defence), and an external process briefly holding the just-written file open (e.g.
+        // antivirus scanning it) can make File.Create fail transiently with "The requested operation
+        // cannot be performed on a file with a user-mapped section open" - seen in practice. A saved
+        // camera preference is worth a short retry rather than crashing Capture over.
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var stream = File.Create(_file);
+                JsonSerializer.Serialize(stream, all, SerializerOptions);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(25 * attempt);
+            }
+        }
     }
 
     private Dictionary<string, CameraSettings> ReadAll()
