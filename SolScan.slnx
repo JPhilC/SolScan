@@ -7,6 +7,14 @@
     <Platform Solution="*|x64" Project="x64" />
     <Platform Solution="Debug|Any CPU" Project="x64" />
   </Project>
+  <Project Path="SolScan.Setup/SolScan.Setup.wixproj">
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="Debug|Any CPU" Project="x64" />
+  </Project>
+  <Project Path="SolScan.Bundle/SolScan.Bundle.wixproj">
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="Debug|Any CPU" Project="x64" />
+  </Project>
   <Project Path="SolScan.Core/SolScan.Core.csproj">
     <Platform Solution="*|x64" Project="x64" />
     <Platform Solution="Debug|Any CPU" Project="x64" />

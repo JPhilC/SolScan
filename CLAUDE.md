@@ -231,10 +231,11 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   a ZWO ASI/Altair camera wrapper (native SDK P/Invoke), a `.ser` file writer (`SerWriter`) - all
   implemented. `JsonEquipmentLibrary` (see above) and `JsonCaptureMetadataStore` (writes
   `CaptureMetadata` to a `<recording>.equipment.json` sidecar) are implemented too.
-- **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline. Not
-  yet implemented — starts as a wrapper shelling out to `jsolex-cli`, then incrementally replaced
-  with native ports of `SolexVideoProcessor`'s individual workflow steps (spectral line detection,
-  ellipse fitting/geometry correction, disk reconstruction, banding/jagging/distortion corrections).
+- **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline, ported
+  natively from `SolexVideoProcessor`'s individual workflow steps rather than shelling out to
+  `jsolex-cli` (see Phase 6 below for why that original plan was skipped). Spectral line detection,
+  disk reconstruction, and ellipse fitting/geometry correction are all implemented; banding/jagging/
+  distortion corrections and contrast enhancement are not yet.
 - **SolScan.App** — WPF MVVM shell. `App.xaml.cs` is the single composition root - one
   `ServiceCollection` built once at startup (no scopes created afterward), same pattern RASTA uses.
   `MainWindow` binds to `NavigationViewModel.CurrentViewModel`, swapped via
@@ -478,7 +479,8 @@ does on every OK anyway, and that fits Options' existing tabbed layout directly.
 carries the ported types: `SpectralRay` (JSolex's 12 predefined lines + "Other"), `SpectrumParams`
 (line/detection mode/pixel/Doppler/continuum shift), a deliberately trimmed `GeometryParams`
 (rotation/autocrop/fixed-width/mirror flags only - forced tilt/XY-ratio overrides and other
-Advanced-tab fields are excluded until there's real ellipse-fitting to override; `spectrumVFlip` is
+Advanced-tab fields are still excluded, now that ellipse fitting is real, as deliberately deferred
+Advanced-tab UI surface rather than a blocked dependency; `spectrumVFlip` is
 excluded because it's already captured at the equipment level, `SpectrographProfile.SpectrumVFlip`),
 `ContrastEnhancementMode` (just the method choice - Auto/CLAHE/CLAHE2/AutoStretch - not their tuning
 parameters), `RequestedImages` (the 5 Basic Images kinds only - Advanced Images/Debug/scripts/presets
@@ -525,10 +527,9 @@ mid-frame, ~7 at the right edge - real "smile" distortion, not noise) in ~11 sec
 `Raw`/`Continuum` output images (`Reconstruction` is saved as the same pixel data as `Raw` - in JSolex
 it's actually a progressive *live-display* variant of the same reconstruction, not a separately
 computed image, and SolScan has no live progress view yet to make that distinction meaningful).
-`GeometryCorrected`/`GeometryCorrectedProcessed` need ellipse-fitting geometry correction - a
-deliberately separate, not-yet-built piece of work (ellipse fitting is a genuinely different algorithm
-from line-curvature detection) - requesting either is reported back as "not yet implemented" rather
-than silently skipped or faked. `SolScan.Processing` itself has zero file IO (returns in-memory
+`GeometryCorrectedProcessed` still needs contrast enhancement (a deliberately separate, not-yet-built
+piece of work) - requesting it is reported back as "not yet implemented" rather than silently skipped
+or faked; `GeometryCorrected` itself is now real too, see below. `SolScan.Processing` itself has zero file IO (returns in-memory
 `ushort[,]` pixel buffers, native sensor range scaled up to a 16-bit container) - the actual PNG
 encode/save (`raw.png`/`reconstruction.png`/`continuum.png`) happens in `ProcessViewModel` via WPF's
 own `PngBitmapEncoder`/`PixelFormats.Gray16`, not `System.Drawing.Common` (GDI+'s 16-bit-grayscale
@@ -540,8 +541,113 @@ color-management reinterpretation that turned out not to reflect the actual on-d
 (`IsProcessing`, disables Browse mid-run) plus real `CancellationToken` support (worth having given a
 650MB+ file can take a while) that `FindSunAsync` itself doesn't have.
 
-Placeholder: `GeometryCorrected`/`GeometryCorrectedProcessed` (needs ellipse fitting - a separate
-future piece of work), and within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
+Also real: ellipse fitting and geometry correction, producing a genuine `GeometryCorrected` image
+(not a placeholder) - the second-biggest port in the project so far, landing all of
+`SolScan.Processing.Math.Ellipse`/`EllipseRegression`/`GeometryTransform` and
+`SolScan.Processing.Shg.DiskEdgeDetector`/`BackgroundNeutralizer`/`ImageStatistics`/
+`GeometryResampler`/`DiskCropper`/`DiskGeometryCorrector`. `EllipseRegression` is astro4j's
+Halir-Flusser direct least-squares ellipse fit, but its eigensystem solve is re-derived from scratch
+as a closed-form 3x3 characteristic-cubic solver (`SolScan.Processing.Math.Matrix3x3`) rather than
+porting astro4j's own Apache-Commons-Math-backed `DoubleMatrix` - SolScan.Processing has no such
+dependency and the fixed 3x3 case doesn't need a general eigendecomposition library. Likewise,
+`BackgroundNeutralizer`'s 6-term (`1, x, y, x², y², xy`) background-model fit is solved via a new
+`SolScan.Processing.Math.LinearSystem` (plain Gaussian elimination) in place of Apache Commons Math's
+`OLSMultipleLinearRegression`. `DiskEdgeDetector` is a method-for-method port of
+`EllipseFittingTask`'s sample-finding pipeline (blur → background neutralization → contrast stretch →
+threshold-crossing scan, sub-pixel interpolated, in both directions → outlier filtering → decimation →
+iterative refit) - one step was found to be genuinely dead code in the original (a contrast-boost
+squaring step that mutates an array nothing downstream reads, confirmed by tracing `ImageMath.convolve`
+always allocating a new output buffer) and is skipped rather than faithfully reproduced as a no-op,
+noted in `DiskEdgeDetector`'s own header comment. `DiskGeometryCorrector` applies the user's
+mirror/rotation choice first (exact pixel permutations, ported from `SolexVideoProcessor`'s own
+`maybePerformFlips`/`maybePerformRotation` - without the `rotateLeft` re-orientation step that precedes
+them in the original, since SolScan's own `DiskReconstructor` output doesn't need it - see
+`DiskGeometryCorrector`'s own header comment for why), then fits the disk edge, warps it circular via a
+separable Catmull-Rom resample (`GeometryResampler`, ported from `GeometryUtils.
+applyGeometryCorrection`), then autocrops per `AutocropMode` (`DiskCropper`, ported from `Cropper.
+cropToSquare`/`cropToRectangle` - using the ellipse re-expressed in the *corrected* image's coordinate
+system via an analytic conic transform, `GeometryResampler.ComputeCorrectedCircle`, not the
+pre-correction one - confirmed against astro4j's own `Crop`/`AbstractFunctionImpl.getEllipse`, which
+resolves the cropping ellipse from the image's own post-correction metadata rather than the value
+originally passed to `Crop`'s constructor). A failed fit (too few clear disk-edge samples) throws
+rather than silently skipping or faking the image, matching `FrameAverager`'s own "no frames exceeded
+the brightness threshold" stance on a similarly degenerate source. `ShgProcessingResult` gained
+`DetectedTiltDegrees`/`DetectedXyRatio` (surfaced in `ProcessViewModel`'s status text) - astro4j's own
+`GeometryDetectedEvent` figures; SolScan has no richer results panel yet (see Phase 6 below) but the
+values cost nothing extra to carry. Covered by `EllipseRegressionTests` (the core math, against known
+circles/ellipses/tilts) and `DiskGeometryCorrectorTests` (the full pipeline, against a synthetic
+elliptical "disk" reconstructed from a synthetic SER file, including a low-dynamic-range variant - see
+next).
+
+A real bug was found and fixed against the user's own old Sunscan capture (the geometry-corrected
+output initially came back still visibly tilted/un-circularized, not actually corrected):
+`DiskEdgeDetector`'s prepare step only stretched contrast to fill `[0, maxPixelValue]` *after* the
+background-neutralization loop, matching astro4j's own ordering - but that capture's raw reconstructed
+pixel values occupy well under 10% of the full 16-bit range (roughly 900-3500 out of 65535, a
+low-gain/low-contrast real recording), and `ImageStatistics.EstimateBackgroundLevel`'s histogram always
+bins over the *full* `[0, maxPixelValue]` range regardless of what part of it the data actually
+occupies - so with real signal crammed into the first few histogram buckets, it returned a wildly
+overestimated background level. The neutralization loop then kept subtracting a shrinking-but-still-
+substantial fraction of the *signal itself* every iteration (confirmed by tracing each of the 16
+iterations directly against the real file: the image's average value decayed geometrically, never
+converging within the loop's own 2% threshold) and wiped out large regions of the image entirely by the
+end - `DiskEdgeDetector.Prepare` now stretches *before* neutralizing too, not just after, which fixed
+it (confirmed the same way: re-traced against the same real file, no more zeroed-out regions, and the
+detected tilt went from an implausible -6.6° to a plausible 120.5° matching the visible disk edge to
+within single-digit pixels at every column checked). `DiskGeometryCorrectorTests` gained a permanent
+regression test reproducing this with a synthetic disk confined to a similarly narrow value band. Real
+remaining limitation, not yet fixed: that same real capture's brightness falls off sharply toward one
+side of the frame (a genuine property of the recording, not an artifact), so the disk-edge sample cloud
+still doesn't fully reach the low-contrast side - the fit uses only part of the true disk edge, giving
+a correctly-*oriented* but not fully-sized correction for that particular file. A single global
+sensitivity threshold (astro4j's own design, `FindSamplesUsingDynamicSensitivity`) can't adapt to
+strongly non-uniform contrast within one frame; fixing that would need a real design change (e.g.
+per-region sensitivity), not another one-line fix, so it's left as a known gap.
+
+Also real: a WiX installer and an automated GitHub release pipeline, both mirroring RASTA's own
+`Setup`/`Bundle` split (`RASTA.Setup`/`RASTA.Bundle`, `scripts\Build-Release.ps1`) with two
+SolScan-specific additions. `SolScan.Setup` (`Package.wxs`) publishes `SolScan.App`
+(framework-dependent, win-x64) and harvests the publish output wildcard-style into an MSI, with a
+Start Menu *and* Desktop shortcut both created unconditionally on install (no opt-out checkbox,
+matching RASTA) - the Desktop shortcut is there from the very first install, not added later.
+`SolScan.Bundle` (`Bundle.wxs`) chains that MSI behind two downloaded prerequisites via WiX Burn:
+the .NET 10 Desktop Runtime (x64) - same `netfx:DotNetCoreSearch`-gated pattern as RASTA - and,
+new versus RASTA, the Microsoft Visual C++ x64 Redistributable, gated on a `util:RegistrySearch`
+of the well-known VC++ 2015-2022 runtime detection key so the ~25MB download is skipped on a
+machine that already has one. The VC++ Redist is there because ZWO's `ASICamera2.dll` and
+Altair's `altaircam.dll` (see `ASICamera2.README.md`/`altaircam.README.md`) are native MSVC
+binaries and a missing runtime is a known cause of a camera silently failing to load on a clean
+install - unlike RASTA's RTL-SDR/libusb dependency, which needed no equivalent. Both native DLLs
+are already wired (`SolScan.Infrastructure.csproj`) to copy into the publish output whenever
+present, so `SolScan.Setup`'s wildcard harvest picks them up for free with no dedicated WiX
+authoring - whoever *builds* a release still needs to have dropped them in once (same one-time
+step as any dev machine wanting real hardware support), but an end user installing the built
+`SolScan-Setup.exe` never sources or copies them themselves. `Directory.Build.props` (new -
+SolScan had none before) is the single `<Version>` every project and the bundle's own
+`Bundle/@Version` read from, exactly as in RASTA. `scripts\Build-Release.ps1` is a close port of
+RASTA's own script (same version-from-props/build/copy-to-`Releases\`/`WIX0350`-retry shape), with
+one addition: a non-fatal warning if either camera DLL is missing from `SolScan.Infrastructure\`
+at build time, so a release that silently lacks real-hardware support isn't produced unnoticed.
+
+Genuinely new versus RASTA (which has no CI/release automation at all - its own releases are a
+purely local, by-hand `Build-Release.ps1` run plus a manually-maintained `ReleaseNotes.md`):
+`.github\workflows\release.yml` publishes an actual GitHub Release with `SolScan-Setup-<version>.exe`
+attached, triggered by pushing a `vX.Y.Z` tag (or manually via `workflow_dispatch`). It runs on a
+**self-hosted** runner rather than a GitHub-hosted one, registered against this repo's own dev
+machine (Settings > Actions > Runners) - deliberately, since that's the only place the camera SDK
+DLLs already live (see above); a hosted runner could build a working installer but never one with
+real-hardware support. The workflow fails fast if the pushed tag disagrees with
+`Directory.Build.props`, warns (but doesn't fail) if either camera DLL is absent on the runner,
+runs `Build-Release.ps1`, then hands the release notes and installer to
+`softprops/action-gh-release` (a community action, chosen over shelling out to the `gh` CLI since
+that isn't installed on this machine and the action needs only the workflow's own default
+`GITHUB_TOKEN`) - its release body is extracted directly from `ReleaseNotes.md`'s matching
+`## vX.Y.Z` section, so that file is the single source of truth for both the local record and the
+published release description, never typed twice. `ReleaseNotes.md` itself is seeded with a
+`v0.1.0` entry summarizing current status; add a new `## vX.Y.Z` section (and bump
+`Directory.Build.props`) before tagging each future release.
+
+Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/collimator-
 focus aids, no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
 doesn't yet cover Az/Alt slewing or custom tracking rates/FindHome/AtHome; Phase 3's ephemeris slew
@@ -783,21 +889,25 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    (`SpectralLineCurvatureDetector`, ported from `SpectrumFrameAnalyzer`) and real reconstruction
    (`DiskReconstructor`, ported from `SolexVideoProcessor.processSingleFrame`), producing real
    `Raw`/`Reconstruction`/`Continuum` output images from a Process button, verified against the user's
-   real Sunscan capture. `GeometryCorrected`/`GeometryCorrectedProcessed` still need ellipse-fitting
-   geometry correction - deliberately deferred as its own next slice (a genuinely separate algorithm
-   from line-curvature detection), reported as "not yet implemented" rather than faked. Also still
-   needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
-   identification, and a results panel mirroring JSolex's two-part info view (detected line + geometry
-   tilt/xyRatio) - `ShgProcessingResult.DetectedLinePolynomial` exists but isn't shown anywhere richer
-   than a one-line status-text summary yet.
+   real Sunscan capture. Fourth slice (also real, its own genuinely separate algorithm from
+   line-curvature detection, as planned): ellipse fitting and geometry correction
+   (`DiskEdgeDetector`/`DiskGeometryCorrector` and friends - see "Also real" above for the full list),
+   producing a real `GeometryCorrected` image. `GeometryCorrectedProcessed` still needs contrast
+   enhancement - deliberately deferred as its own next slice, reported as "not yet implemented" rather
+   than faked. Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process
+   stage's own line identification, and a results panel mirroring JSolex's two-part info view (detected
+   line + geometry tilt/xyRatio) - `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/
+   `DetectedXyRatio` all exist but aren't shown anywhere richer than a one-line status-text summary yet.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to
    finish. `CaptureViewModel.StopRecording` doesn't currently raise any "recording finished" event to
    hook this from - that's part of this phase's own work, not yet built.
-8. **Polish** — output styles/palettes, dark/flat calibration, session/plan management, installer
-   (WiX, mirroring RASTA's `Setup`/`Bundle` projects), `SolScan.Simulators` fleshed out for offline
-   dev/tests.
+8. **Polish** — output styles/palettes, dark/flat calibration, session/plan management,
+   `SolScan.Simulators` fleshed out for offline dev/tests. The installer (WiX `Setup`/`Bundle`
+   projects, chaining the .NET runtime and VC++ Redistributable) and an automated GitHub release
+   pipeline are both done already - see "Also real" above - ahead of the rest of this phase,
+   since they were requested directly rather than waiting for this phase's turn.
 
 ## Future ideas (not yet scheduled)
 

@@ -1,0 +1,26 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+
+  <PropertyGroup>
+    <!-- Without this, WixToolset.Sdk defaults OutputType to Package (MSI) regardless of Bundle.wxs's
+         root element, and silently emits a .msi instead of the setup.exe bootstrapper. -->
+    <OutputType>Bundle</OutputType>
+    <OutputName>SolScan-Setup</OutputName>
+    <Platform>x64</Platform>
+    <DefineConstants>SolScanVersion=$(Version)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Bal.wixext" Version="6.0.2" />
+    <PackageReference Include="WixToolset.Netfx.wixext" Version="6.0.2" />
+    <!-- util:RegistrySearch, used to detect an already-installed VC++ Redistributable so its
+         ~25MB ExePackage below is skipped on the (common) machine that already has one from
+         other software - see Bundle.wxs's own remarks. -->
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Gives Bundle.wxs $(var.SolScan.Setup.TargetPath) to point the chained MsiPackage at. -->
+    <ProjectReference Include="..\SolScan.Setup\SolScan.Setup.wixproj" />
+  </ItemGroup>
+
+</Project>

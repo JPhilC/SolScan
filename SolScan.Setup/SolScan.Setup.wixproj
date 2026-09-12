@@ -1,0 +1,26 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+
+  <PropertyGroup>
+    <OutputName>SolScan.Setup</OutputName>
+    <Platform>x64</Platform>
+    <!-- Framework-dependent, win-x64 publish of the WPF app; the Bundle project chains the
+         .NET 10 Desktop Runtime installer (and the VC++ Redistributable the camera SDKs need)
+         separately, so this deliberately is NOT self-contained. -->
+    <AppPublishDir>$(MSBuildThisFileDirectory)..\SolScan.App\bin\$(Configuration)\net10.0-windows\win-x64\publish\</AppPublishDir>
+    <DefineConstants>SolScanVersion=$(Version);PublishDir=$(AppPublishDir)</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Publish SolScan.App before harvesting its output below - there's nothing to package
+       otherwise. Whatever vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) are present in
+       SolScan.Infrastructure\ at publish time ride along automatically - see
+       SolScan.Infrastructure.csproj's own conditional CopyToOutputDirectory items and
+       ASICamera2.README.md/altaircam.README.md - so a release built on a machine that has them
+       ships them; the installer never asks an end user to source them separately. -->
+  <!-- PrepareForBuild (not Build/Rebuild) - WiX's own harvest/compile step runs as one of
+       Build's DependsOnTargets, which resolve before a plain BeforeTargets="Build" hook would
+       fire, so publishing needs to happen at this earlier standard hook point instead. -->
+  <Target Name="PublishSolScanApp" BeforeTargets="PrepareForBuild">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\SolScan.App\SolScan.App.csproj&quot; -c $(Configuration) -r win-x64 --self-contained false -o &quot;$(AppPublishDir)&quot;" />
+  </Target>
+
+</Project>

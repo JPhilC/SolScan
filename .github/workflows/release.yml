@@ -1,0 +1,105 @@
+name: Release
+
+# Push a vX.Y.Z tag (or run manually via workflow_dispatch, e.g. to re-publish a build) to produce
+# a GitHub Release carrying SolScan-Setup-<version>.exe, with the release notes pulled straight
+# from the matching "## vX.Y.Z" section of ReleaseNotes.md.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+# softprops/action-gh-release needs write access to create the release and upload assets using
+# the workflow's default GITHUB_TOKEN - no separate PAT to manage.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Self-hosted, not a GitHub-hosted windows-latest runner: SolScan.Setup harvests whatever
+    # vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) are present in
+    # SolScan.Infrastructure\ at build time (see SolScan.Setup.wixproj's PublishSolScanApp
+    # target). Those DLLs are gitignored - unverified redistribution terms, see
+    # SolScan.Infrastructure\ASICamera2.README.md / altaircam.README.md - and have no automatable
+    # download source (ZWO's SDK page has no stable direct-download URL; Altair's requires a site
+    # login), so the only place a build with real-hardware support can happen is a machine that
+    # already has them from local development. Register this repo's own dev machine as a
+    # self-hosted runner (repo Settings > Actions > Runners > New self-hosted runner) labeled at
+    # least "self-hosted", "Windows", "X64" for this workflow to have anywhere to run. Because
+    # it's the dev machine, the .NET SDK is already on PATH - no actions/setup-dotnet step needed
+    # - and WiX itself comes from the WixToolset.Sdk NuGet package the .wixproj files reference,
+    # not a separately installed tool.
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches Directory.Build.props version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $propsContent = Get-Content -Raw Directory.Build.props
+          if ($propsContent -notmatch '<Version>\s*([^<\s]+)\s*</Version>') {
+            throw "Could not find <Version> in Directory.Build.props"
+          }
+          $propsVersion = $Matches[1]
+          if ($tagVersion -ne $propsVersion) {
+            throw "Tag v$tagVersion does not match Directory.Build.props <Version>$propsVersion</Version> - bump the version and re-tag."
+          }
+          Write-Host "Tag v$tagVersion matches Directory.Build.props." -ForegroundColor Green
+
+      - name: Check for vendor camera SDK DLLs
+        shell: pwsh
+        run: |
+          foreach ($dll in @("ASICamera2.dll", "altaircam.dll")) {
+            $path = Join-Path "SolScan.Infrastructure" $dll
+            if (-not (Test-Path $path)) {
+              Write-Host "::warning::$dll is not present in SolScan.Infrastructure\ on this runner - the built installer will NOT include real-hardware support for that camera vendor."
+            }
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: .\scripts\Build-Release.ps1 -Force
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $propsContent = Get-Content -Raw Directory.Build.props
+          $null = $propsContent -match '<Version>\s*([^<\s]+)\s*</Version>'
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+
+      - name: Extract release notes for this version
+        id: notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $lines = Get-Content ReleaseNotes.md
+          $start = $null
+          $end = $lines.Count
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^## v$([regex]::Escape($version))\b") {
+              $start = $i
+            } elseif ($null -ne $start -and $lines[$i] -match '^## v') {
+              $end = $i
+              break
+            }
+          }
+          if ($null -eq $start) {
+            throw "No '## v$version' section found in ReleaseNotes.md - add one before tagging a release."
+          }
+          $section = $lines[($start + 1)..($end - 1)] -join "`n"
+          $notesPath = "release-notes-extract.md"
+          Set-Content -Path $notesPath -Value $section
+          "path=$notesPath" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: SolScan v${{ steps.version.outputs.version }}
+          body_path: ${{ steps.notes.outputs.path }}
+          files: Releases/SolScan-Setup-${{ steps.version.outputs.version }}.exe

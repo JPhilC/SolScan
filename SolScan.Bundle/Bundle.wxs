@@ -1,0 +1,104 @@
+<!-- Burn bootstrapper: chains the VC++ x64 Redistributable and the .NET 10 Desktop Runtime (x64)
+     installer ahead of SolScan.Setup's MSI, producing a single SolScan-Setup.exe.
+
+     VC++ Redistributable: ZWO's ASICamera2.dll and Altair's altaircam.dll (see
+     SolScan.Infrastructure/ASICamera2.README.md / altaircam.README.md) are, like most vendor
+     astro-camera SDKs, native binaries built with MSVC, and a missing runtime is a known cause
+     of a camera silently failing to load/enumerate on a clean Windows install. There's no
+     netfx-style search extension for it, so util:RegistrySearch reads the well-known detection
+     key Microsoft documents for the VC++ 2015-2022 runtime family (the same key VS setup/other
+     installers check) into the VCRedistInstalled variable, and the ExePackage's DetectCondition
+     skips the ~25MB download/install entirely when it's already 1 (most machines have one from
+     other software). The ExePackagePayload is pinned to a specific vc_redist.x64.exe build (URL/
+     hash/size all taken from a real download via the aka.ms/vs/17/release/vc_redist.x64.exe
+     redirect - that redirect's target is itself a content-addressed download.visualstudio.com
+     URL, so it stays stable even though the aka.ms link keeps moving to newer builds over time).
+
+     .NET Desktop Runtime: netfx:DotNetCoreSearch (WixToolset.Netfx.wixext) sets the
+     WindowsDesktopRuntime10 bundle variable to the highest installed Microsoft.WindowsDesktop.App
+     10.x version (or leaves it unset/lower if none is present); the ExePackage's DetectCondition
+     compares against that to decide whether to download and run the runtime installer before the
+     MSI. The ExePackagePayload below is pinned to a specific windowsdesktop-runtime build (URL/
+     hash/size all taken from Microsoft's official release-metadata feed - see
+     https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json - for
+     10.0.12 at the time this was written). Bump NetCoreVersion/DownloadUrl/Hash/Size together
+     when a newer 10.0.x patch should be chained; DetectCondition itself only requires ">= v10.0.0"
+     so it won't force a reinstall on machines that already have a newer 10.0.x than what's
+     pinned here - it only downloads when nothing satisfying 10.0.x is present at all. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:netfx="http://wixtoolset.org/schemas/v4/wxs/netfx"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?define VCRedistDownloadUrl = https://download.visualstudio.microsoft.com/download/pr/bd1c8d9d-ba95-4eee-bc6e-df1fcc876373/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe?>
+  <?define VCRedistHash = E131B93ACDE5FFC76C19EB0784183A1E94DFA9FE06111A7830EAE3AD8583895575DD4DCA66AA70EFDDB243C95735A0105EFCD3042B4B5CA445D3D8E8C39D957E?>
+  <?define VCRedistSize = 25635768?>
+
+  <?define NetCoreVersion = 10.0.12?>
+  <?define NetCoreDownloadUrl = https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.12/windowsdesktop-runtime-10.0.12-win-x64.exe?>
+  <?define NetCoreHash = 0B907E9312867172A4EB82F4B5AB3F7C2D25E27D8349546D77EEB5D5B8CBECAB9EBEBFED189B13E9669DC578D892756C548366DA539D47B3DDAC5EFCB7AE72FE?>
+  <?define NetCoreSize = 60032984?>
+
+  <Bundle Name="SolScan"
+          Manufacturer="JPhilC"
+          Version="$(var.SolScanVersion)"
+          UpgradeCode="6DBE41A2-8D1D-4803-AB9E-125CF87743F1">
+
+    <BootstrapperApplication>
+      <!-- Empty LicenseUrl suppresses the license-acceptance link/checkbox entirely rather than
+           pointing it at a real page - the plain-text LICENSE.md file isn't RTF, which is what
+           LicenseFile requires for this theme. Point LicenseUrl at a real hosted copy of
+           LICENSE.md (e.g. the GitHub repo's own raw URL) if you want it shown instead. -->
+      <bal:WixStandardBootstrapperApplication LicenseUrl="" Theme="hyperlinkLicense" />
+    </BootstrapperApplication>
+
+    <util:RegistrySearch Id="VCRedistInstalledSearch"
+                          Variable="VCRedistInstalled"
+                          Root="HKLM"
+                          Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
+                          Value="Installed"
+                          Result="value"
+                          Bitness="always64" />
+
+    <netfx:DotNetCoreSearch RuntimeType="desktop" Platform="x64" MajorVersion="10" Variable="WindowsDesktopRuntime10" />
+
+    <Chain>
+      <ExePackage Id="VCRedist_x64"
+                  DisplayName="Microsoft Visual C++ 2015-2022 Redistributable (x64)"
+                  DetectCondition="VCRedistInstalled = 1"
+                  InstallArguments="/install /quiet /norestart"
+                  UninstallArguments="/uninstall /quiet /norestart"
+                  RepairArguments="/repair /quiet /norestart"
+                  PerMachine="yes"
+                  Permanent="yes"
+                  Vital="yes"
+                  Bundle="yes"
+                  Cache="remove">
+        <ExePackagePayload Name="vc_redist.x64.exe"
+                            DownloadUrl="$(var.VCRedistDownloadUrl)"
+                            Hash="$(var.VCRedistHash)"
+                            Size="$(var.VCRedistSize)" />
+      </ExePackage>
+
+      <ExePackage Id="WindowsDesktopRuntime10"
+                  DisplayName=".NET Windows Desktop Runtime 10.0 (x64)"
+                  DetectCondition="WindowsDesktopRuntime10 &gt;= v10.0.0"
+                  InstallArguments="/install /quiet /norestart"
+                  UninstallArguments="/uninstall /quiet /norestart"
+                  RepairArguments="/repair /quiet /norestart"
+                  PerMachine="yes"
+                  Permanent="yes"
+                  Vital="yes"
+                  Bundle="yes"
+                  Cache="remove">
+        <ExePackagePayload Name="windowsdesktop-runtime-$(var.NetCoreVersion)-win-x64.exe"
+                            DownloadUrl="$(var.NetCoreDownloadUrl)"
+                            Hash="$(var.NetCoreHash)"
+                            Size="$(var.NetCoreSize)" />
+      </ExePackage>
+
+      <MsiPackage SourceFile="$(var.SolScan.Setup.TargetPath)" />
+    </Chain>
+
+  </Bundle>
+</Wix>

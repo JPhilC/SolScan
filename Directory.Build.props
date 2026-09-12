@@ -1,0 +1,12 @@
+<Project>
+
+  <!-- Central version number for all SolScan projects/assemblies, and the single source of truth
+       SolScan.Bundle.wixproj/scripts\Build-Release.ps1/.github\workflows\release.yml all read from
+       (see SolScan.Bundle.wixproj's DefineConstants=SolScanVersion=$(Version)) - so the built
+       installer, its filename, and the git tag that triggers a release can never disagree. Bump
+       this for each release. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+</Project>
