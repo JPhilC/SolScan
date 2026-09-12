@@ -26,7 +26,7 @@ public class ShgProcessorTests
                 RequestedImages = new RequestedImages([
                     GeneratedImageKind.Raw,
                     GeneratedImageKind.Continuum,
-                    GeneratedImageKind.GeometryCorrected,
+                    GeneratedImageKind.GeometryCorrectedProcessed,
                 ]),
                 SpectrumParams = defaults.SpectrumParams with { PixelShift = 0, ContinuumShift = 2 },
             };
@@ -44,7 +44,7 @@ public class ShgProcessorTests
             Assert.Equal(frameCount, continuum.Height);
 
             var skipped = Assert.Single(result.SkippedKinds);
-            Assert.Equal(GeneratedImageKind.GeometryCorrected, skipped);
+            Assert.Equal(GeneratedImageKind.GeometryCorrectedProcessed, skipped);
 
             Assert.True(result.DetectedLinePolynomial.HasValue);
             var midRow = result.DetectedLinePolynomial!.Value.Evaluate(width / 2.0);

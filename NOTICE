@@ -30,9 +30,9 @@ implemented, still on the roadmap):
   - SpectrumBrowser (dispersion-aware reference-spectrum rendering)
   - ExposureCalculator (recommended exposure/fps from instrument optics and solar ephemeris)
   - SpectroHeliograph / Setup (equipment-profile data shapes)
-  - SolexVideoProcessor's wider pipeline (geometry/ellipse-fitting correction, banding/jagging/
-    distortion corrections, Advanced Images/Debug image kinds, ImageMath scripts) - its
-    processSingleFrame reconstruction loop specifically has landed, see below
+  - SolexVideoProcessor's remaining pipeline (banding/jagging/distortion corrections, Advanced
+    Images/Debug image kinds, ImageMath scripts) - its processSingleFrame reconstruction loop and
+    geometry-correction stage (ellipse fitting, the shear/scale warp, autocrop) have landed, see below
 
 Specifically adapted, actually landed (each also carries its own per-file header comment pointing
 back to the original Java source, per CLAUDE.md):
@@ -57,6 +57,27 @@ back to the original Java source, per CLAUDE.md):
     subfolder each generated image kind belongs in - SolScan.Core.Processing.DirectoryKind /
     GeneratedImageKindExtensions.GetDirectoryKind, folder-naming convention confirmed against
     NamingStrategyAwareImageEmitter.java)
+  - Ellipse, EllipseRegression (math module - SolScan.Processing.Math.Ellipse/EllipseRegression;
+    EllipseRegression's Halir-Flusser eigensystem solve is re-derived via a closed-form 3x3 cubic
+    solver in the new SolScan.Processing.Math.Matrix3x3 rather than porting astro4j's own
+    Apache-Commons-Math-backed DoubleMatrix, since SolScan.Processing has no such dependency - see
+    Matrix3x3's own doc comment)
+  - EllipseFittingTask's sample-finding/outlier-filtering/fit-retry pipeline (SolScan.Processing.Shg.
+    DiskEdgeDetector) - one confirmed-dead step skipped, see DiskEdgeDetector's own header comment
+  - BackgroundRemoval.blindBackgroundNeutralization/removeZeroPixels, and AnalysisUtils.
+    estimateBlackPoint/estimateBackgroundLevel and util.Histogram (SolScan.Processing.Shg.
+    BackgroundNeutralizer/ImageStatistics) - the 6-term background-model fit is solved via the new
+    SolScan.Processing.Math.LinearSystem's plain Gaussian elimination in place of Apache Commons
+    Math's OLSMultipleLinearRegression
+  - GeometryTransform (SolScan.Processing.Math.GeometryTransform)
+  - GeometryUtils.applyGeometryCorrection/computeCorrectedCircle (SolScan.Processing.Shg.
+    GeometryResampler)
+  - GeometryCorrector's autocrop step, and Cropper.cropToSquare/cropToRectangle
+    (SolScan.Processing.Shg.DiskGeometryCorrector/DiskCropper)
+  - SolexVideoProcessor's maybePerformFlips/maybePerformRotation (SolScan.Processing.Shg.
+    DiskGeometryCorrector's mirror/rotation pre-step) - ported without the rotateLeft step that
+    precedes them in the original, since SolScan's own DiskReconstructor output doesn't need it (see
+    DiskGeometryCorrector's own header comment)
 
 ================================================================================
 RASTA

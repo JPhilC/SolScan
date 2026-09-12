@@ -16,12 +16,12 @@ namespace SolScan.App.ViewModels;
 
 /// <summary>
 /// Process stage: pick a finished SER capture, inspect its header/equipment metadata, and run it
-/// through <see cref="IShgProcessor"/> - real spectral-line-curvature detection and reconstruction
-/// (see <see cref="ShgProcessor"/>'s own doc comment), producing real Raw/Reconstruction/Continuum
-/// output images. Geometry correction (<see cref="GeneratedImageKind.GeometryCorrected"/>/
-/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>) needs ellipse fitting, a separate
-/// piece of work not built yet - requesting either is reported back as "not yet implemented" rather
-/// than silently skipped. Processing is manual (click Process) rather than automatic-on-capture-finish
+/// through <see cref="IShgProcessor"/> - real spectral-line-curvature detection, reconstruction, and
+/// disk-edge ellipse fitting/geometry correction (see <see cref="ShgProcessor"/>'s own doc comment),
+/// producing real Raw/Reconstruction/Continuum/GeometryCorrected output images.
+/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> still needs contrast enhancement, a
+/// separate piece of work not built yet - requesting it is reported back as "not yet implemented"
+/// rather than silently skipped. Processing is manual (click Process) rather than automatic-on-capture-finish
 /// - see CaptureViewModel for where that recording-finished moment currently has no hook to drive
 /// from; that's real future work per SolScan CLAUDE.md's Phase 7.
 ///
@@ -335,6 +335,8 @@ public partial class ProcessViewModel : ObservableObject
         GeneratedImageKind.Raw => "raw.png",
         GeneratedImageKind.Reconstruction => "reconstruction.png",
         GeneratedImageKind.Continuum => "continuum.png",
+        GeneratedImageKind.GeometryCorrected => "geometry-corrected.png",
+        GeneratedImageKind.GeometryCorrectedProcessed => "geometry-corrected-processed.png",
         _ => $"{kind.ToString().ToLowerInvariant()}.png",
     };
 
@@ -346,9 +348,14 @@ public partial class ProcessViewModel : ObservableObject
             summary += $" Line curve: y = {polynomial.A:F6}x² + {polynomial.B:F4}x + {polynomial.C:F2}.";
         }
 
+        if (result.DetectedTiltDegrees is { } tiltDegrees && result.DetectedXyRatio is { } xyRatio)
+        {
+            summary += $" Disk tilt: {tiltDegrees:F2}°, X/Y ratio: {xyRatio:F3}.";
+        }
+
         if (result.SkippedKinds.Count > 0)
         {
-            summary += $" Not yet implemented (needs geometry/ellipse fitting): {string.Join(", ", result.SkippedKinds)}.";
+            summary += $" Not yet implemented (needs contrast enhancement): {string.Join(", ", result.SkippedKinds)}.";
         }
 
         return summary;

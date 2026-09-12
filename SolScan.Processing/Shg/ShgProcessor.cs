@@ -7,13 +7,14 @@ namespace SolScan.Processing.Shg;
 
 /// <summary>
 /// <see cref="IShgProcessor"/> orchestrating <see cref="FrameAverager"/> →
-/// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/>. Deliberately returns
-/// pure in-memory <see cref="ProcessedImage"/> data (no file IO at all) rather than writing PNGs
-/// itself: SolScan has no existing image-file-writing anywhere, and WPF's own <c>PngBitmapEncoder</c>
-/// (already a hard dependency of SolScan.App, `PixelFormats.Gray16` well-supported) is more reliable
-/// for 16-bit grayscale than `System.Drawing.Common`'s well-known GDI+ save-path issues for that
-/// format - so the actual encode/save step lives in SolScan.App instead, keeping this project
-/// genuinely IO-free per its own "pure algorithms" description.
+/// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/> → (when
+/// <see cref="GeneratedImageKind.GeometryCorrected"/> is requested) <see cref="DiskGeometryCorrector"/>.
+/// Deliberately returns pure in-memory <see cref="ProcessedImage"/> data (no file IO at all) rather
+/// than writing PNGs itself: SolScan has no existing image-file-writing anywhere, and WPF's own
+/// <c>PngBitmapEncoder</c> (already a hard dependency of SolScan.App, `PixelFormats.Gray16`
+/// well-supported) is more reliable for 16-bit grayscale than `System.Drawing.Common`'s well-known
+/// GDI+ save-path issues for that format - so the actual encode/save step lives in SolScan.App
+/// instead, keeping this project genuinely IO-free per its own "pure algorithms" description.
 /// </summary>
 public sealed class ShgProcessor : IShgProcessor
 {
@@ -35,22 +36,24 @@ public sealed class ShgProcessor : IShgProcessor
     {
         var requested = processParams.RequestedImages;
         var skipped = new List<GeneratedImageKind>();
-        foreach (var kind in new[] { GeneratedImageKind.GeometryCorrected, GeneratedImageKind.GeometryCorrectedProcessed })
+        if (requested.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed))
         {
-            if (requested.IsEnabled(kind))
-            {
-                skipped.Add(kind);
-            }
+            // Still needs contrast enhancement (CLAHE/AutoStretch) - a genuinely separate piece of
+            // work from geometry correction itself, same "one algorithm per slice" reasoning that kept
+            // ellipse fitting its own deferred step before this. See SolScan CLAUDE.md.
+            skipped.Add(GeneratedImageKind.GeometryCorrectedProcessed);
         }
 
         var wantsRaw = requested.IsEnabled(GeneratedImageKind.Raw);
         var wantsReconstruction = requested.IsEnabled(GeneratedImageKind.Reconstruction);
         var wantsContinuum = requested.IsEnabled(GeneratedImageKind.Continuum);
+        var wantsGeometryCorrected = requested.IsEnabled(GeneratedImageKind.GeometryCorrected);
 
         var images = new List<ProcessedImage>();
         QuadraticPolynomial? polynomial = null;
+        DiskGeometryCorrector.Result? geometryResult = null;
 
-        if (wantsRaw || wantsReconstruction || wantsContinuum)
+        if (wantsRaw || wantsReconstruction || wantsContinuum || wantsGeometryCorrected)
         {
             using (var averagingReader = _serReaderFactory())
             {
@@ -62,25 +65,38 @@ public sealed class ShgProcessor : IShgProcessor
                 polynomial = new SpectralLineCurvatureDetector().Detect(average);
             }
 
-            if (wantsRaw || wantsReconstruction)
+            if (wantsRaw || wantsReconstruction || wantsGeometryCorrected)
             {
                 using var reader = _serReaderFactory();
                 reader.Open(serFilePath);
                 progress?.Report("Reconstructing Raw...");
                 var raw = new DiskReconstructor().Reconstruct(reader, polynomial.Value, processParams.SpectrumParams.PixelShift, progress, cancellationToken);
-                var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, reader.Header.PixelDepth);
+                var nativeBitDepth = reader.Header.PixelDepth;
 
-                if (wantsRaw)
+                if (wantsRaw || wantsReconstruction)
                 {
-                    images.Add(rawImage);
+                    var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, nativeBitDepth);
+                    if (wantsRaw)
+                    {
+                        images.Add(rawImage);
+                    }
+
+                    if (wantsReconstruction)
+                    {
+                        // JSolex's "Reconstruction" is a progressive *live-display* variant of the same
+                        // reconstruction, not a separately computed image - SolScan has no live progress
+                        // view yet to make that distinction meaningful, so it's saved as the same data.
+                        images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
+                    }
                 }
 
-                if (wantsReconstruction)
+                if (wantsGeometryCorrected)
                 {
-                    // JSolex's "Reconstruction" is a progressive *live-display* variant of the same
-                    // reconstruction, not a separately computed image - SolScan has no live progress
-                    // view yet to make that distinction meaningful, so it's saved as the same data.
-                    images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report("Fitting disk ellipse and correcting geometry...");
+                    var maxPixelValue = (1 << nativeBitDepth) - 1;
+                    geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
+                    images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
                 }
             }
 
@@ -95,7 +111,7 @@ public sealed class ShgProcessor : IShgProcessor
         }
 
         progress?.Report("Done.");
-        return new ShgProcessingResult(images, skipped, polynomial);
+        return new ShgProcessingResult(images, skipped, polynomial, geometryResult?.TiltDegrees, geometryResult?.XyRatio);
     }
 
     /// <summary>Scales native sensor range (<c>(1 &lt;&lt; nativeBitDepth) - 1</c>, matching
