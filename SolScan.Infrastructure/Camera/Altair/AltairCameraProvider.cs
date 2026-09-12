@@ -5,7 +5,7 @@ namespace SolScan.Infrastructure.Camera.Altair;
 
 /// <summary>ICameraProvider for Altair cameras. Discover() must survive altaircam.dll not being
 /// present at all (no Altair camera ever attached to this machine) - see
-/// SolScan.Infrastructure/altaircam.README.md.</summary>
+/// SolScan.External/x64/Altair/README.md.</summary>
 public sealed class AltairCameraProvider : ICameraProvider
 {
     public string VendorName => "Altair";

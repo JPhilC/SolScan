@@ -91,7 +91,7 @@ public partial class App : Application
         // One ICameraProvider per vendor (plus the hardware-free simulator) - aggregated by
         // ICameraDiscoveryService for the Capture view's camera picker. Each provider degrades to
         // an empty Discover() if its native SDK DLL isn't present - see
-        // SolScan.Infrastructure/ASICamera2.README.md / altaircam.README.md.
+        // SolScan.External/x64/ASI/README.md / SolScan.External/x64/Altair/README.md.
         services.AddSingleton<ICameraProvider, AsiCameraProvider>();
         services.AddSingleton<ICameraProvider, AltairCameraProvider>();
         services.AddSingleton<ICameraProvider, SimulatedCameraProvider>();

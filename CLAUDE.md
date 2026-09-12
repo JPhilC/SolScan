@@ -286,8 +286,8 @@ the mount-control entry below) and Capture's camera auto-add (see the manual-cap
 both real too. Also real: camera discovery/live view/manual SER recording (the first slice
 of Phase 4, "Manual capture" below) - `ICameraProvider`/`ICameraDiscoveryService` in Core;
 `SolScan.Infrastructure.Camera.Asi`/`.Camera.Altair` (hand-written P/Invoke against each vendor's
-native SDK - no vendor DLLs committed, see `SolScan.Infrastructure/ASICamera2.README.md`/
-`altaircam.README.md`) and
+native SDK - the DLLs themselves live in the `SolScan.External` git submodule, not this repo, see
+"Vendor camera SDK binaries: the SolScan.External submodule" below) and
 `SolScan.Infrastructure.Capture.SerWriter`; `SolScan.Simulators`' `SimulatedCameraDevice`/
 `SimulatedCameraProvider` (a hardware-free camera so the above works with zero hardware attached);
 and `CaptureViewModel`/`CaptureView.xaml` wiring it all into a SharpCap-style live view (camera
@@ -605,7 +605,7 @@ strongly non-uniform contrast within one frame; fixing that would need a real de
 per-region sensitivity), not another one-line fix, so it's left as a known gap.
 
 Also real: a WiX installer and an automated GitHub release pipeline, both mirroring RASTA's own
-`Setup`/`Bundle` split (`RASTA.Setup`/`RASTA.Bundle`, `scripts\Build-Release.ps1`) with two
+`Setup`/`Bundle` split (`RASTA.Setup`/`RASTA.Bundle`, `scripts\Build-Release.ps1`) with several
 SolScan-specific additions. `SolScan.Setup` (`Package.wxs`) publishes `SolScan.App`
 (framework-dependent, win-x64) and harvests the publish output wildcard-style into an MSI, with a
 Start Menu *and* Desktop shortcut both created unconditionally on install (no opt-out checkbox,
@@ -615,37 +615,71 @@ the .NET 10 Desktop Runtime (x64) - same `netfx:DotNetCoreSearch`-gated pattern 
 new versus RASTA, the Microsoft Visual C++ x64 Redistributable, gated on a `util:RegistrySearch`
 of the well-known VC++ 2015-2022 runtime detection key so the ~25MB download is skipped on a
 machine that already has one. The VC++ Redist is there because ZWO's `ASICamera2.dll` and
-Altair's `altaircam.dll` (see `ASICamera2.README.md`/`altaircam.README.md`) are native MSVC
-binaries and a missing runtime is a known cause of a camera silently failing to load on a clean
-install - unlike RASTA's RTL-SDR/libusb dependency, which needed no equivalent. Both native DLLs
-are already wired (`SolScan.Infrastructure.csproj`) to copy into the publish output whenever
-present, so `SolScan.Setup`'s wildcard harvest picks them up for free with no dedicated WiX
-authoring - whoever *builds* a release still needs to have dropped them in once (same one-time
-step as any dev machine wanting real hardware support), but an end user installing the built
-`SolScan-Setup.exe` never sources or copies them themselves. `Directory.Build.props` (new -
-SolScan had none before) is the single `<Version>` every project and the bundle's own
-`Bundle/@Version` read from, exactly as in RASTA. `scripts\Build-Release.ps1` is a close port of
-RASTA's own script (same version-from-props/build/copy-to-`Releases\`/`WIX0350`-retry shape), with
-one addition: a non-fatal warning if either camera DLL is missing from `SolScan.Infrastructure\`
-at build time, so a release that silently lacks real-hardware support isn't produced unnoticed.
+Altair's `altaircam.dll` are native MSVC binaries and a missing runtime is a known cause of a
+camera silently failing to load on a clean install - unlike RASTA's RTL-SDR/libusb dependency,
+which needed no equivalent. It's chained as a real installer rather than xcopy-deployed as loose
+DLLs (see "Vendor camera SDK binaries" below for why that's the one piece of N.I.N.A.'s own
+approach this project didn't copy). `Directory.Build.props` (new - SolScan had none before) is the
+single `<Version>` every project and the bundle's own `Bundle/@Version` read from, exactly as in
+RASTA. `scripts\Build-Release.ps1` is a close port of RASTA's own script (same
+version-from-props/build/copy-to-`Releases\`/`WIX0350`-retry shape), with one addition: a
+non-fatal warning if either camera DLL is missing from the `SolScan.External` submodule at build
+time, so a release that silently lacks real-hardware support isn't produced unnoticed.
 
 Genuinely new versus RASTA (which has no CI/release automation at all - its own releases are a
 purely local, by-hand `Build-Release.ps1` run plus a manually-maintained `ReleaseNotes.md`):
 `.github\workflows\release.yml` publishes an actual GitHub Release with `SolScan-Setup-<version>.exe`
 attached, triggered by pushing a `vX.Y.Z` tag (or manually via `workflow_dispatch`). It runs on a
-**self-hosted** runner rather than a GitHub-hosted one, registered against this repo's own dev
-machine (Settings > Actions > Runners) - deliberately, since that's the only place the camera SDK
-DLLs already live (see above); a hosted runner could build a working installer but never one with
-real-hardware support. The workflow fails fast if the pushed tag disagrees with
-`Directory.Build.props`, warns (but doesn't fail) if either camera DLL is absent on the runner,
-runs `Build-Release.ps1`, then hands the release notes and installer to
-`softprops/action-gh-release` (a community action, chosen over shelling out to the `gh` CLI since
-that isn't installed on this machine and the action needs only the workflow's own default
-`GITHUB_TOKEN`) - its release body is extracted directly from `ReleaseNotes.md`'s matching
-`## vX.Y.Z` section, so that file is the single source of truth for both the local record and the
-published release description, never typed twice. `ReleaseNotes.md` itself is seeded with a
-`v0.1.0` entry summarizing current status; add a new `## vX.Y.Z` section (and bump
-`Directory.Build.props`) before tagging each future release.
+plain GitHub-hosted `windows-latest` runner - no self-hosted machine to register or keep online,
+now that the camera SDK DLLs live in their own `SolScan.External` submodule rather than needing to
+already be sitting on whichever machine builds the release (an earlier version of this workflow
+*did* require a self-hosted runner for exactly that reason, before the submodule existed - see
+"Vendor camera SDK binaries" below for the full story). Checking out a private submodule still
+needs its own credential though, since the default `GITHUB_TOKEN` only covers this repo - the
+checkout step's `token` is a fine-grained PAT (`SOLSCAN_EXTERNAL_PAT` repo secret, scoped to just
+`Contents: Read` on `JPhilC/SolScan.External`) rather than the default token, and `submodules:
+recursive`/`lfs: true` pull the submodule and its real LFS-tracked binary content in the same
+step. The workflow fails fast if the pushed tag disagrees with `Directory.Build.props`, warns (but
+doesn't fail) if either camera DLL is absent from the checked-out submodule, runs
+`Build-Release.ps1`, then hands the release notes and installer to `softprops/action-gh-release`
+(a community action, chosen over shelling out to the `gh` CLI since that isn't installed on this
+machine and the action needs only the workflow's own default `GITHUB_TOKEN`) - its release body is
+extracted directly from `ReleaseNotes.md`'s matching `## vX.Y.Z` section, so that file is the
+single source of truth for both the local record and the published release description, never
+typed twice. `ReleaseNotes.md` itself is seeded with a `v0.1.0` entry summarizing current status;
+add a new `## vX.Y.Z` section (and bump `Directory.Build.props`) before tagging each future
+release.
+
+**Vendor camera SDK binaries: the `SolScan.External` submodule.** ZWO's `ASICamera2.dll` and
+Altair's `altaircam.dll` originally lived flat in `SolScan.Infrastructure\` itself, gitignored -
+so an end user's *installer* never needed them sourced separately (per above), but anyone
+*building* SolScan (including a release build) had to have manually downloaded and dropped each
+one in first, and no CI runner could ever produce a real-hardware-capable build at all. Modelled
+directly on how N.I.N.A. solves the identical problem for a much longer camera-vendor list: its
+own public [`nina.external`](https://github.com/isbeorn/nina.external) submodule holds every
+vendor SDK binary it supports, Git-LFS-tracked, referenced unconditionally from `NINA.csproj`'s
+plain `<Content Include="External\x64\...\XXX.dll">` items - no gitignore, no `Condition="Exists"`
+guard, because `git clone --recurse-submodules` guarantees the file is always there. SolScan now
+has its own equivalent, `SolScan.External` (a separate repo, added as a git submodule at
+`SolScan.External\x64\ASI\`/`SolScan.External\x64\Altair\`, LFS-tracked via its own
+`.gitattributes`) - but **private**, unlike NINA's public one: each vendor's actual redistribution
+terms haven't been individually confirmed (the same caveat the old flat-file READMEs already
+carried), so the more conservative default was chosen until that's actually checked, not because
+the mechanism itself needs to differ. `SolScan.Infrastructure.csproj`'s two `<None Include>` items
+now point at `..\SolScan.External\x64\<Vendor>\<dll>` with `Link` flattening them onto the output
+folder (P/Invoke's DllImport search doesn't look in subfolders) - still `Condition="Exists(...)"`
+guarded, unlike NINA's unconditional version, because the submodule as committed is currently
+*empty* (each vendor folder holds only its own README saying where to source the real DLL - see
+`SolScan.External\README.md`) - once it's actually populated the condition is simply always true,
+nothing else needs to change. The one deliberate divergence from N.I.N.A.'s own approach: NINA
+also ships the VC++ Redistributable's own runtime DLLs as loose xcopy-deployed files inside that
+same submodule, rather than chaining an installer - this project looked into doing the same
+(the redistributable's own `vc_redist.x64.exe` supports a documented `/layout` extraction switch
+for exactly this purpose) but couldn't reliably complete that extraction in this environment (no
+interactive Windows install session, no `7z` available to unpack the bootstrapper directly), so
+`SolScan.Bundle` still chains the real `vc_redist.x64.exe` installer instead (see the Bundle.wxs
+entry above) - worth revisiting by hand later if xcopy deployment of those specific runtime files
+turns out to matter.
 
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/collimator-

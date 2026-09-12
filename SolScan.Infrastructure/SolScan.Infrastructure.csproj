@@ -12,15 +12,19 @@
     <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
   </ItemGroup>
 
-  <!-- Native camera SDK binaries (ZWO's ASICamera2.dll, Altair's altaircam.dll, both x64) are not
-       committed - see ASICamera2.README.md / altaircam.README.md. Sit flat in this project's own
-       folder (not nested under Camera\...) so CopyToOutputDirectory's default behaviour already
-       places them next to the built assembly with no Link/flattening needed - P/Invoke's default
-       DllImport search only looks in the app's own base directory, not subfolders under it.
-       Condition guards let the build succeed with either file absent (see the READMEs). -->
+  <!-- Native camera SDK binaries (ZWO's ASICamera2.dll, Altair's altaircam.dll, both x64) live in
+       the SolScan.External git submodule (..\SolScan.External\x64\<Vendor>\, a private repo of its
+       own - see SolScan.External\README.md for why it's separate, modelled on how N.I.N.A. does
+       the same thing via its own public nina.external submodule) rather than committed here
+       directly. Link flattens each one onto the built assembly's own output folder - P/Invoke's
+       default DllImport search only looks in the app's own base directory, not subfolders under
+       it, and the submodule path itself isn't that. Condition guards let the build succeed even
+       before the submodule has actually been populated with real vendor binaries (it starts out
+       holding just each vendor folder's own README) - once populated, the condition is always
+       true, so nothing further needs to change here. -->
   <ItemGroup>
-    <None Include="ASICamera2.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('ASICamera2.dll')" />
-    <None Include="altaircam.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('altaircam.dll')" />
+    <None Include="..\SolScan.External\x64\ASI\ASICamera2.dll" Link="ASICamera2.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\SolScan.External\x64\ASI\ASICamera2.dll')" />
+    <None Include="..\SolScan.External\x64\Altair\altaircam.dll" Link="altaircam.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\SolScan.External\x64\Altair\altaircam.dll')" />
   </ItemGroup>
 
 </Project>

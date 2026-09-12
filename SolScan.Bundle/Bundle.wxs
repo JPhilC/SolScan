@@ -1,11 +1,17 @@
 <!-- Burn bootstrapper: chains the VC++ x64 Redistributable and the .NET 10 Desktop Runtime (x64)
      installer ahead of SolScan.Setup's MSI, producing a single SolScan-Setup.exe.
 
-     VC++ Redistributable: ZWO's ASICamera2.dll and Altair's altaircam.dll (see
-     SolScan.Infrastructure/ASICamera2.README.md / altaircam.README.md) are, like most vendor
-     astro-camera SDKs, native binaries built with MSVC, and a missing runtime is a known cause
-     of a camera silently failing to load/enumerate on a clean Windows install. There's no
-     netfx-style search extension for it, so util:RegistrySearch reads the well-known detection
+     VC++ Redistributable: ZWO's ASICamera2.dll and Altair's altaircam.dll (see the
+     SolScan.External git submodule's own README.md) are, like most vendor astro-camera SDKs,
+     native binaries built with MSVC, and a missing runtime is a known cause of a camera silently
+     failing to load/enumerate on a clean Windows install. Chained as a real installer here
+     (rather than xcopy-deploying the runtime's own DLLs alongside the app, the way
+     SolScan.External's camera SDK binaries themselves are handled) because there's no similarly
+     easy, safe way to source genuine copies of those specific runtime files to commit -
+     N.I.N.A.'s own equivalent submodule does ship them this way, but its provenance for those
+     particular files isn't something this project can vouch for just by observing the result.
+     There's no netfx-style search extension for the VC++ Redistributable, so util:RegistrySearch
+     reads the well-known detection
      key Microsoft documents for the VC++ 2015-2022 runtime family (the same key VS setup/other
      installers check) into the VCRedistInstalled variable, and the ExePackage's DetectCondition
      skips the ~25MB download/install entirely when it's already 1 (most machines have one from

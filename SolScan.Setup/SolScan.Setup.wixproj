@@ -12,10 +12,11 @@
 
   <!-- Publish SolScan.App before harvesting its output below - there's nothing to package
        otherwise. Whatever vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) are present in
-       SolScan.Infrastructure\ at publish time ride along automatically - see
-       SolScan.Infrastructure.csproj's own conditional CopyToOutputDirectory items and
-       ASICamera2.README.md/altaircam.README.md - so a release built on a machine that has them
-       ships them; the installer never asks an end user to source them separately. -->
+       the SolScan.External git submodule (..\SolScan.External\x64\<Vendor>\ - see that
+       submodule's own README.md) at publish time ride along automatically - see
+       SolScan.Infrastructure.csproj's own conditional CopyToOutputDirectory items - so a release
+       built on a machine with that submodule populated ships them; the installer never asks an
+       end user to source them separately. -->
   <!-- PrepareForBuild (not Build/Rebuild) - WiX's own harvest/compile step runs as one of
        Build's DependsOnTargets, which resolve before a plain BeforeTargets="Build" hook would
        fire, so publishing needs to happen at this earlier standard hook point instead. -->

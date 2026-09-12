@@ -39,5 +39,5 @@ what's real vs. placeholder.
 - No automated acquisition pipeline yet — slewing and recording are both manually triggered.
 - Processing is kicked off by hand from a saved `.ser` file rather than automatically once a
   recording finishes.
-- Real camera hardware needs its vendor SDK DLL present at build time to be included in the
-  installer — see `SolScan.Infrastructure\ASICamera2.README.md` / `altaircam.README.md`.
+- Real camera hardware needs its vendor SDK DLL present in the `SolScan.External` git submodule
+  at build time to be included in the installer — see that submodule's own `README.md`.

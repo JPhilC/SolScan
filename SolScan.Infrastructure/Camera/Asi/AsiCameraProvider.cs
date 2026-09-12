@@ -5,7 +5,7 @@ namespace SolScan.Infrastructure.Camera.Asi;
 
 /// <summary>ICameraProvider for ZWO ASI cameras. Discover() must survive ASICamera2.dll not being
 /// present at all (no ZWO camera ever attached to this machine) - see
-/// SolScan.Infrastructure/ASICamera2.README.md.</summary>
+/// SolScan.External/x64/ASI/README.md.</summary>
 public sealed class AsiCameraProvider : ICameraProvider
 {
     public string VendorName => "ZWO ASI";

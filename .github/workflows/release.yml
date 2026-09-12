@@ -10,30 +10,32 @@ on:
   workflow_dispatch: {}
 
 # softprops/action-gh-release needs write access to create the release and upload assets using
-# the workflow's default GITHUB_TOKEN - no separate PAT to manage.
+# the workflow's default GITHUB_TOKEN - no separate PAT needed for that part.
 permissions:
   contents: write
 
 jobs:
   release:
-    # Self-hosted, not a GitHub-hosted windows-latest runner: SolScan.Setup harvests whatever
-    # vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) are present in
-    # SolScan.Infrastructure\ at build time (see SolScan.Setup.wixproj's PublishSolScanApp
-    # target). Those DLLs are gitignored - unverified redistribution terms, see
-    # SolScan.Infrastructure\ASICamera2.README.md / altaircam.README.md - and have no automatable
-    # download source (ZWO's SDK page has no stable direct-download URL; Altair's requires a site
-    # login), so the only place a build with real-hardware support can happen is a machine that
-    # already has them from local development. Register this repo's own dev machine as a
-    # self-hosted runner (repo Settings > Actions > Runners > New self-hosted runner) labeled at
-    # least "self-hosted", "Windows", "X64" for this workflow to have anywhere to run. Because
-    # it's the dev machine, the .NET SDK is already on PATH - no actions/setup-dotnet step needed
-    # - and WiX itself comes from the WixToolset.Sdk NuGet package the .wixproj files reference,
-    # not a separately installed tool.
-    runs-on: [self-hosted, Windows, X64]
+    # A regular GitHub-hosted runner - no self-hosted machine to register or keep online. This
+    # only works because the vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) live in the
+    # SolScan.External git submodule rather than needing to already be sitting on whichever
+    # machine builds the release (see SolScan.External's own README.md, and CLAUDE.md's
+    # comparison against N.I.N.A.'s own nina.external submodule, for why). Checking that private
+    # submodule out here still needs its own credential, though - the default GITHUB_TOKEN only
+    # has access to this repo, not SolScan.External - so this requires a one-time setup step:
+    # a fine-grained Personal Access Token with "Contents: Read" on JPhilC/SolScan.External only,
+    # saved as this repo's SOLSCAN_EXTERNAL_PAT secret (Settings > Secrets and variables >
+    # Actions). Until that secret exists, submodule checkout below will fail with a 404/auth
+    # error rather than silently producing a build with no camera support.
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout (with SolScan.External submodule)
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.SOLSCAN_EXTERNAL_PAT }}
+          submodules: recursive
+          lfs: true
 
       - name: Verify tag matches Directory.Build.props version
         if: startsWith(github.ref, 'refs/tags/')
@@ -53,10 +55,13 @@ jobs:
       - name: Check for vendor camera SDK DLLs
         shell: pwsh
         run: |
-          foreach ($dll in @("ASICamera2.dll", "altaircam.dll")) {
-            $path = Join-Path "SolScan.Infrastructure" $dll
-            if (-not (Test-Path $path)) {
-              Write-Host "::warning::$dll is not present in SolScan.Infrastructure\ on this runner - the built installer will NOT include real-hardware support for that camera vendor."
+          $vendorDlls = @{
+            "ASICamera2.dll" = "SolScan.External\x64\ASI\ASICamera2.dll"
+            "altaircam.dll"  = "SolScan.External\x64\Altair\altaircam.dll"
+          }
+          foreach ($dll in $vendorDlls.Keys) {
+            if (-not (Test-Path $vendorDlls[$dll])) {
+              Write-Host "::warning::$dll is not present in $($vendorDlls[$dll]) - the built installer will NOT include real-hardware support for that camera vendor. See SolScan.External\README.md."
             }
           }
 

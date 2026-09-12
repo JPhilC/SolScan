@@ -4,7 +4,7 @@ namespace SolScan.Infrastructure.Camera.Altair;
 
 /// <summary>
 /// Hand-written P/Invoke subset against Altair's native SDK (altaircam.dll, x64 - not shipped
-/// here, see SolScan.Infrastructure/altaircam.README.md). Altair cameras share the same
+/// here, see SolScan.External/x64/Altair/README.md). Altair cameras share the same
 /// "ToupTek-alike" native ABI as
 /// ToupTek/OGMA/Levenhuk (confirmed by reading N.I.N.A.'s own Altair adapter - see CLAUDE.md's
 /// N.I.N.A. entry) - deliberately hand-written rather than copying that vendor SDK file out of

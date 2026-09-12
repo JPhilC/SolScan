@@ -13,13 +13,14 @@
     - Releases\ is already covered by .gitignore's [Rr]eleases/ rule, so
       built installers never get committed.
 
-    Whichever vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll - see
-    SolScan.Infrastructure\ASICamera2.README.md/altaircam.README.md) are present in
-    SolScan.Infrastructure\ at build time ride along into the installer automatically
-    (SolScan.Setup harvests the publish output, which already copies them there when
-    present) - neither file is required for the build to succeed, but a release meant
-    for real hardware should have both dropped in first. This script warns, but does
-    not fail, when either is missing.
+    Whichever vendor camera SDK DLLs (ASICamera2.dll/altaircam.dll) are present in the
+    SolScan.External git submodule (SolScan.External\x64\ASI\ / SolScan.External\x64\Altair\ -
+    see that submodule's own README.md for where to source each one) ride along into the
+    installer automatically (SolScan.Setup harvests the publish output, which already copies
+    them there when present) - neither file is required for the build to succeed, but a release
+    meant for real hardware should have both present first (`git submodule update --init` after
+    cloning, with Git LFS installed, then add the real files - see SolScan.External\README.md).
+    This script warns, but does not fail, when either is missing.
 
 .PARAMETER Configuration
     Build configuration to use. Defaults to Release.
@@ -76,10 +77,15 @@ Write-Host "Release version (from Directory.Build.props): $version" -ForegroundC
 
 # Non-fatal heads-up only - see this script's own doc comment. A simulator-only build (no real
 # camera hardware exercised) is a legitimate reason to ship without either file.
-$infraDir = Join-Path $repoRoot "SolScan.Infrastructure"
-foreach ($dll in @("ASICamera2.dll", "altaircam.dll")) {
-    if (-not (Test-Path (Join-Path $infraDir $dll))) {
-        Write-Warning "$dll is not present in SolScan.Infrastructure\ - this release build will NOT include real-hardware support for that camera vendor. See SolScan.Infrastructure\$($dll -replace '\.dll$', '.README.md')."
+$externalDir = Join-Path $repoRoot "SolScan.External"
+$vendorDlls = @{
+    "ASICamera2.dll" = "x64\ASI\ASICamera2.dll"
+    "altaircam.dll"  = "x64\Altair\altaircam.dll"
+}
+foreach ($dll in $vendorDlls.Keys) {
+    $dllPath = Join-Path $externalDir $vendorDlls[$dll]
+    if (-not (Test-Path $dllPath)) {
+        Write-Warning "$dll is not present in SolScan.External\$($vendorDlls[$dll] | Split-Path -Parent)\ - this release build will NOT include real-hardware support for that camera vendor. See SolScan.External\README.md (git submodule update --init, with Git LFS installed, then add the real file)."
     }
 }
 

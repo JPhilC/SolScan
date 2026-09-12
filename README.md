@@ -46,16 +46,19 @@ still ahead, see `CLAUDE.md`.
 ## Building
 
 ```
+git submodule update --init
 dotnet build SolScan.slnx
 dotnet run --project SolScan.App/SolScan.App.csproj
 ```
 
 Platform is x64 (matches the ZWO ASI camera SDK's native binaries). Windows only (WPF).
 
-Real camera hardware needs its vendor SDK DLL dropped in manually - see
-`SolScan.Infrastructure/ASICamera2.README.md`/`altaircam.README.md`. Mount control needs an ASCOM
-Alpaca-compatible endpoint reachable (typically the ASCOM Remote Server in front of any ASCOM driver,
-real or simulated) - point Options > General's Alpaca settings at it.
+Real camera hardware needs its vendor SDK DLL present in the `SolScan.External` git submodule
+(private - ask for access) - see that submodule's own `README.md` for where to source each one.
+Both are optional: the app runs fine with either or both absent (the simulator always works).
+Mount control needs an ASCOM Alpaca-compatible endpoint reachable (typically the ASCOM Remote
+Server in front of any ASCOM driver, real or simulated) - point Options > General's Alpaca
+settings at it.
 
 ## Architecture
 

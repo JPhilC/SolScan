@@ -4,7 +4,7 @@ namespace SolScan.Infrastructure.Camera.Asi;
 
 /// <summary>
 /// Hand-written P/Invoke subset against ZWO's public ASICamera2 SDK ABI (ASICamera2.dll, x64 -
-/// not shipped here, see SolScan.Infrastructure/ASICamera2.README.md) - deliberately not a port of
+/// not shipped here, see SolScan.External/x64/ASI/README.md) - deliberately not a port of
 /// any third-party source: unlike a ToupTek-alike vendor, ZWO ships only a C header
 /// (ASICamera2.h), no ready C# wrapper, so there's nothing to adapt from - this is written
 /// directly against that header's public, documented function/struct layout. Only the
