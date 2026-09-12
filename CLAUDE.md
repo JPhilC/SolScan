@@ -666,12 +666,20 @@ has its own equivalent, `SolScan.External` (a separate repo, added as a git subm
 terms haven't been individually confirmed (the same caveat the old flat-file READMEs already
 carried), so the more conservative default was chosen until that's actually checked, not because
 the mechanism itself needs to differ. `SolScan.Infrastructure.csproj`'s two `<None Include>` items
-now point at `..\SolScan.External\x64\<Vendor>\<dll>` with `Link` flattening them onto the output
-folder (P/Invoke's DllImport search doesn't look in subfolders) - still `Condition="Exists(...)"`
-guarded, unlike NINA's unconditional version, because the submodule as committed is currently
-*empty* (each vendor folder holds only its own README saying where to source the real DLL - see
-`SolScan.External\README.md`) - once it's actually populated the condition is simply always true,
-nothing else needs to change. The one deliberate divergence from N.I.N.A.'s own approach: NINA
+point at `..\SolScan.External\x64\<Vendor>\<dll>` with `Link` flattening them onto the output
+folder (P/Invoke's DllImport search doesn't look in subfolders), still `Condition="Exists(...)"`
+guarded, unlike NINA's unconditional version, in case the submodule is ever checked out without
+its LFS content pulled (`git submodule update --init` without Git LFS installed leaves pointer
+files, not real DLLs) - a build should degrade to no-camera-support in that case, not fail outright.
+The submodule itself now holds the real `ASICamera2.dll` (2,852,352 bytes, its own version
+resource reporting `ProductName: ASICamera SDK`) and `altaircam.dll` (13,675,520 bytes), committed
+in `da02119 Add the real ASICamera2.dll and altaircam.dll binaries` - not just the placeholder
+per-vendor READMEs the submodule started out with. Confirmed actually reaching a real release, not
+just present on disk: querying `SolScan.Setup.msi`'s own `File` table directly (via the Windows
+Installer COM API) lists both DLLs at their exact real sizes, and the published `v0.1.0` GitHub
+release asset matches a from-scratch local rebuild byte-for-byte in size (~7.67MB either way) -
+the installer's small size versus ~16.5MB of raw DLL content is WiX's own cabinet compression, not
+evidence the files are missing. The one deliberate divergence from N.I.N.A.'s own approach: NINA
 also ships the VC++ Redistributable's own runtime DLLs as loose xcopy-deployed files inside that
 same submodule, rather than chaining an installer - this project looked into doing the same
 (the redistributable's own `vc_redist.x64.exe` supports a documented `/layout` extraction switch
@@ -720,10 +728,12 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    `ICameraDevice` (plus a hardware-free `SolScan.Simulators` camera), live preview in the Capture
    view, manual start/stop recording through a real `ISerWriter` implementation, gain/exposure/
    contrast sliders and a histogram. This alone matches what SharpCap does today for these two
-   vendors - real ZWO/Altair hardware still needs their native SDK DLL dropped in manually (see
-   `SolScan.Infrastructure/ASICamera2.README.md`/`altaircam.README.md`), and the sub-items below (exposure
-   calculator, wide/ROI view, focus aids, live line-ID overlay) are still outstanding. Carries over
-   the sunscan-app UX features noted above:
+   vendors - real ZWO/Altair hardware needs the `SolScan.External` git submodule checked out with
+   its real (Git-LFS-tracked) binary content pulled (`git submodule update --init`, with Git LFS
+   installed - see `SolScan.External\README.md`, and "Vendor camera SDK binaries" below), which a
+   plain `git clone` doesn't do on its own. The sub-items below (exposure calculator, wide/ROI
+   view, focus aids, live line-ID overlay) are still outstanding. Carries over the sunscan-app UX
+   features noted above:
 
    **Video vs. long-exposure stills**: SolScan is deliberately scoped to streaming/video capture
    only - continuous frames for live preview and SER recording - never NINA's single-shot
