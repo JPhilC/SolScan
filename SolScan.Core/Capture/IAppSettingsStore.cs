@@ -29,6 +29,15 @@ namespace SolScan.Core.Capture;
 /// combo) currently picked on Prepare - null means nothing's been picked yet. Read fresh by
 /// CaptureViewModel when a recording starts, to snapshot into that recording's
 /// <see cref="CaptureMetadata"/>.</param>
+/// <param name="CaptureSettingsExpanded">Whether CaptureView.xaml's "Capture Settings" (colour
+/// space/binning/ROI) Expander is open - purely a UI convenience remembered across sessions/
+/// navigating away and back (CaptureViewModel is transient, so it can't just keep this in memory
+/// itself), all defaulting to true (open) so a settings file saved before these existed still
+/// deserializes into "nothing collapsed" rather than a UI that looks like it lost its own controls.</param>
+/// <param name="CameraSettingsExpanded">Same idea, "Camera Settings" (Gain/Exposure/USB Turbo).</param>
+/// <param name="HistogramExpanded">Same idea, the Histogram panel.</param>
+/// <param name="DisplaySettingsExpanded">Same idea, "Display Settings" (Contrast black/white point +
+/// Display Brightness).</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -36,7 +45,11 @@ public sealed record AppSettings(
     double SiteLatitudeDeg = 0,
     double SiteLongitudeDeg = 0,
     double SiteElevationM = 0,
-    Guid? SelectedEquipmentSetupId = null);
+    Guid? SelectedEquipmentSetupId = null,
+    bool CaptureSettingsExpanded = true,
+    bool CameraSettingsExpanded = true,
+    bool HistogramExpanded = true,
+    bool DisplaySettingsExpanded = true);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

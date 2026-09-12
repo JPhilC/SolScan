@@ -103,10 +103,19 @@ public partial class CaptureViewModel : ObservableObject
     // Debounces PersistSettingsIfConnected - see that method's own doc comment for why.
     private DispatcherTimer? _persistSettingsDebounceTimer;
 
+    // Debounces ApplyOutputFormatChange - see ScheduleApplyOutputFormatChange's own doc comment for why.
+    private DispatcherTimer? _applyOutputFormatDebounceTimer;
+
     // 0 = idle, 1 = a background preview-processing Task is currently running - see
     // OnFrameCaptured/ProcessPreviewFrame. Interlocked rather than a plain bool since it's read and
     // written from whichever thread the connected device raises FrameCaptured on.
     private int _previewProcessingInFlight;
+
+    // 0 = idle, 1 = a colour space/binning/ROI change is scheduled or in flight - see
+    // ScheduleApplyOutputFormatChange/ApplyOutputFormatChange and OnFrameCaptured's own use of this
+    // below (same Interlocked-not-plain-bool rationale as _previewProcessingInFlight: read from the
+    // capture thread, written from the UI thread).
+    private int _outputFormatChangePending;
 
     public ObservableCollection<ICameraDevice> AvailableCameras { get; } = [];
 
@@ -226,6 +235,23 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private double displayBrightness = FramePreview.DefaultDisplayGamma;
 
+    // Whether each CaptureView.xaml Expander is currently open - remembered across sessions (see
+    // AppSettings.CaptureSettingsExpanded and friends) rather than per-camera-model, since these are
+    // a UI layout preference with nothing to do with which camera is connected. Field initializers
+    // here just match AppSettings' own "open by default" default; the constructor overwrites them
+    // from whatever was actually saved before anything can observe the mismatch.
+    [ObservableProperty]
+    private bool isCaptureSettingsExpanded = true;
+
+    [ObservableProperty]
+    private bool isCameraSettingsExpanded = true;
+
+    [ObservableProperty]
+    private bool isHistogramExpanded = true;
+
+    [ObservableProperty]
+    private bool isDisplaySettingsExpanded = true;
+
     [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
@@ -315,6 +341,17 @@ public partial class CaptureViewModel : ObservableObject
 
         IsMountConnected = _mountState.IsConnected;
         _mountState.PropertyChanged += MountStatePropertyChanged;
+
+        // Bypasses the properties' own setters (and so their OnXChanged save-back-to-disk logic) -
+        // this is CaptureViewModel reading its own previously-saved state, not the user toggling an
+        // Expander, so there's nothing to persist yet. Same rationale as the _syncingFromDevice-
+        // guarded blocks elsewhere in this constructor's callees, just simpler here since there's no
+        // device to keep in sync with - a straight field assignment is enough.
+        var savedAppSettings = _appSettingsStore.Load();
+        isCaptureSettingsExpanded = savedAppSettings.CaptureSettingsExpanded;
+        isCameraSettingsExpanded = savedAppSettings.CameraSettingsExpanded;
+        isHistogramExpanded = savedAppSettings.HistogramExpanded;
+        isDisplaySettingsExpanded = savedAppSettings.DisplaySettingsExpanded;
 
         RefreshCameras();
     }
@@ -727,6 +764,17 @@ public partial class CaptureViewModel : ObservableObject
             return;
         }
 
+        // Cancel rather than let it fire after disconnect - it would just no-op anyway (see
+        // ApplyOutputFormatChange's own null-camera guard), but there's no point applying a hardware
+        // reconfiguration to a camera about to be disconnected. FlushPendingCameraSettings still
+        // persists whatever RoiWidth/RoiHeight/etc. are currently set to regardless, since those
+        // properties are already updated synchronously - only the actual device call was debounced.
+        // Clearing _outputFormatChangePending here too since stopping the timer means
+        // ApplyOutputFormatChange's own finally will now never run to clear it - left set, a later
+        // reconnect on this same (transient, but reused-until-navigated-away) view model instance
+        // would wrongly keep suppressing OnFrameCaptured's RoiWidth/RoiHeight display backfill.
+        _applyOutputFormatDebounceTimer?.Stop();
+        Interlocked.Exchange(ref _outputFormatChangePending, 0);
         FlushPendingCameraSettings();
 
         if (IsLive)
@@ -980,9 +1028,9 @@ public partial class CaptureViewModel : ObservableObject
         PersistSettingsIfConnected();
     }
 
-    partial void OnRoiWidthChanged(int value) => ApplyOutputFormatChange();
+    partial void OnRoiWidthChanged(int value) => ScheduleApplyOutputFormatChange();
 
-    partial void OnRoiHeightChanged(int value) => ApplyOutputFormatChange();
+    partial void OnRoiHeightChanged(int value) => ScheduleApplyOutputFormatChange();
 
     /// <summary>Resets the ROI back to the full sensor - the "Full Frame" button on CaptureView.xaml.
     /// 0 means "full frame" to the device regardless of the sensor's actual size (see
@@ -1002,45 +1050,129 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnDisplayBrightnessChanged(double value) => PersistSettingsIfConnected();
 
-    partial void OnSelectedColorSpaceChanged(CameraOutputFormat value) => ApplyOutputFormatChange();
+    // Expander open/collapsed state - app-wide UI preference, not tied to a camera model, so this
+    // goes through IAppSettingsStore's own read-modify-write pattern (matching PrepareViewModel's
+    // SelectedEquipmentSetup persistence) rather than ICameraSettingsStore/PersistSettingsIfConnected.
+    // No debouncing needed here unlike the camera dial-in sliders - toggling an Expander is a single
+    // discrete click, not something a user can rapid-fire the way a Slider drag does.
+    partial void OnIsCaptureSettingsExpandedChanged(bool value) =>
+        PersistExpanderState(s => s with { CaptureSettingsExpanded = value });
 
-    partial void OnSelectedBinningChanged(int value) => ApplyOutputFormatChange();
+    partial void OnIsCameraSettingsExpandedChanged(bool value) =>
+        PersistExpanderState(s => s with { CameraSettingsExpanded = value });
 
-    /// <summary>Colour space, binning, and ROI are all reconfigured together (see
-    /// <see cref="ICameraDevice.SetOutputFormatAsync"/>) - fired from any of the three controls'
-    /// OnXChanged, which is why this is a fire-and-forget async void rather than an [RelayCommand]:
-    /// it's reacting to a property change, not a user-invoked command.</summary>
-    private async void ApplyOutputFormatChange()
+    partial void OnIsHistogramExpandedChanged(bool value) =>
+        PersistExpanderState(s => s with { HistogramExpanded = value });
+
+    partial void OnIsDisplaySettingsExpandedChanged(bool value) =>
+        PersistExpanderState(s => s with { DisplaySettingsExpanded = value });
+
+    private void PersistExpanderState(Func<AppSettings, AppSettings> update) =>
+        _appSettingsStore.Save(update(_appSettingsStore.Load()));
+
+    partial void OnSelectedColorSpaceChanged(CameraOutputFormat value) => ScheduleApplyOutputFormatChange();
+
+    partial void OnSelectedBinningChanged(int value) => ScheduleApplyOutputFormatChange();
+
+    /// <summary>Debounces <see cref="ApplyOutputFormatChange"/> - colour space/binning/ROI are meant
+    /// to be reconfigured together in one device call, but <see cref="ResetRoi"/> (and editing both
+    /// ROI textboxes back to back) sets <see cref="RoiWidth"/> and <see cref="RoiHeight"/> via two
+    /// separate property assignments, each independently raising its own OnXChanged synchronously.
+    /// Calling <see cref="ApplyOutputFormatChange"/> directly from both meant two overlapping calls
+    /// against the same device: the first read <see cref="RoiHeight"/>'s old, not-yet-reset value
+    /// (assignments inside <see cref="ResetRoi"/> happen one statement at a time, and the first
+    /// async call's arguments are evaluated before it ever awaits), so which call's
+    /// <c>SetOutputFormatAsync</c> actually landed last - or whether the other failed because the
+    /// device was already mid-reconfiguration - decided what got applied and persisted. In practice
+    /// that showed up as clicking "Full Frame" not actually restoring the full sensor: the device
+    /// (and the saved <see cref="CameraSettings"/>) could end up left on the first call's
+    /// half-reset width-only state. Collapsing rapid changes into one settled 150ms-later call fixes
+    /// it the same way <see cref="PersistSettingsIfConnected"/>'s own debounce fixed a similar
+    /// rapid-fire-write problem.
+    ///
+    /// Also sets <see cref="_outputFormatChangePending"/> so <see cref="OnFrameCaptured"/>'s own
+    /// RoiWidth/RoiHeight-backfill-for-display logic knows not to touch those properties while a
+    /// change is scheduled/in flight - debouncing alone reintroduced a second, subtler version of
+    /// the same "Full Frame does nothing" bug: with live view running, a frame keeps arriving every
+    /// few milliseconds throughout this whole 150ms wait (far faster than the debounce interval), and
+    /// that backfill logic used to see RoiWidth/RoiHeight sitting at 0 and immediately fill them back
+    /// in with the *current* (still the old, reduced) frame's own dimensions - clobbering the 0/0
+    /// "full frame" request back to the previous ROI before <see cref="ApplyOutputFormatChange"/>
+    /// ever got to read it.</summary>
+    private void ScheduleApplyOutputFormatChange()
     {
         if (_connectedCamera is null || _syncingFromDevice)
         {
             return;
         }
 
-        if (IsRecording)
-        {
-            // Changing frame geometry/bit depth mid-file isn't representable in a SER file's fixed
-            // header - revert the colour space/binning dropdowns rather than silently corrupting the
-            // recording. RoiWidth/RoiHeight aren't reverted here - ICameraDevice has no readback
-            // property for the currently-applied ROI to revert *to* (see its own doc comment) - but
-            // CaptureView.xaml already disables the ROI controls while IsRecording, so this path
-            // isn't expected to be hit via the ROI textboxes in practice.
-            StatusText = "Stop recording before changing colour space/binning/ROI.";
-            _syncingFromDevice = true;
-            SelectedColorSpace = _connectedCamera.OutputFormat;
-            SelectedBinning = _connectedCamera.Binning;
-            _syncingFromDevice = false;
-            return;
-        }
+        Interlocked.Exchange(ref _outputFormatChangePending, 1);
+        _applyOutputFormatDebounceTimer ??= CreateApplyOutputFormatDebounceTimer();
+        _applyOutputFormatDebounceTimer.Stop();
+        _applyOutputFormatDebounceTimer.Start();
+    }
 
+    private DispatcherTimer CreateApplyOutputFormatDebounceTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(150)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            ApplyOutputFormatChange();
+        };
+        return timer;
+    }
+
+    /// <summary>Colour space, binning, and ROI are all reconfigured together (see
+    /// <see cref="ICameraDevice.SetOutputFormatAsync"/>) - fired from <see cref="ScheduleApplyOutputFormatChange"/>
+    /// once any of the three controls' changes have settled, which is why this is a fire-and-forget
+    /// async void rather than an [RelayCommand]: it's reacting to a property change, not a directly
+    /// user-invoked command.</summary>
+    private async void ApplyOutputFormatChange()
+    {
+        // Cleared on every exit path (the two early returns below included) via the outer finally -
+        // see ScheduleApplyOutputFormatChange's doc comment for why OnFrameCaptured needs this held
+        // for the whole duration, not just around the device call itself.
         try
         {
-            await _connectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning, RoiWidth, RoiHeight);
-            PersistSettingsIfConnected();
+            if (_connectedCamera is null || _syncingFromDevice)
+            {
+                return;
+            }
+
+            if (IsRecording)
+            {
+                // Changing frame geometry/bit depth mid-file isn't representable in a SER file's
+                // fixed header - revert the colour space/binning dropdowns rather than silently
+                // corrupting the recording. RoiWidth/RoiHeight aren't reverted here - ICameraDevice
+                // has no readback property for the currently-applied ROI to revert *to* (see its own
+                // doc comment) - but CaptureView.xaml already disables the ROI controls while
+                // IsRecording, so this path isn't expected to be hit via the ROI textboxes in
+                // practice.
+                StatusText = "Stop recording before changing colour space/binning/ROI.";
+                _syncingFromDevice = true;
+                SelectedColorSpace = _connectedCamera.OutputFormat;
+                SelectedBinning = _connectedCamera.Binning;
+                _syncingFromDevice = false;
+                return;
+            }
+
+            try
+            {
+                await _connectedCamera.SetOutputFormatAsync(SelectedColorSpace, SelectedBinning, RoiWidth, RoiHeight);
+                PersistSettingsIfConnected();
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Failed to apply colour space/binning/ROI: {ex.Message}";
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            StatusText = $"Failed to apply colour space/binning/ROI: {ex.Message}";
+            Interlocked.Exchange(ref _outputFormatChangePending, 0);
         }
     }
 
@@ -1144,7 +1276,15 @@ public partial class CaptureViewModel : ObservableObject
         // unhelpful "0". _syncingFromDevice guards it from triggering another (unnecessary,
         // stream-restarting) ApplyOutputFormatChange call - 0 and the real number already mean the
         // same thing to the device, so there's nothing to actually reapply.
-        if (RoiWidth <= 0 || RoiHeight <= 0)
+        //
+        // _outputFormatChangePending additionally skips this entirely while a change is
+        // scheduled/in flight (see ScheduleApplyOutputFormatChange's own doc comment) - without it,
+        // clicking "Full Frame" while live could see this backfill run on the very next frame
+        // (arriving well within the 150ms debounce window, let alone the device's own reconfigure
+        // time) and write the *current, still-reduced* frame's dimensions straight back into
+        // RoiWidth/RoiHeight, so ApplyOutputFormatChange ended up re-requesting the same ROI it
+        // already had instead of the full sensor.
+        if (Interlocked.CompareExchange(ref _outputFormatChangePending, 0, 0) == 0 && (RoiWidth <= 0 || RoiHeight <= 0))
         {
             var fullWidth = frame.Width;
             var fullHeight = frame.Height;

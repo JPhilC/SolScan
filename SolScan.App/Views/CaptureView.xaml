@@ -91,193 +91,211 @@
 
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <!-- Colour space + binning: reconfigured together, and not safe to change
-                         mid-recording (see CaptureViewModel.ApplyOutputFormatChange) - disabled
-                         here too so it's obvious why, rather than a change silently reverting. -->
-                    <TextBlock Text="Colour Space" FontWeight="Bold"/>
-                    <ComboBox Margin="0,4,0,12"
-                              ItemsSource="{Binding AvailableColorSpaces}"
-                              SelectedItem="{Binding SelectedColorSpace}">
-                        <ComboBox.Style>
-                            <Style TargetType="ComboBox">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ComboBox.Style>
-                    </ComboBox>
+                    <!-- Grouped into collapsible Expanders (all open by default) so the right-hand
+                         panel doesn't force this much vertical scrolling to reach Start/Stop
+                         Recording at the bottom - each group is otherwise unchanged from before. -->
+                    <Expander Header="Capture Settings" IsExpanded="{Binding IsCaptureSettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <!-- Colour space + binning: reconfigured together, and not safe to change
+                                 mid-recording (see CaptureViewModel.ApplyOutputFormatChange) - disabled
+                                 here too so it's obvious why, rather than a change silently reverting. -->
+                            <TextBlock Text="Colour Space" FontWeight="Bold"/>
+                            <ComboBox Margin="0,4,0,12"
+                                      ItemsSource="{Binding AvailableColorSpaces}"
+                                      SelectedItem="{Binding SelectedColorSpace}">
+                                <ComboBox.Style>
+                                    <Style TargetType="ComboBox">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ComboBox.Style>
+                            </ComboBox>
 
-                    <TextBlock Text="Binning" FontWeight="Bold"/>
-                    <ComboBox Margin="0,4,0,12"
-                              ItemsSource="{Binding AvailableBinningOptions}"
-                              SelectedItem="{Binding SelectedBinning}">
-                        <ComboBox.Style>
-                            <Style TargetType="ComboBox">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ComboBox.Style>
-                    </ComboBox>
+                            <TextBlock Text="Binning" FontWeight="Bold"/>
+                            <ComboBox Margin="0,4,0,12"
+                                      ItemsSource="{Binding AvailableBinningOptions}"
+                                      SelectedItem="{Binding SelectedBinning}">
+                                <ComboBox.Style>
+                                    <Style TargetType="ComboBox">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ComboBox.Style>
+                            </ComboBox>
 
-                    <!-- Region of interest: width/height only (always centred on the sensor - see
-                         CaptureViewModel.RoiWidth/RoiHeight) - a real hardware setting (reconfigured
-                         together with colour space/binning, see ApplyOutputFormatChange): the camera
-                         itself only reads out and transfers this region, which is what actually
-                         raises achievable frame rate at a smaller ROI (a software-only crop applied
-                         after capture doesn't - confirmed on real ASI678MM hardware). Locked while
-                         recording, same as colour space/binning above: a SER file's header can't
-                         represent a mid-file geometry change. -->
-                    <TextBlock Text="Region of Interest" FontWeight="Bold"/>
-                    <StackPanel Margin="0,4,0,12">
-                        <StackPanel.Style>
-                            <Style TargetType="StackPanel">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </StackPanel.Style>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="8"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="Width" FontSize="11" Opacity="0.8"/>
-                                <TextBox Text="{Binding RoiWidth, UpdateSourceTrigger=LostFocus}"/>
+                            <!-- Region of interest: width/height only (always centred on the sensor -
+                                 see CaptureViewModel.RoiWidth/RoiHeight) - a real hardware setting
+                                 (reconfigured together with colour space/binning, see
+                                 ApplyOutputFormatChange): the camera itself only reads out and
+                                 transfers this region, which is what actually raises achievable frame
+                                 rate at a smaller ROI (a software-only crop applied after capture
+                                 doesn't - confirmed on real ASI678MM hardware). Locked while
+                                 recording, same as colour space/binning above: a SER file's header
+                                 can't represent a mid-file geometry change. -->
+                            <TextBlock Text="Region of Interest" FontWeight="Bold"/>
+                            <StackPanel>
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Width" FontSize="11" Opacity="0.8"/>
+                                        <TextBox Text="{Binding RoiWidth, UpdateSourceTrigger=LostFocus}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Height" FontSize="11" Opacity="0.8"/>
+                                        <TextBox Text="{Binding RoiHeight, UpdateSourceTrigger=LostFocus}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Button Content="Full Frame" Command="{Binding ResetRoiCommand}" HorizontalAlignment="Left"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Text="Height" FontSize="11" Opacity="0.8"/>
-                                <TextBox Text="{Binding RoiHeight, UpdateSourceTrigger=LostFocus}"/>
-                            </StackPanel>
-                        </Grid>
-                        <Button Content="Full Frame" Command="{Binding ResetRoiCommand}" HorizontalAlignment="Left"/>
-                    </StackPanel>
+                        </StackPanel>
+                    </Expander>
 
-                    <Separator Margin="0,0,0,12"/>
+                    <Expander Header="Camera Settings" IsExpanded="{Binding IsCameraSettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <!-- Gain: 0-600 (0.1dB/step), matching the ASI678MM's own range in SharpCap -->
+                            <DockPanel Margin="0,0,0,4">
+                                <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsGainAuto}"/>
+                                <TextBlock Text="{Binding Gain, StringFormat='Gain: {0:0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <Slider Minimum="0" Maximum="600" Value="{Binding Gain}" Margin="0,0,0,12">
+                                <Slider.Style>
+                                    <Style TargetType="Slider">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
 
-                    <!-- Gain: 0-600 (0.1dB/step), matching the ASI678MM's own range in SharpCap -->
-                    <DockPanel Margin="0,0,0,4">
-                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsGainAuto}"/>
-                        <TextBlock Text="{Binding Gain, StringFormat='Gain: {0:0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <Slider Minimum="0" Maximum="600" Value="{Binding Gain}" Margin="0,0,0,12">
-                        <Slider.Style>
-                            <Style TargetType="Slider">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Slider.Style>
-                    </Slider>
+                            <!-- Exposure: 0.032ms-5s on a log scale (see ExposureScale) - the slider
+                                 itself drags a 0-1 position, ExposureMicroseconds/ExposureDisplayText
+                                 follow it -->
+                            <DockPanel Margin="0,0,0,4">
+                                <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsExposureAuto}"/>
+                                <TextBlock Text="{Binding ExposureDisplayText, StringFormat='Exposure: {0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <Slider Minimum="0" Maximum="1" Value="{Binding ExposureSliderPosition}" Margin="0,0,0,12">
+                                <Slider.Style>
+                                    <Style TargetType="Slider">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
 
-                    <!-- Exposure: 0.032ms-5s on a log scale (see ExposureScale) - the slider itself
-                         drags a 0-1 position, ExposureMicroseconds/ExposureDisplayText follow it -->
-                    <DockPanel Margin="0,0,0,4">
-                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsExposureAuto}"/>
-                        <TextBlock Text="{Binding ExposureDisplayText, StringFormat='Exposure: {0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <Slider Minimum="0" Maximum="1" Value="{Binding ExposureSliderPosition}" Margin="0,0,0,12">
-                        <Slider.Style>
-                            <Style TargetType="Slider">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Slider.Style>
-                    </Slider>
+                            <!-- USB Turbo: 40-100, matching SharpCap's floor for the ASI678MM -->
+                            <DockPanel Margin="0,0,0,4">
+                                <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsUsbBandwidthAuto}"/>
+                                <TextBlock Text="{Binding UsbBandwidthPercent, StringFormat='USB Turbo: {0}%'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <Slider Minimum="40" Maximum="100" Value="{Binding UsbBandwidthPercent}">
+                                <Slider.Style>
+                                    <Style TargetType="Slider">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsUsbBandwidthAuto}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
+                        </StackPanel>
+                    </Expander>
 
-                    <!-- USB Turbo: 40-100, matching SharpCap's floor for the ASI678MM -->
-                    <DockPanel Margin="0,0,0,4">
-                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsUsbBandwidthAuto}"/>
-                        <TextBlock Text="{Binding UsbBandwidthPercent, StringFormat='USB Turbo: {0}%'}" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <Slider Minimum="40" Maximum="100" Value="{Binding UsbBandwidthPercent}" Margin="0,0,0,12">
-                        <Slider.Style>
-                            <Style TargetType="Slider">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsUsbBandwidthAuto}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Slider.Style>
-                    </Slider>
+                    <Expander Header="Histogram" IsExpanded="{Binding IsHistogramExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <Border Height="60" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
+                                <!-- The inner Canvas is sized to CaptureViewModel.HistogramPlotWidth x
+                                     HistogramPlotHeight explicitly, rather than letting the Viewbox
+                                     size itself off the Path's own (data-dependent) geometry bounds -
+                                     a bar right at the plotted area's edge (e.g. a fully saturated
+                                     frame, every pixel piled into the very last bucket) was getting
+                                     rounded away to nothing by WPF's layout rounding when the
+                                     Viewbox's scale factor came from that same edge-flush geometry,
+                                     confirmed on real ASI678MM hardware. A fixed, explicit viewport
+                                     plus CaptureViewModel's own small margin on each side keeps every
+                                     bar comfortably inside it instead. -->
+                                <Viewbox Stretch="Fill">
+                                    <Canvas Width="{x:Static local:CaptureViewModel.HistogramPlotWidth}"
+                                            Height="{x:Static local:CaptureViewModel.HistogramPlotHeight}">
+                                        <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Border>
+                            <!-- Matches ASICap's own Max/Min/AVG readout - the fastest way to tell a
+                                 display-stretch issue apart from the camera reporting different raw
+                                 values than expected for the current Colour Space. -->
+                            <TextBlock Text="{Binding HistogramStatsText}" Opacity="0.8" FontSize="11" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Expander>
 
-                    <Separator Margin="0,0,0,12"/>
+                    <Expander Header="Display Settings" IsExpanded="{Binding IsDisplaySettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only,
+                                 never affects what's recorded, matches SharpCap's "Display Histogram
+                                 Stretch" -->
+                            <DockPanel Margin="0,0,0,4">
+                                <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsContrastAuto}"/>
+                                <TextBlock Text="Contrast" FontWeight="Bold" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <TextBlock Text="Black point" Margin="0,4,0,0"/>
+                            <Slider Minimum="0" Maximum="1" Value="{Binding ContrastBlackPoint}">
+                                <Slider.Style>
+                                    <Style TargetType="Slider">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
+                            <TextBlock Text="White point" Margin="0,4,0,0"/>
+                            <Slider Minimum="0" Maximum="1" Value="{Binding ContrastWhitePoint}" Margin="0,0,0,12">
+                                <Slider.Style>
+                                    <Style TargetType="Slider">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
 
-                    <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only, never
-                         affects what's recorded, matches SharpCap's "Display Histogram Stretch" -->
-                    <DockPanel Margin="0,0,0,4">
-                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsContrastAuto}"/>
-                        <TextBlock Text="Contrast" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <TextBlock Text="Black point" Margin="0,4,0,0"/>
-                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastBlackPoint}">
-                        <Slider.Style>
-                            <Style TargetType="Slider">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Slider.Style>
-                    </Slider>
-                    <TextBlock Text="White point" Margin="0,4,0,0"/>
-                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastWhitePoint}" Margin="0,0,0,12">
-                        <Slider.Style>
-                            <Style TargetType="Slider">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Slider.Style>
-                    </Slider>
-
-                    <!-- Purely cosmetic "make the live view easier to look at" knob (see
-                         CaptureViewModel.DisplayBrightness) - display-only, never affects what's
-                         recorded. No "Auto" toggle, unlike Contrast above: there's no camera/
-                         histogram-driven value to defer to, just a straight gamma curve on top of
-                         the black/white stretch, 1.0 = unchanged. -->
-                    <TextBlock Text="{Binding DisplayBrightness, StringFormat='Display Brightness: {0:0.00}'}" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <Slider Minimum="0.3" Maximum="3" Value="{Binding DisplayBrightness}" Margin="0,0,0,12"/>
-
-                    <TextBlock Text="Histogram" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <Border Height="60" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                        <!-- The inner Canvas is sized to CaptureViewModel.HistogramPlotWidth x
-                             HistogramPlotHeight explicitly, rather than letting the Viewbox size
-                             itself off the Path's own (data-dependent) geometry bounds - a bar
-                             right at the plotted area's edge (e.g. a fully saturated frame, every
-                             pixel piled into the very last bucket) was getting rounded away to
-                             nothing by WPF's layout rounding when the Viewbox's scale factor came
-                             from that same edge-flush geometry, confirmed on real ASI678MM hardware.
-                             A fixed, explicit viewport plus CaptureViewModel's own small margin on
-                             each side keeps every bar comfortably inside it instead. -->
-                        <Viewbox Stretch="Fill">
-                            <Canvas Width="{x:Static local:CaptureViewModel.HistogramPlotWidth}"
-                                    Height="{x:Static local:CaptureViewModel.HistogramPlotHeight}">
-                                <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
-                            </Canvas>
-                        </Viewbox>
-                    </Border>
-                    <!-- Matches ASICap's own Max/Min/AVG readout - the fastest way to tell a
-                         display-stretch issue apart from the camera reporting different raw
-                         values than expected for the current Colour Space. -->
-                    <TextBlock Text="{Binding HistogramStatsText}" Opacity="0.8" FontSize="11" Margin="0,4,0,12"/>
+                            <!-- Purely cosmetic "make the live view easier to look at" knob (see
+                                 CaptureViewModel.DisplayBrightness) - display-only, never affects
+                                 what's recorded. No "Auto" toggle, unlike Contrast above: there's no
+                                 camera/histogram-driven value to defer to, just a straight gamma curve
+                                 on top of the black/white stretch, 1.0 = unchanged. -->
+                            <TextBlock Text="{Binding DisplayBrightness, StringFormat='Display Brightness: {0:0.00}'}" FontWeight="Bold" Margin="0,0,0,4"/>
+                            <Slider Minimum="0.3" Maximum="3" Value="{Binding DisplayBrightness}"/>
+                        </StackPanel>
+                    </Expander>
 
                     <Separator Margin="0,0,0,12"/>
 
