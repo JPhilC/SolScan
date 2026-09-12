@@ -32,14 +32,16 @@ public static class FramePreview
     public const int DefaultMaxPreviewDimension = 960;
 
     /// <summary>
-    /// Applied on top of the linear black/white stretch in <see cref="Stretch"/>. Left at 1
-    /// (a no-op) by default - matching ASICap/SharpCap's own default "Display Gamma" of 1.0 -
-    /// since the live view's job while dialing in real capture settings is to faithfully show what
-    /// will actually be recorded, not an artificially brightened approximation of it. Kept as a
-    /// named, adjustable constant rather than removed outright in case a future "prettier preview"
-    /// toggle wants to raise it.
+    /// <see cref="Stretch"/>'s default <c>displayGamma</c> - a no-op, matching ASICap/SharpCap's own
+    /// default "Display Gamma" of 1.0, since the live view's job while dialing in real capture
+    /// settings is to faithfully show what will actually be recorded, not an artificially
+    /// brightened approximation of it. Exposed as a per-call parameter (backing
+    /// <c>CaptureViewModel.DisplayBrightness</c>) rather than staying fixed, for the same
+    /// "prettier preview" case its own doc comment used to reserve it for - values above 1
+    /// brighten midtones, below 1 darken them, purely for display, same as every other stretch
+    /// in this class.
     /// </summary>
-    private const double DisplayGamma = 1.0;
+    public const double DefaultDisplayGamma = 1.0;
 
     /// <summary>Buckets a downsampled sample of <paramref name="frame"/> into a fixed-size
     /// histogram, normalized to the frame's own bit depth so 8-bit and 16-bit frames are directly
@@ -120,12 +122,14 @@ public static class FramePreview
 
     /// <summary>
     /// Maps [<paramref name="blackPoint"/>, <paramref name="whitePoint"/>] (each 0-1, normalized to
-    /// the frame's own bit depth) to full black/white, applies <see cref="DisplayGamma"/> on top,
-    /// and returns a downsampled 8-bit-per-pixel buffer plus its actual dimensions (see the class
-    /// doc comment) - display-only, never touches what a recording writes to disk.
+    /// the frame's own bit depth) to full black/white, applies <paramref name="displayGamma"/> on
+    /// top (see <see cref="DefaultDisplayGamma"/>), and returns a downsampled 8-bit-per-pixel buffer
+    /// plus its actual dimensions (see the class doc comment) - display-only, never touches what a
+    /// recording writes to disk.
     /// </summary>
     public static (byte[] Pixels, int Width, int Height) Stretch(
-        CameraFrame frame, double blackPoint, double whitePoint, int maxDimension = DefaultMaxPreviewDimension)
+        CameraFrame frame, double blackPoint, double whitePoint, int maxDimension = DefaultMaxPreviewDimension,
+        double displayGamma = DefaultDisplayGamma)
     {
         var (scale, outWidth, outHeight) = ComputeDownsampleGrid(frame, maxDimension);
         var maxValue = (1 << frame.BitDepth) - 1;
@@ -133,7 +137,7 @@ public static class FramePreview
         var rowStride = frame.Width * bytesPerPixel;
         var data = frame.Data;
         var range = Math.Max(whitePoint - blackPoint, 1e-6);
-        var invGamma = 1.0 / DisplayGamma;
+        var invGamma = 1.0 / Math.Max(displayGamma, 1e-6);
         var output = new byte[outWidth * outHeight];
 
         var o = 0;

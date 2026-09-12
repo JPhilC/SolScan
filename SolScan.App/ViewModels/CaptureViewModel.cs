@@ -216,6 +216,16 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private bool isContrastAuto;
 
+    /// <summary>Display-only gamma applied on top of the black/white stretch above (see
+    /// <see cref="FramePreview.Stretch"/>'s <c>displayGamma</c> parameter) - never affects what's
+    /// written to the SER file. Unlike the black/white points, this has no "Auto" counterpart: it's
+    /// a purely cosmetic "make the live view easier to look at" knob, not something the camera or a
+    /// histogram algorithm has an opinion on. Defaults to <see cref="FramePreview.DefaultDisplayGamma"/>
+    /// (1, a no-op) so the preview starts out faithful to the actual exposure, same rationale as
+    /// <see cref="IsContrastAuto"/> defaulting off.</summary>
+    [ObservableProperty]
+    private double displayBrightness = FramePreview.DefaultDisplayGamma;
+
     [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
@@ -660,6 +670,7 @@ public partial class CaptureViewModel : ObservableObject
                 ContrastBlackPoint = savedSettings.ContrastBlackPoint;
                 ContrastWhitePoint = savedSettings.ContrastWhitePoint;
                 IsContrastAuto = savedSettings.IsContrastAuto;
+                DisplayBrightness = savedSettings.DisplayBrightness;
                 SelectedColorSpace = savedSettings.OutputFormat;
                 // Falls back to the camera's own current binning if the saved value isn't (or is no
                 // longer) one this camera actually supports, rather than selecting something invalid.
@@ -989,6 +1000,8 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnIsContrastAutoChanged(bool value) => PersistSettingsIfConnected();
 
+    partial void OnDisplayBrightnessChanged(double value) => PersistSettingsIfConnected();
+
     partial void OnSelectedColorSpaceChanged(CameraOutputFormat value) => ApplyOutputFormatChange();
 
     partial void OnSelectedBinningChanged(int value) => ApplyOutputFormatChange();
@@ -1105,7 +1118,8 @@ public partial class CaptureViewModel : ObservableObject
         ContrastWhitePoint,
         IsContrastAuto,
         RoiWidth,
-        RoiHeight);
+        RoiHeight,
+        DisplayBrightness);
 
     private void OnFrameCaptured(object? sender, CameraFrame frame)
     {
@@ -1240,7 +1254,7 @@ public partial class CaptureViewModel : ObservableObject
             var stretchMaxDimension = SelectedZoomOption.Kind == ZoomKind.Fixed
                 ? Math.Max(frame.Width, frame.Height)
                 : FramePreview.DefaultMaxPreviewDimension;
-            var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint, stretchMaxDimension);
+            var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint, stretchMaxDimension, DisplayBrightness);
             var droppedFrames = camera?.DroppedFrameCount ?? 0;
 
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,

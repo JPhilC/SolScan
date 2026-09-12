@@ -8,7 +8,9 @@ namespace SolScan.Core.Camera;
 /// <see cref="FramePreview.ComputeCenteredRoi"/>) so settings files saved before the ROI feature
 /// existed still deserialize cleanly into "no ROI selected". A real hardware ROI (applied via
 /// <see cref="ICameraDevice.SetOutputFormatAsync"/>), not a post-capture crop - see that method's
-/// own doc comment.</remarks>
+/// own doc comment. <see cref="DisplayBrightness"/> similarly defaults to
+/// <see cref="FramePreview.DefaultDisplayGamma"/> (a no-op) so settings files saved before that
+/// slider existed still deserialize cleanly into "unchanged".</remarks>
 public sealed record CameraSettings(
     double Gain,
     double ExposureMicroseconds,
@@ -22,7 +24,8 @@ public sealed record CameraSettings(
     double ContrastWhitePoint,
     bool IsContrastAuto,
     int RoiWidth = 0,
-    int RoiHeight = 0);
+    int RoiHeight = 0,
+    double DisplayBrightness = FramePreview.DefaultDisplayGamma);
 
 /// <summary>
 /// Persists <see cref="CameraSettings"/> keyed by <see cref="ICameraDevice.Name"/> (e.g. "ZWO
