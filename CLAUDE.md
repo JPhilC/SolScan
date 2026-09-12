@@ -291,8 +291,22 @@ native SDK - the DLLs themselves live in the `SolScan.External` git submodule, n
 `SolScan.Infrastructure.Capture.SerWriter`; `SolScan.Simulators`' `SimulatedCameraDevice`/
 `SimulatedCameraProvider` (a hardware-free camera so the above works with zero hardware attached);
 and `CaptureViewModel`/`CaptureView.xaml` wiring it all into a SharpCap-style live view (camera
-picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop recording). Also real:
-camera-profile auto-add - the first time a given camera model connects, `CaptureViewModel.
+picker, connect/play, gain/exposure/contrast sliders, histogram, start/stop recording).
+`CaptureViewModel` is registered `AddSingleton`, same reasoning/precedent as `PrepareViewModel`'s own
+doc comment above - it used to be transient, which meant navigating away from Capture and back
+constructed a brand-new instance (a fresh `RefreshCameras()` call, itself creating new `ICameraDevice`
+instances via discovery - see `AsiCameraProvider.Discover`) while the *previous* instance's
+already-connected/streaming `ICameraDevice` was simply abandoned rather than disconnected: nothing
+ever unsubscribed its `FrameCaptured` handler or called `DisconnectAsync` on it, so the old native
+camera handle (and its capture thread) leaked on in the background - still pushing frame-rate updates
+into the shared `StatusBarViewModel` - while the *new* `CaptureViewModel` the user actually saw looked
+fully disconnected. Reported as "the camera gets disconnected when you click off Capture"; fixed by
+the same singleton-lifetime treatment `PrepareViewModel` already got for the identical problem with
+the mount connection. One accepted side effect, matching `PrepareViewModel`'s own already-established
+trade-off: a camera plugged in after Capture's first visit won't appear in the picker until the
+existing "Refresh" button is clicked, since `RefreshCameras()` now only runs once (at first
+construction) rather than on every navigation. Also real: camera-profile auto-add - the first time a
+given camera model connects, `CaptureViewModel.
 ResolveCameraProfile` matches it against `IEquipmentLibrary.LoadCameras()` by `Label`/`Name` (adding
 a new `CameraProfile`, filled in from `ICameraDevice.PixelSizeMicrons`, if none matches yet -
 backfilling that field on an existing entry that's missing it, but never overwriting a non-null,
@@ -368,8 +382,8 @@ reactively; `PrepareView.xaml` is a real Connect/Disconnect + Park/Unpark + manu
 with live RA/Dec, alongside an editable, persisted Site Settings panel (latitude/longitude/elevation)
 that reconciles against the mount's own site settings on connect (prompting to decide which side
 wins when they disagree, mirroring RASTA's `SettingsViewModel.ConnectTelescopeAsync`). `PrepareViewModel`
-is registered `AddSingleton` (unlike the other, still-transient stage view models) so this connection
-state survives navigating away and back. The ASCOM Alpaca base URL/device number live in Options >
+is registered `AddSingleton` (like `CaptureViewModel`, unlike the still-transient `ProcessViewModel`/
+`OptionsViewModel`) so this connection state survives navigating away and back. The ASCOM Alpaca base URL/device number live in Options >
 General (`AppSettings.AlpacaBaseUrl`/`AlpacaDeviceNumber`, same null-means-default convention as
 `CapturesRootFolder`), read fresh at connect time rather than cached. A live poll call throwing
 (`MountService.ConnectionLost`) is handled once, at the `App.xaml.cs` composition root - marks the

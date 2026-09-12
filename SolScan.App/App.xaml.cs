@@ -142,7 +142,17 @@ public partial class App : Application
         // (IsBusy, command CanExecute, the MountState.PropertyChanged subscription) must survive
         // navigating away to Capture/Process/Options and back.
         services.AddSingleton<PrepareViewModel>();
-        services.AddTransient<CaptureViewModel>();
+        // Singleton for the same reason as PrepareViewModel above - a live camera connection/stream
+        // must survive navigating away to Prepare/Process/Options and back too. This used to be
+        // transient, which meant navigating back re-ran the constructor (a fresh RefreshCameras(),
+        // itself creating brand-new ICameraDevice instances via discovery - see
+        // AsiCameraProvider.Discover) while the *previous* instance's already-connected/streaming
+        // ICameraDevice was simply abandoned rather than disconnected: nothing unsubscribed its
+        // FrameCaptured handler or called DisconnectAsync on it, so the old native camera handle (and
+        // its capture thread) leaked on, still updating the shared StatusBarViewModel's frame-rate
+        // readout in the background, while the *new* CaptureViewModel the user actually saw looked
+        // fully disconnected - reported as "the camera gets disconnected when you click off Capture".
+        services.AddSingleton<CaptureViewModel>();
         services.AddTransient<ProcessViewModel>();
         services.AddTransient<OptionsViewModel>();
         services.AddSingleton<MainWindow>();
