@@ -8,8 +8,12 @@ namespace SolScan.Tests;
 public class ShgProcessorTests
 {
     [Fact]
-    public async Task ProcessAsync_ProducesRequestedImages_AndReportsUnimplementedKindsAsSkipped()
+    public async Task ProcessAsync_ProducesRequestedImages()
     {
+        // This file's brightness only varies along the spectral-line row axis, not across x/frame -
+        // deliberately no disk shape at all, so it only exercises line-curvature detection/
+        // reconstruction, not disk-edge detection/geometry correction (see DiskGeometryCorrectorTests
+        // for the elliptical-disk file that exercises GeometryCorrected/GeometryCorrectedProcessed).
         const int width = 20;
         const int height = 15;
         const int frameCount = 5;
@@ -26,7 +30,6 @@ public class ShgProcessorTests
                 RequestedImages = new RequestedImages([
                     GeneratedImageKind.Raw,
                     GeneratedImageKind.Continuum,
-                    GeneratedImageKind.GeometryCorrectedProcessed,
                 ]),
                 SpectrumParams = defaults.SpectrumParams with { PixelShift = 0, ContinuumShift = 2 },
             };
@@ -43,8 +46,7 @@ public class ShgProcessorTests
             Assert.Equal(width, continuum.Width);
             Assert.Equal(frameCount, continuum.Height);
 
-            var skipped = Assert.Single(result.SkippedKinds);
-            Assert.Equal(GeneratedImageKind.GeometryCorrectedProcessed, skipped);
+            Assert.Empty(result.SkippedKinds);
 
             Assert.True(result.DetectedLinePolynomial.HasValue);
             var midRow = result.DetectedLinePolynomial!.Value.Evaluate(width / 2.0);

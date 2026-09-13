@@ -8,10 +8,11 @@ namespace SolScan.Processing.Shg;
 /// Processes a finished SER capture into output images, per <see cref="SolScan.Core.Processing.ProcessParams"/>.
 /// This implementation (<see cref="ShgProcessor"/>) produces real <see cref="GeneratedImageKind.Raw"/>/
 /// <see cref="GeneratedImageKind.Reconstruction"/>/<see cref="GeneratedImageKind.Continuum"/>/
-/// <see cref="GeneratedImageKind.GeometryCorrected"/> images - spectral-line-curvature detection,
-/// reconstruction, disk-edge ellipse fitting and geometry correction are all real.
-/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> still needs contrast enhancement (a
-/// separate future piece of work) - see <see cref="ShgProcessingResult.SkippedKinds"/>.
+/// <see cref="GeneratedImageKind.GeometryCorrected"/>/<see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>
+/// images - spectral-line-curvature detection, reconstruction, disk-edge ellipse fitting, geometry
+/// correction, and (for the last kind) every <see cref="ContrastEnhancementMode"/> - AutoStretch, CLAHE,
+/// and CLAHE2 (multi-scale CLAHE, layering several tile sizes of the same CLAHE and averaging them) -
+/// are all real.
 /// </summary>
 public interface IShgProcessor
 {
@@ -23,9 +24,10 @@ public interface IShgProcessor
 }
 
 /// <param name="Images">The images actually produced.</param>
-/// <param name="SkippedKinds">Requested kinds this processor doesn't implement yet (currently
-/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> whenever requested) - reported
-/// explicitly rather than silently dropped.</param>
+/// <param name="SkippedKinds">Requested kinds this processor doesn't implement yet - currently always
+/// empty, since every <see cref="GeneratedImageKind"/> (and every <see cref="ContrastEnhancementMode"/>
+/// of <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>) is now implemented. Kept for whenever
+/// a future kind needs "reported explicitly rather than silently dropped" treatment.</param>
 /// <param name="DetectedLinePolynomial">The fitted spectral-line-curvature polynomial, or null if
 /// nothing needed reconstruction (no Raw/Reconstruction/Continuum/GeometryCorrected requested).</param>
 /// <param name="DetectedTiltDegrees">The disk tilt geometry correction removed, in degrees, or null

@@ -115,4 +115,52 @@ public readonly record struct Ellipse(double A, double B, double C, double D, do
 
         return null;
     }
+
+    /// <summary>Translates the ellipse's own curve by <c>(u, v)</c> in its current coordinate system -
+    /// i.e. the returned ellipse's zero-set is the original's shifted by that vector (confirmed against
+    /// astro4j's own real call sites, e.g. <c>Crop.java</c>'s <c>circle.translate(-left, -top)</c> when
+    /// re-expressing a detected ellipse in a cropped image's coordinates). Used by
+    /// <c>SolScan.Processing.Shg.DiskGeometryCorrector</c> to carry the corrected-circle ellipse through
+    /// an autocrop.</summary>
+    public Ellipse Translate(double u, double v) =>
+        new(
+            A,
+            B,
+            C,
+            D - (2 * A * u) - (B * v),
+            E - (2 * C * v) - (B * u),
+            (A * u * u) + (B * u * v) + (C * v * v) - (D * u) - (E * v) + F);
+
+    /// <summary>Rescales the ellipse about its own center by the given per-axis factors - e.g.
+    /// <c>Rescale(1.05, 1.05)</c> for a small margin around the disk when excluding it from a
+    /// background-fit sample region.</summary>
+    public Ellipse Rescale(double scaleX, double scaleY)
+    {
+        var (cx, cy) = Center();
+        var atOrigin = Translate(-cx, -cy);
+        var scaleXSq = scaleX * scaleX;
+        var scaleYSq = scaleY * scaleY;
+        var scaleXY = scaleX * scaleY;
+        var rescaled = new Ellipse(
+            atOrigin.A * scaleYSq,
+            atOrigin.B * scaleXY,
+            atOrigin.C * scaleXSq,
+            atOrigin.D * scaleX,
+            atOrigin.E * scaleY,
+            atOrigin.F * scaleXSq * scaleYSq);
+        return rescaled.Translate(cx, cy);
+    }
+
+    /// <summary>The ellipse's axis-aligned bounding box, accounting for its own tilt.</summary>
+    public (double MinX, double MaxX, double MinY, double MaxY) BoundingBox()
+    {
+        var (cx, cy) = Center();
+        var (semiA, semiB) = SemiAxis();
+        var theta = RotationAngle();
+        var cosTheta = System.Math.Cos(theta);
+        var sinTheta = System.Math.Sin(theta);
+        var w = System.Math.Sqrt((semiA * semiA * cosTheta * cosTheta) + (semiB * semiB * sinTheta * sinTheta));
+        var h = System.Math.Sqrt((semiA * semiA * sinTheta * sinTheta) + (semiB * semiB * cosTheta * cosTheta));
+        return (cx - w, cx + w, cy - h, cy + h);
+    }
 }

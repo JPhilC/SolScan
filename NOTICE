@@ -78,6 +78,24 @@ back to the original Java source, per CLAUDE.md):
     DiskGeometryCorrector's mirror/rotation pre-step) - ported without the rotateLeft step that
     precedes them in the original, since SolScan's own DiskReconstructor output doesn't need it (see
     DiskGeometryCorrector's own header comment)
+  - AutohistogramStrategy - the "AutoStretch" contrast-enhancement mode: iterative ellipse-aware
+    background neutralization, CLAHE-blended prominence handling, gamma, asinh brightness matching, and
+    an ellipse-faded contrast S-curve (SolScan.Processing.Stretching.AutoStretchStrategy) - two
+    deliberate simplifications (adjustBrightness always true; protusStretch defaults to 0, still ported
+    but short-circuited at that value since the curve is then provably the identity) - see
+    AutoStretchStrategy's own header comment
+  - ClaheStrategy, GammaStrategy, RangeExpansionStrategy, and the subset of Histogram AutoStretchStrategy
+    uses (SolScan.Processing.Stretching) - ClaheStrategy/GammaStrategy's original OpenCL/GPU paths are
+    dropped, SolScan.Processing having no such dependency
+  - BackgroundRemoval.backgroundModel's degree-2 case, combined with AutohistogramStrategy's own
+    neutralizeBg wrapper (SolScan.Processing.Shg.BackgroundNeutralizer.NeutralizeMasked) - solved via
+    the existing SolScan.Processing.Math.LinearSystem plus a ridge-regularization term matching the
+    original's own PENALTY constant, in place of Apache Commons Math
+  - Ellipse's translate/rescale/boundingBox (SolScan.Processing.Math.Ellipse) - added alongside the
+    members already ported for ellipse fitting/geometry correction
+  - Clahe.applyMultiScaleClahe/computeTileSizesForImage/computeTileSizes/multiScaleClaheChannel
+    ("CLAHE2" contrast enhancement - SolScan.Processing.Stretching.MultiScaleClaheStrategy) - the
+    original's RGBImage per-channel branch dropped, SolScan.Processing having no colour image type
 
 ================================================================================
 RASTA

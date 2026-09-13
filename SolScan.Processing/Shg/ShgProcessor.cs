@@ -2,13 +2,19 @@ using System.Threading;
 using SolScan.Core.Capture;
 using SolScan.Core.Processing;
 using SolScan.Processing.Math;
+using SolScan.Processing.Stretching;
 
 namespace SolScan.Processing.Shg;
 
 /// <summary>
 /// <see cref="IShgProcessor"/> orchestrating <see cref="FrameAverager"/> →
 /// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/> → (when
-/// <see cref="GeneratedImageKind.GeometryCorrected"/> is requested) <see cref="DiskGeometryCorrector"/>.
+/// <see cref="GeneratedImageKind.GeometryCorrected"/> or
+/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> is requested)
+/// <see cref="DiskGeometryCorrector"/> → (for the latter only) a
+/// <see cref="ContrastEnhancementMode"/>-selected stretch (<see cref="AutoStretchStrategy"/>,
+/// <see cref="ClaheStrategy"/>, or <see cref="MultiScaleClaheStrategy"/> - see
+/// <see cref="ApplyContrastEnhancement"/>).
 /// Deliberately returns pure in-memory <see cref="ProcessedImage"/> data (no file IO at all) rather
 /// than writing PNGs itself: SolScan has no existing image-file-writing anywhere, and WPF's own
 /// <c>PngBitmapEncoder</c> (already a hard dependency of SolScan.App, `PixelFormats.Gray16`
@@ -36,24 +42,21 @@ public sealed class ShgProcessor : IShgProcessor
     {
         var requested = processParams.RequestedImages;
         var skipped = new List<GeneratedImageKind>();
-        if (requested.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed))
-        {
-            // Still needs contrast enhancement (CLAHE/AutoStretch) - a genuinely separate piece of
-            // work from geometry correction itself, same "one algorithm per slice" reasoning that kept
-            // ellipse fitting its own deferred step before this. See SolScan CLAUDE.md.
-            skipped.Add(GeneratedImageKind.GeometryCorrectedProcessed);
-        }
 
         var wantsRaw = requested.IsEnabled(GeneratedImageKind.Raw);
         var wantsReconstruction = requested.IsEnabled(GeneratedImageKind.Reconstruction);
         var wantsContinuum = requested.IsEnabled(GeneratedImageKind.Continuum);
         var wantsGeometryCorrected = requested.IsEnabled(GeneratedImageKind.GeometryCorrected);
+        var wantsGeometryCorrectedProcessed = requested.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed);
+        // GeometryCorrectedProcessed's input is the geometry-corrected image itself, so it needs the
+        // same correction step run even when GeometryCorrected wasn't separately requested.
+        var needsGeometryCorrection = wantsGeometryCorrected || wantsGeometryCorrectedProcessed;
 
         var images = new List<ProcessedImage>();
         QuadraticPolynomial? polynomial = null;
         DiskGeometryCorrector.Result? geometryResult = null;
 
-        if (wantsRaw || wantsReconstruction || wantsContinuum || wantsGeometryCorrected)
+        if (wantsRaw || wantsReconstruction || wantsContinuum || needsGeometryCorrection)
         {
             using (var averagingReader = _serReaderFactory())
             {
@@ -65,7 +68,7 @@ public sealed class ShgProcessor : IShgProcessor
                 polynomial = new SpectralLineCurvatureDetector().Detect(average);
             }
 
-            if (wantsRaw || wantsReconstruction || wantsGeometryCorrected)
+            if (wantsRaw || wantsReconstruction || needsGeometryCorrection)
             {
                 using var reader = _serReaderFactory();
                 reader.Open(serFilePath);
@@ -90,13 +93,24 @@ public sealed class ShgProcessor : IShgProcessor
                     }
                 }
 
-                if (wantsGeometryCorrected)
+                if (needsGeometryCorrection)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     progress?.Report("Fitting disk ellipse and correcting geometry...");
                     var maxPixelValue = (1 << nativeBitDepth) - 1;
                     geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
-                    images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
+                    if (wantsGeometryCorrected)
+                    {
+                        images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
+                    }
+
+                    if (wantsGeometryCorrectedProcessed)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
+                        var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, processParams, maxPixelValue);
+                        images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                    }
                 }
             }
 
@@ -112,6 +126,73 @@ public sealed class ShgProcessor : IShgProcessor
 
         progress?.Report("Done.");
         return new ShgProcessingResult(images, skipped, polynomial, geometryResult?.TiltDegrees, geometryResult?.XyRatio);
+    }
+
+    /// <summary>Rescales the (native-ADC-range) geometry-corrected pixels up to the 16-bit "container"
+    /// range every ported stretching algorithm here assumes (matching astro4j's own <c>ImageWrapper32</c>
+    /// convention, and this class's own <see cref="BuildProcessedImage"/> scaling) before running the
+    /// requested <see cref="ContrastEnhancementMode"/>. Rescaling pixel <em>values</em> doesn't affect
+    /// <paramref name="ellipse"/>'s spatial coordinates, so it's passed through unchanged.</summary>
+    private static float[,] ApplyContrastEnhancement(float[,] pixels, Ellipse ellipse, ProcessParams processParams, int nativeMaxPixelValue)
+    {
+        var height = pixels.GetLength(0);
+        var width = pixels.GetLength(1);
+        var scale = 65535.0 / nativeMaxPixelValue;
+        var working = new float[height, width];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                working[y, x] = (float)(pixels[y, x] * scale);
+            }
+        }
+
+        // astro4j's own AUTO picks CLAHE for a calcium-line capture (K or H), AutoStretch otherwise -
+        // not an image-analysis "detection" at all, just a check against whichever line SpectrumParams.Ray
+        // is already set to (currently always picked by hand - see that field's own doc comment).
+        var studiedRay = processParams.SpectrumParams.Ray;
+        var isCalcium = studiedRay == SpectralRay.CalciumK || studiedRay == SpectralRay.CalciumH;
+        var mode = processParams.ContrastEnhancement;
+        var effectiveMode = mode == ContrastEnhancementMode.Auto
+            ? (isCalcium ? ContrastEnhancementMode.Clahe : ContrastEnhancementMode.AutoStretch)
+            : mode;
+        switch (effectiveMode)
+        {
+            case ContrastEnhancementMode.AutoStretch:
+                var autoStretch = processParams.AutoStretchParams;
+                AutoStretchStrategy.Stretch(working, ellipse, autoStretch.Gamma, autoStretch.BackgroundThreshold, autoStretch.ProtusStretch);
+                break;
+            case ContrastEnhancementMode.Clahe:
+                var clahe = processParams.ClaheParams;
+                new ClaheStrategy(clahe.TileSize, clahe.Bins, clahe.Clipping).Stretch(working);
+                break;
+            case ContrastEnhancementMode.Clahe2:
+                MultiScaleClaheStrategy.Stretch(working, ellipse, processParams.Clahe2Params.Clipping);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(processParams), mode, "Unhandled ContrastEnhancementMode.");
+        }
+
+        return working;
+    }
+
+    /// <summary>Like <see cref="BuildProcessedImage"/>, but for pixel data that's already in the 16-bit
+    /// container range (0-65535) - <see cref="ApplyContrastEnhancement"/>'s output - rather than needing
+    /// the native-sensor-range scale-up.</summary>
+    private static ProcessedImage BuildProcessedImageFromFullRange(GeneratedImageKind kind, float[,] pixels)
+    {
+        var height = pixels.GetLength(0);
+        var width = pixels.GetLength(1);
+        var scaled = new ushort[height, width];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                scaled[y, x] = (ushort)System.Math.Clamp(pixels[y, x], 0, 65535);
+            }
+        }
+
+        return new ProcessedImage(kind, width, height, scaled);
     }
 
     /// <summary>Scales native sensor range (<c>(1 &lt;&lt; nativeBitDepth) - 1</c>, matching

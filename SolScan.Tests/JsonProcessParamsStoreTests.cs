@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using SolScan.Core.Processing;
 using SolScan.Infrastructure.Processing;
 
@@ -32,7 +34,10 @@ public class JsonProcessParamsStoreTests
                 new RequestedImages([GeneratedImageKind.Raw, GeneratedImageKind.GeometryCorrected]),
                 new SpectrumParams(SpectralRay.CalciumK, LineDetectionMode.Manual, 1.5, 3, 15, true),
                 new GeometryParams(RotationKind.Left, AutocropMode.Radius1To2, 1900, true, false),
-                ContrastEnhancementMode.Clahe);
+                ContrastEnhancementMode.Clahe,
+                new ClaheParams(16, 128, 1.2),
+                new Clahe2Params(2.0),
+                new AutoStretchParams(1.8, 0.4, 0.5));
 
             store.Save(processParams);
 
@@ -40,6 +45,34 @@ public class JsonProcessParamsStoreTests
             // through the actual JSON file, not just an in-memory cache.
             var reloaded = new JsonProcessParamsStore(directory);
             Assert.Equal(processParams, reloaded.Load());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_BackfillsContrastTuningDefaults_WhenLoadingAnOlderFileThatPredatesThem()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            // Simulates a process-params.json written before ClaheParams/Clahe2Params/AutoStretchParams
+            // existed: serialize a real ProcessParams, then strip those three properties back out,
+            // rather than hand-typing brittle nested JSON that could drift from the real record shapes.
+            var full = JsonSerializer.SerializeToNode(ProcessParams.CreateDefault())!.AsObject();
+            full.Remove(nameof(ProcessParams.ClaheParams));
+            full.Remove(nameof(ProcessParams.Clahe2Params));
+            full.Remove(nameof(ProcessParams.AutoStretchParams));
+            File.WriteAllText(Path.Combine(directory, "process-params.json"), full.ToJsonString());
+
+            var store = new JsonProcessParamsStore(directory);
+            var loaded = store.Load();
+
+            Assert.Equal(ClaheParams.Default, loaded.ClaheParams);
+            Assert.Equal(Clahe2Params.Default, loaded.Clahe2Params);
+            Assert.Equal(AutoStretchParams.Default, loaded.AutoStretchParams);
         }
         finally
         {

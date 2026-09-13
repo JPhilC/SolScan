@@ -6,26 +6,33 @@ namespace SolScan.Core.Processing;
 
 /// <summary>
 /// Top-level processing parameters - mirrors astro4j's own 11-slot <c>ProcessParams</c> record shape,
-/// though only 4 of those slots are populated so far (the others - Observation details, Advanced,
-/// Format/Output, banding/CLAHE/AutoStretch tuning, etc. - land as later increments, at which point
-/// this record grows rather than being renamed, same reasoning as
+/// though only 7 of those slots are populated so far (the others - Observation details, Advanced,
+/// Format/Output, banding corrections, etc. - land as later increments, at which point this record
+/// grows rather than being renamed, same reasoning as
 /// <see cref="SolScan.Core.Capture.AppSettings"/>'s own doc comment about optional trailing
-/// parameters). Edited across three Options tabs (Process
-/// Parameters, Image Enhancement, Image Selection) but persisted as one record - see
-/// <c>OptionsViewModel.Save</c> for how the three tabs' edits get reassembled into a single call to
-/// <see cref="IProcessParamsStore.Save"/>.
+/// parameters). Edited directly on the Process view (a right-hand panel of Expanders wrapping
+/// <c>ProcessParametersView</c>/<c>ImageEnhancementView</c>/<c>ImageSelectionView</c> - moved there from
+/// Options, which used to own this record's editing) but persisted as one record - see
+/// <c>ProcessViewModel</c>'s own doc comment for how its three child view models' edits get
+/// auto-saved (debounced) into a single call to <see cref="IProcessParamsStore.Save"/>.
 /// </summary>
 public sealed record ProcessParams(
     RequestedImages RequestedImages,
     SpectrumParams SpectrumParams,
     GeometryParams GeometryParams,
-    ContrastEnhancementMode ContrastEnhancement)
+    ContrastEnhancementMode ContrastEnhancement,
+    ClaheParams ClaheParams,
+    Clahe2Params Clahe2Params,
+    AutoStretchParams AutoStretchParams)
 {
     public static ProcessParams CreateDefault() => new(
         RequestedImages.Default,
         SpectrumParams.Default,
         GeometryParams.Default,
-        ContrastEnhancementMode.Auto);
+        ContrastEnhancementMode.Auto,
+        ClaheParams.Default,
+        Clahe2Params.Default,
+        AutoStretchParams.Default);
 }
 
 /// <summary>

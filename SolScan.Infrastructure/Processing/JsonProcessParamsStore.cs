@@ -35,7 +35,8 @@ public sealed class JsonProcessParamsStore : IProcessParamsStore
         try
         {
             using var stream = File.OpenRead(_file);
-            return JsonSerializer.Deserialize<ProcessParams>(stream, SerializerOptions) ?? ProcessParams.CreateDefault();
+            var loaded = JsonSerializer.Deserialize<ProcessParams>(stream, SerializerOptions) ?? ProcessParams.CreateDefault();
+            return BackfillMissingDefaults(loaded);
         }
         catch (JsonException)
         {
@@ -43,6 +44,20 @@ public sealed class JsonProcessParamsStore : IProcessParamsStore
             return ProcessParams.CreateDefault();
         }
     }
+
+    /// <summary>A file written before <see cref="ProcessParams.ClaheParams"/>/<see cref="ProcessParams.Clahe2Params"/>/
+    /// <see cref="ProcessParams.AutoStretchParams"/> existed deserializes those three properties as
+    /// <see langword="null"/>, despite their non-nullable declared types - <c>System.Text.Json</c> hands
+    /// a missing constructor parameter the CLR default regardless of C# nullability annotations, and
+    /// (unlike <see cref="Capture.AppSettings"/>'s primitive fields) a nested record's default can't be
+    /// a compile-time-constant optional-parameter default. Backfill each with its own real default
+    /// rather than letting a null through to code that assumes these are always populated.</summary>
+    private static ProcessParams BackfillMissingDefaults(ProcessParams loaded) => loaded with
+    {
+        ClaheParams = loaded.ClaheParams ?? ClaheParams.Default,
+        Clahe2Params = loaded.Clahe2Params ?? Clahe2Params.Default,
+        AutoStretchParams = loaded.AutoStretchParams ?? AutoStretchParams.Default,
+    };
 
     public void Save(ProcessParams processParams)
     {

@@ -120,8 +120,12 @@ public class DiskGeometryCorrectorTests
         }
     }
 
-    [Fact]
-    public async Task ProcessAsync_GeometryCorrectedProcessed_IsStillReportedAsSkipped()
+    [Theory]
+    [InlineData(ContrastEnhancementMode.Auto)]
+    [InlineData(ContrastEnhancementMode.AutoStretch)]
+    [InlineData(ContrastEnhancementMode.Clahe)]
+    [InlineData(ContrastEnhancementMode.Clahe2)]
+    public async Task ProcessAsync_GeometryCorrectedProcessed_ProducesARealContrastEnhancedImage(ContrastEnhancementMode mode)
     {
         const int width = 72;
         const int frameCount = 64;
@@ -137,13 +141,142 @@ public class DiskGeometryCorrectorTests
             var processParams = ProcessParams.CreateDefault() with
             {
                 RequestedImages = new RequestedImages([GeneratedImageKind.GeometryCorrectedProcessed]),
+                ContrastEnhancement = mode,
             };
 
             var result = await processor.ProcessAsync(path, processParams);
 
-            Assert.Empty(result.Images);
-            var skipped = Assert.Single(result.SkippedKinds);
-            Assert.Equal(GeneratedImageKind.GeometryCorrectedProcessed, skipped);
+            Assert.Empty(result.SkippedKinds);
+            var processed = Assert.Single(result.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+            Assert.True(processed.Width > 0);
+            Assert.True(processed.Height > 0);
+
+            // A real stretch should leave most of the (non-background-black-point) frame non-zero and
+            // should actually use a meaningful chunk of the 16-bit output range, not collapse everything
+            // to a narrow band - loose sanity checks, not exact-value checks, since the algorithms
+            // themselves already have their own dedicated unit tests.
+            var nonZeroCount = 0;
+            ushort max = 0;
+            var total = processed.Width * processed.Height;
+            for (var y = 0; y < processed.Height; y++)
+            {
+                for (var x = 0; x < processed.Width; x++)
+                {
+                    var v = processed.Pixels[y, x];
+                    if (v > 0)
+                    {
+                        nonZeroCount++;
+                    }
+
+                    max = Math.Max(max, v);
+                }
+            }
+
+            Assert.True(nonZeroCount > total / 4, $"Expected most of a {processed.Width}x{processed.Height} contrast-enhanced image to be non-zero, but only {nonZeroCount}/{total} pixels were.");
+            Assert.True(max > 20000, $"Expected the contrast-enhanced image to use a meaningful part of the 16-bit range, but its max was only {max}.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(ContrastEnhancementMode.AutoStretch)]
+    [InlineData(ContrastEnhancementMode.Clahe)]
+    [InlineData(ContrastEnhancementMode.Clahe2)]
+    public async Task ProcessAsync_GeometryCorrectedProcessed_NonDefaultTuningParams_ActuallyChangeTheOutput(ContrastEnhancementMode mode)
+    {
+        // Proves the ClaheParams/Clahe2Params/AutoStretchParams plumbing added for the Process view's
+        // new tuning UI is real - a non-default value threaded all the way through ShgProcessor should
+        // produce a genuinely different image, not the same default-tuned output regardless of what's
+        // passed in.
+        const int width = 72;
+        const int frameCount = 64;
+        const int height = 24;
+        const int lineRow = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticDiskFile(path, width, height, frameCount, lineRow);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var requested = new RequestedImages([GeneratedImageKind.GeometryCorrectedProcessed]);
+            var defaultParams = ProcessParams.CreateDefault() with
+            {
+                RequestedImages = requested,
+                ContrastEnhancement = mode,
+            };
+            var tunedParams = defaultParams with
+            {
+                ClaheParams = new ClaheParams(32, 256, 2.5),
+                Clahe2Params = new Clahe2Params(4.0),
+                AutoStretchParams = new AutoStretchParams(3.0, 0.9, 2.0),
+            };
+
+            var defaultResult = await processor.ProcessAsync(path, defaultParams);
+            var tunedResult = await processor.ProcessAsync(path, tunedParams);
+
+            var defaultImage = Assert.Single(defaultResult.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+            var tunedImage = Assert.Single(tunedResult.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+            Assert.NotEqual(defaultImage.Pixels, tunedImage.Pixels);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("CalciumK")]
+    [InlineData("CalciumH")]
+    public async Task ProcessAsync_GeometryCorrectedProcessed_Auto_RoutesACalciumLineCaptureToClaheNotAutoStretch(string rayName)
+    {
+        // astro4j's own AUTO isn't an image-analysis "detection" - it just checks whichever line
+        // SpectrumParams.Ray is already set to. A calcium K/H capture should come back byte-for-byte
+        // identical to an explicit Clahe request (not AutoStretch) on the same input.
+        const int width = 72;
+        const int frameCount = 64;
+        const int height = 24;
+        const int lineRow = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+        var ray = rayName == "CalciumK" ? SpectralRay.CalciumK : SpectralRay.CalciumH;
+
+        try
+        {
+            WriteSyntheticDiskFile(path, width, height, frameCount, lineRow);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var defaults = ProcessParams.CreateDefault();
+            var requested = new RequestedImages([GeneratedImageKind.GeometryCorrectedProcessed]);
+            var spectrumParams = defaults.SpectrumParams with { Ray = ray };
+
+            var autoResult = await processor.ProcessAsync(path, defaults with
+            {
+                RequestedImages = requested,
+                SpectrumParams = spectrumParams,
+                ContrastEnhancement = ContrastEnhancementMode.Auto,
+            });
+            var claheResult = await processor.ProcessAsync(path, defaults with
+            {
+                RequestedImages = requested,
+                SpectrumParams = spectrumParams,
+                ContrastEnhancement = ContrastEnhancementMode.Clahe,
+            });
+            var autoStretchResult = await processor.ProcessAsync(path, defaults with
+            {
+                RequestedImages = requested,
+                SpectrumParams = spectrumParams,
+                ContrastEnhancement = ContrastEnhancementMode.AutoStretch,
+            });
+
+            var autoImage = Assert.Single(autoResult.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+            var claheImage = Assert.Single(claheResult.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+            var autoStretchImage = Assert.Single(autoStretchResult.Images, i => i.Kind == GeneratedImageKind.GeometryCorrectedProcessed);
+
+            Assert.Equal(claheImage.Pixels, autoImage.Pixels);
+            Assert.NotEqual(autoStretchImage.Pixels, autoImage.Pixels);
         }
         finally
         {

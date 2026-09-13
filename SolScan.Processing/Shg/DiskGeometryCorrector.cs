@@ -28,12 +28,18 @@ public static class DiskGeometryCorrector
     /// <param name="Pixels">The corrected (and possibly cropped) image.</param>
     /// <param name="DetectedEllipse">The ellipse fitted to the disk, in the oriented-but-uncorrected
     /// image's coordinate system - before the shear/scale warp, not after.</param>
+    /// <param name="CorrectedEllipse">The disk's ellipse re-expressed in <paramref name="Pixels"/>'s own
+    /// coordinate system - after the shear/scale warp <em>and</em> any autocrop, unlike
+    /// <paramref name="DetectedEllipse"/> - via <see cref="GeometryResampler.ComputeCorrectedCircle"/>
+    /// plus (when cropped) an <see cref="Ellipse.Translate"/> by the crop's own origin. What
+    /// <see cref="SolScan.Processing.Stretching.AutoStretchStrategy"/> needs to know where the disk
+    /// actually sits in the image it's asked to stretch.</param>
     /// <param name="TiltDegrees">The tilt angle the correction removed, in degrees - astro4j's own
     /// "detected geometry" info-panel figure (<c>GeometryDetectedEvent.tiltDegrees</c>); SolScan has
     /// no such panel yet, but the value costs nothing extra to carry for when it does.</param>
     /// <param name="XyRatio">The X/Y aspect ratio the correction detected (before any override -
     /// SolScan's trimmed <c>GeometryParams</c> has none yet) - the other half of that same info panel.</param>
-    public readonly record struct Result(float[,] Pixels, Ellipse DetectedEllipse, double TiltDegrees, double XyRatio);
+    public readonly record struct Result(float[,] Pixels, Ellipse DetectedEllipse, Ellipse CorrectedEllipse, double TiltDegrees, double XyRatio);
 
     /// <exception cref="InvalidOperationException">The disk's edge couldn't be fitted with an ellipse
     /// (see <see cref="DiskEdgeDetector.Detect"/>) - reported rather than silently skipped or faked,
@@ -55,44 +61,54 @@ public static class DiskGeometryCorrector
 
         var corrected = GeometryResampler.ApplyCorrection(oriented, transform, blackPoint, maxPixelValue);
         var correctedCircle = GeometryResampler.ComputeCorrectedCircle(ellipse, transform);
-        corrected = ApplyAutocrop(corrected, correctedCircle, geometryParams, blackPoint, width);
+        var (finalImage, finalEllipse) = ApplyAutocrop(corrected, correctedCircle, geometryParams, blackPoint, width);
 
         var tiltDegrees = transform.Theta / System.Math.PI * 180;
-        return new Result(corrected, ellipse, tiltDegrees, transform.DetectedRatio);
+        return new Result(finalImage, ellipse, finalEllipse, tiltDegrees, transform.DetectedRatio);
     }
 
-    private static float[,] ApplyAutocrop(float[,] image, Ellipse correctedCircle, GeometryParams geometryParams, float blackPoint, int sourceWidth)
+    private static (float[,] Image, Ellipse Ellipse) ApplyAutocrop(float[,] image, Ellipse correctedCircle, GeometryParams geometryParams, float blackPoint, int sourceWidth)
     {
         const int rounding = 16;
         return geometryParams.AutocropMode switch
         {
-            AutocropMode.Off => image,
-            AutocropMode.Radius1To1 => DiskCropper.CropToSquare(image, correctedCircle, blackPoint, 1.1, rounding).Cropped,
-            AutocropMode.Radius1To2 => DiskCropper.CropToSquare(image, correctedCircle, blackPoint, 1.2, rounding).Cropped,
-            AutocropMode.Radius1To5 => DiskCropper.CropToSquare(image, correctedCircle, blackPoint, 1.5, rounding).Cropped,
+            AutocropMode.Off => (image, correctedCircle),
+            AutocropMode.Radius1To1 => CropSquare(image, correctedCircle, blackPoint, 1.1, rounding),
+            AutocropMode.Radius1To2 => CropSquare(image, correctedCircle, blackPoint, 1.2, rounding),
+            AutocropMode.Radius1To5 => CropSquare(image, correctedCircle, blackPoint, 1.5, rounding),
             AutocropMode.SourceWidth => CropToSourceWidthIfItFits(image, correctedCircle, blackPoint, sourceWidth),
             AutocropMode.FixedWidth => CropToFixedWidth(image, correctedCircle, blackPoint, geometryParams.FixedWidth ?? 1024),
-            _ => image,
+            _ => (image, correctedCircle),
         };
+    }
+
+    private static (float[,], Ellipse) CropSquare(float[,] image, Ellipse correctedCircle, float blackPoint, double diameterFactor, int rounding)
+    {
+        var result = DiskCropper.CropToSquare(image, correctedCircle, blackPoint, diameterFactor, rounding);
+        return (result.Cropped, correctedCircle.Translate(-result.OriginX, -result.OriginY));
     }
 
     /// <summary>Only crops if a square of the source width actually fits centred on the disk -
     /// otherwise leaves the image uncropped rather than cutting into the disk itself, matching
     /// astro4j's own "destructive.cannot.crop" guard.</summary>
-    private static float[,] CropToSourceWidthIfItFits(float[,] image, Ellipse correctedCircle, float blackPoint, int targetWidth)
+    private static (float[,], Ellipse) CropToSourceWidthIfItFits(float[,] image, Ellipse correctedCircle, float blackPoint, int targetWidth)
     {
         var (cx, cy) = correctedCircle.Center();
         var halfWidth = targetWidth / 2.0;
         if (cx - halfWidth < 0 || cy - halfWidth < 0 || cx + halfWidth > targetWidth || cy + halfWidth > targetWidth)
         {
-            return image;
+            return (image, correctedCircle);
         }
 
-        return DiskCropper.CropToRectangle(image, correctedCircle, blackPoint, targetWidth, targetWidth).Cropped;
+        var result = DiskCropper.CropToRectangle(image, correctedCircle, blackPoint, targetWidth, targetWidth);
+        return (result.Cropped, correctedCircle.Translate(-result.OriginX, -result.OriginY));
     }
 
-    private static float[,] CropToFixedWidth(float[,] image, Ellipse correctedCircle, float blackPoint, int fixedWidth) =>
-        DiskCropper.CropToRectangle(image, correctedCircle, blackPoint, fixedWidth, fixedWidth).Cropped;
+    private static (float[,], Ellipse) CropToFixedWidth(float[,] image, Ellipse correctedCircle, float blackPoint, int fixedWidth)
+    {
+        var result = DiskCropper.CropToRectangle(image, correctedCircle, blackPoint, fixedWidth, fixedWidth);
+        return (result.Cropped, correctedCircle.Translate(-result.OriginX, -result.OriginY));
+    }
 
     /// <summary>Exact pixel permutation, matching astro4j's own <c>maybePerformFlips</c> (horizontal =
     /// mirror the spatial/x axis, vertical = mirror the scan/y axis) - a no-op copy when neither flag

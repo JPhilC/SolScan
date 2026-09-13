@@ -6,10 +6,10 @@ namespace SolScan.Core.Processing;
 
 /// <summary>Which contrast-enhancement method to apply to a "processed" output image - ported from
 /// astro4j's <c>ContrastEnhancement</c> enum (renamed here to avoid a type/property name collision
-/// with the <see cref="ProcessParams.ContrastEnhancement"/> field that holds it). Only the method
-/// choice itself is carried for now - the CLAHE/AutoStretch tuning parameters each method takes in
-/// JSolex (tile size, clip limit, gamma, ...) aren't ported yet; a real pipeline would use sensible
-/// built-in defaults for those until then.</summary>
+/// with the <see cref="ProcessParams.ContrastEnhancement"/> field that holds it). The method's own
+/// tuning parameters (tile size/bins/clip limit for CLAHE, clip limit for CLAHE2, gamma/background
+/// threshold/prominence stretch for AutoStretch) live alongside this choice on <see cref="ProcessParams"/>
+/// as <see cref="ClaheParams"/>/<see cref="Clahe2Params"/>/<see cref="AutoStretchParams"/>.</summary>
 public enum ContrastEnhancementMode
 {
     Auto,

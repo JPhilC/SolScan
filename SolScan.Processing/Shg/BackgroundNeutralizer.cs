@@ -1,10 +1,16 @@
 // Adapted from astro4j's jsolex-core/src/main/java/me/champeau/a4j/jsolex/processing/sun/BackgroundRemoval.java
-// (`blindBackgroundNeutralization`/`removeZeroPixels`, Apache License, Version 2.0:
-// http://www.apache.org/licenses/LICENSE-2.0). See SolScan's NOTICE file for full attribution.
-// Trimmed to the `ellipse == null` code path - the only one DiskEdgeDetector's first-fit (there's no
-// ellipse yet to know about) ever exercises - and uses SolScan.Processing.Math.LinearSystem's plain
-// Gaussian elimination in place of Apache Commons Math's OLSMultipleLinearRegression, since
-// SolScan.Processing has no such dependency.
+// (`blindBackgroundNeutralization`/`removeZeroPixels`/`backgroundModel`, and
+// stretching/AutohistogramStrategy.java's `neutralizeBg` wrapper around it - Apache License,
+// Version 2.0: http://www.apache.org/licenses/LICENSE-2.0). See SolScan's NOTICE file for full
+// attribution. `BlindNeutralize` is trimmed to the `ellipse == null` code path - the only one
+// DiskEdgeDetector's first-fit (there's no ellipse yet to know about) ever exercises.
+// `NeutralizeMasked` (added for AutoStretchStrategy) is a from-scratch reimplementation of
+// `backgroundModel`'s degree-2 case + `neutralizeBg` combined - degree hardcoded to 2 (the only value
+// either of `neutralizeBg`'s two real call sites in AutohistogramStrategy ever pass), and the
+// subtraction-exclusion ellipse parameter dropped (both call sites always pass `null` for it - see
+// AutoStretchStrategy's own header comment) - both use SolScan.Processing.Math.LinearSystem's plain
+// Gaussian elimination, with a small ridge-regularization term matching the original's own `PENALTY`,
+// in place of Apache Commons Math's OLSMultipleLinearRegression/LUDecomposition.
 
 using SolScan.Processing.Math;
 
@@ -108,8 +114,12 @@ public static class BackgroundNeutralizer
     /// <summary>Ordinary least squares for <c>value ~ c0 + c1*x + c2*y + c3*x^2 + c4*y^2 + c5*x*y</c>,
     /// via the normal equations (accumulated directly as sums of term products, same "no generic
     /// design-matrix type" style as <see cref="EllipseRegression"/>) solved by
-    /// <see cref="LinearSystem.Solve"/>.</summary>
-    private static double[]? FitBackgroundModel(List<(double X, double Y, double Value)> samples)
+    /// <see cref="LinearSystem.Solve"/>. <paramref name="ridgePenalty"/> is added to the normal matrix's
+    /// diagonal before solving - 0 for <see cref="BlindNeutralize"/>'s own fit, matching astro4j's own
+    /// <c>OLSMultipleLinearRegression</c> call (no regularization there); a small positive value for
+    /// <see cref="NeutralizeMasked"/>'s, matching astro4j's own <c>backgroundModel</c> (which always
+    /// regularizes, <c>PENALTY = 1e-6</c>).</summary>
+    private static double[]? FitBackgroundModel(List<(double X, double Y, double Value)> samples, double ridgePenalty = 0)
     {
         var normalMatrix = new double[6, 6];
         var normalVector = new double[6];
@@ -126,7 +136,109 @@ public static class BackgroundNeutralizer
             }
         }
 
+        if (ridgePenalty != 0)
+        {
+            for (var i = 0; i < 6; i++)
+            {
+                normalMatrix[i, i] += ridgePenalty;
+            }
+        }
+
         return LinearSystem.Solve(normalMatrix, normalVector);
+    }
+
+    /// <summary>Fits a 2nd-order polynomial background model to pixels outside
+    /// <paramref name="excludeFromSampling"/> (the whole image, if null), with sigma-clipped outlier
+    /// rejection on the sampled values, then subtracts <paramref name="smoothing"/> times that model
+    /// from every pixel (including inside the exclusion ellipse - see this type's own header comment
+    /// for why that matches the original's real behaviour rather than an oversight). Used by
+    /// <c>AutoStretchStrategy</c>'s iterative background-neutralization pass, which knows where the
+    /// disk is (unlike <see cref="BlindNeutralize"/>'s "no ellipse yet" situation) and wants to remove
+    /// only a fraction of the modeled background per call, not all of it in one shot.</summary>
+    /// <returns>The fitted model's average value over the whole image, or 0 if too few samples survived
+    /// sigma-clipping to fit at all.</returns>
+    public static double NeutralizeMasked(float[,] image, Ellipse? excludeFromSampling, double sigma, float smoothing, double maxPixelValue, float[,] backgroundBuffer)
+    {
+        var height = image.GetLength(0);
+        var width = image.GetLength(1);
+        var widthNorm = (double)System.Math.Max(1, width - 1);
+        var heightNorm = (double)System.Math.Max(1, height - 1);
+        var step = System.Math.Max(1, System.Math.Max(width, height) / 32);
+
+        var samples = new List<(double X, double Y, double Value)>();
+        for (var y = 0; y < height; y += step)
+        {
+            for (var x = 0; x < width; x += step)
+            {
+                if (excludeFromSampling is { } ellipse && ellipse.IsWithin(x, y))
+                {
+                    continue;
+                }
+
+                samples.Add((x / widthNorm, y / heightNorm, image[y, x]));
+            }
+        }
+
+        if (samples.Count == 0)
+        {
+            return 0;
+        }
+
+        var mean = 0.0;
+        foreach (var s in samples)
+        {
+            mean += s.Value;
+        }
+
+        mean /= samples.Count;
+        var varianceSum = 0.0;
+        foreach (var s in samples)
+        {
+            varianceSum += (s.Value - mean) * (s.Value - mean);
+        }
+
+        var stddev = System.Math.Sqrt(varianceSum / System.Math.Max(1, samples.Count - 1));
+        var hiThreshold = mean + (stddev * sigma);
+        var loThreshold = mean - (stddev * sigma);
+
+        const int numTerms = 6;
+        var filtered = new List<(double X, double Y, double Value)>(samples.Count);
+        foreach (var s in samples)
+        {
+            if (s.Value > 0 && s.Value < hiThreshold && s.Value > loThreshold)
+            {
+                filtered.Add(s);
+            }
+        }
+
+        if (filtered.Count < numTerms)
+        {
+            return 0;
+        }
+
+        var coefficients = FitBackgroundModel(filtered, ridgePenalty: 1e-6);
+        if (coefficients is null)
+        {
+            return 0;
+        }
+
+        double backgroundSum = 0;
+        for (var y = 0; y < height; y++)
+        {
+            var yNorm = y / heightNorm;
+            for (var x = 0; x < width; x++)
+            {
+                var xNorm = x / widthNorm;
+                var estimated = coefficients[0] + (coefficients[1] * xNorm) + (coefficients[2] * yNorm)
+                    + (coefficients[3] * xNorm * xNorm) + (coefficients[4] * yNorm * yNorm) + (coefficients[5] * xNorm * yNorm);
+                estimated = System.Math.Clamp(estimated, 0, maxPixelValue);
+                backgroundBuffer[y, x] = (float)estimated;
+                backgroundSum += estimated;
+                image[y, x] = (float)System.Math.Clamp(image[y, x] - (smoothing * estimated), 0, maxPixelValue);
+            }
+        }
+
+        return backgroundSum / (width * (double)height);
     }
 
     /// <summary>Replaces zero-valued pixels with the image's own minimum non-zero value, to avoid
