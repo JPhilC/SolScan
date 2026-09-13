@@ -4,10 +4,10 @@ using SolScan.Core.Processing;
 namespace SolScan.App.ViewModels.Processing;
 
 /// <summary>
-/// Options > Image Selection tab - the "Basic Images" checklist from astro4j's "Image Selection and
-/// Scripts" page (Advanced Images/Debug Options/Custom Images/scripts/presets are all out of scope
-/// for now - see SolScan CLAUDE.md). No store access of its own - see
-/// <see cref="ProcessParametersViewModel"/>'s doc comment for why.
+/// Process view's "Image Selection" section (moved here from the old Options tab of the same name) -
+/// the "Basic Images" checklist from astro4j's "Image Selection and Scripts" page (Advanced Images/
+/// Debug Options/Custom Images/scripts/presets are all out of scope for now - see SolScan CLAUDE.md).
+/// No store access of its own - see <see cref="ProcessParametersViewModel"/>'s doc comment for why.
 /// </summary>
 public partial class ImageSelectionViewModel : ObservableObject
 {

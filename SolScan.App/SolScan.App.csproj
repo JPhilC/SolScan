@@ -46,6 +46,13 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <!-- Just for ProcessView's right-hand drawer (md:DrawerHost + the hamburger-toggle style) -
+         same library/version GSServer uses for its own hamburger drawers (C:\Source\Repos\JPhilC\GSServer),
+         mirrored here rather than hand-rolling an equivalent slide-in panel. Its resource dictionaries
+         are merged into ProcessView.xaml's own UserControl.Resources, not App.xaml, so this stays
+         scoped to that one view rather than reskinning every other view in the app. -->
+    <PackageReference Include="MaterialDesignThemes" Version="4.8.0" />
+    <PackageReference Include="MaterialDesignColors" Version="2.1.4" />
   </ItemGroup>
 
   <ItemGroup>

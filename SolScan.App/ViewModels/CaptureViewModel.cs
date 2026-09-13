@@ -258,6 +258,14 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private bool isReticuleExpanded = true;
 
+    /// <summary>Whether the right-hand drawer (Capture Settings/Camera Settings/Histogram/Focus Aid/
+    /// Reticule/Display Settings) is open - Start/Stop Recording and the frame counts live outside it,
+    /// directly on the main view, so they stay visible/usable regardless of this. See
+    /// AppSettings.CaptureOptionsPanelExpanded and CaptureView.xaml's own doc comment for the mechanism
+    /// (md:DrawerHost, same pattern ProcessView.xaml uses).</summary>
+    [ObservableProperty]
+    private bool isCaptureOptionsPanelExpanded = true;
+
     /// <summary>Fixed (non-zoom-scaling) horizontal/vertical crosshair overlay - drawn by
     /// CaptureView.xaml.cs's ReticuleOverlay directly over the preview viewport, not inside the
     /// zoomed/scrolled Image itself, so it always renders as thin on-screen lines regardless of
@@ -423,6 +431,7 @@ public partial class CaptureViewModel : ObservableObject
         isDisplaySettingsExpanded = savedAppSettings.DisplaySettingsExpanded;
         isFocusAidExpanded = savedAppSettings.FocusAidExpanded;
         isReticuleExpanded = savedAppSettings.ReticuleExpanded;
+        isCaptureOptionsPanelExpanded = savedAppSettings.CaptureOptionsPanelExpanded;
         showCrosshairReticule = savedAppSettings.ShowCrosshairReticule;
         showRotationReticule = savedAppSettings.ShowRotationReticule;
         reticuleAngleDegrees = savedAppSettings.ReticuleAngleDegrees;
@@ -1180,6 +1189,9 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnIsReticuleExpandedChanged(bool value) =>
         PersistAppSetting(s => s with { ReticuleExpanded = value });
+
+    partial void OnIsCaptureOptionsPanelExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { CaptureOptionsPanelExpanded = value });
 
     // Reticule toggles/angle/inset - a UI display preference with nothing to do with which camera is
     // connected (the overlay is pure on-screen geometry, see CaptureView.xaml.cs's ReticuleOverlay),

@@ -4,13 +4,15 @@ using SolScan.Core.Processing;
 namespace SolScan.App.ViewModels.Processing;
 
 /// <summary>
-/// Options > Process Parameters tab: which spectral line is being studied and how its pixel shifts/
-/// geometry are set up - the slice of astro4j's "Process parameters" dialog page SolScan needs for
-/// its Basic Images to mean something (see <see cref="SpectrumParams"/>/<see cref="GeometryParams"/>'s
-/// own doc comments for what's deliberately not ported yet). No store access of its own - seeded from
-/// a <see cref="ProcessParams"/> passed in by <see cref="OptionsViewModel"/>, and read back out via
-/// <see cref="ToSpectrumParams"/>/<see cref="ToGeometryParams"/> when <c>OptionsViewModel.Save</c>
-/// reassembles the single persisted record all three new tabs share.
+/// Process view's "Process Parameters" section: which spectral line is being studied and how its pixel
+/// shifts/geometry are set up - the slice of astro4j's "Process parameters" dialog page SolScan needs
+/// for its Basic Images to mean something (see <see cref="SpectrumParams"/>/<see cref="GeometryParams"/>'s
+/// own doc comments for what's deliberately not ported yet). No store access of its own - seeded from a
+/// <see cref="ProcessParams"/> passed in by <c>ProcessViewModel</c> (moved here from the old Options
+/// tab of the same name), and read back out via <see cref="ToSpectrumParams"/>/<see cref="ToGeometryParams"/>
+/// when <c>ProcessViewModel</c>'s debounced auto-save reassembles the single persisted record this and
+/// its two sibling view models (<see cref="ImageEnhancementViewModel"/>/<c>ImageSelectionViewModel</c>)
+/// share.
 /// </summary>
 public partial class ProcessParametersViewModel : ObservableObject
 {

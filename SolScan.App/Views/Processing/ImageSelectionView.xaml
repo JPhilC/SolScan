@@ -8,10 +8,15 @@
         <TextBlock Text="Basic Images" FontWeight="Bold"/>
         <TextBlock Text="Which built-in output images to generate. Advanced Images, Debug Options and custom ImageMath scripts aren't ported yet."
                    Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
-        <CheckBox Content="Raw image" IsChecked="{Binding IsRawSelected}" Margin="0,0,0,4"/>
-        <CheckBox Content="Reconstruction (progressive)" IsChecked="{Binding IsReconstructionSelected}" Margin="0,0,0,4"/>
-        <CheckBox Content="Continuum" IsChecked="{Binding IsContinuumSelected}" Margin="0,0,0,4"/>
-        <CheckBox Content="Geometry corrected image" IsChecked="{Binding IsGeometryCorrectedSelected}" Margin="0,0,0,4"/>
-        <CheckBox Content="Geometry corrected image (processed)" IsChecked="{Binding IsGeometryCorrectedProcessedSelected}"/>
+        <CheckBox Content="Raw image" IsChecked="{Binding IsRawSelected}" Margin="0,0,0,4"
+                  ToolTip="The disk reconstructed at the pixel shift chosen in Process Parameters, straight off the SER capture - no geometry correction, no contrast enhancement. What the disk actually looked like to the sensor, tilt and all."/>
+        <CheckBox Content="Reconstruction (progressive)" IsChecked="{Binding IsReconstructionSelected}" Margin="0,0,0,4"
+                  ToolTip="Currently saved as an identical copy of the Raw image. In JSolex this is a separate live-updating preview built up scan-line by scan-line as the capture is read; SolScan has no live progress view yet to make that distinction meaningful."/>
+        <CheckBox Content="Continuum" IsChecked="{Binding IsContinuumSelected}" Margin="0,0,0,4"
+                  ToolTip="The disk reconstructed at the Continuum pixel shift from Process Parameters - far enough from the studied line's own core to look like an ordinary white-light image rather than showing the line's absorption feature."/>
+        <CheckBox Content="Geometry corrected image" IsChecked="{Binding IsGeometryCorrectedSelected}" Margin="0,0,0,4"
+                  ToolTip="The Raw reconstruction with tilt/aspect-ratio distortion corrected and the disk warped circular (see the Rotation/Autocrop/Mirror settings in Process Parameters). Real optics rarely deliver a perfectly upright, circular disk straight off the sensor - the slit's alignment and the scan speed both leave their own mark on the raw image's geometry."/>
+        <CheckBox Content="Geometry corrected image (processed)" IsChecked="{Binding IsGeometryCorrectedProcessedSelected}"
+                  ToolTip="The geometry-corrected image with contrast enhancement applied (see the Image Enhancement tab) - usually the one you actually want to look at, since the other four images are all deliberately unenhanced intermediate steps."/>
     </StackPanel>
 </UserControl>

@@ -53,6 +53,18 @@ namespace SolScan.Core.Capture;
 /// slit's two edges to these lines.</param>
 /// <param name="ReticuleInsetPixels">How far in from the preview viewport's left/right edges the two
 /// rotation-guide lines sit, in on-screen pixels (not scaled by zoom, same as the lines themselves).</param>
+/// <param name="ProcessOptionsPanelExpanded">Whether ProcessView.xaml's right-hand panel (Process
+/// Parameters/Image Enhancement/Image Selection, moved there from Options) is docked open or collapsed
+/// to give the image preview the full window width - same "remembered across sessions" rationale as
+/// <see cref="CaptureSettingsExpanded"/>, defaulting to true (open) for the same reason.</param>
+/// <param name="ProcessParametersExpanded">Whether that panel's own "Process Parameters" Expander is
+/// open. Same idea as <see cref="CaptureSettingsExpanded"/>, just for the Process view's panel.</param>
+/// <param name="ProcessImageEnhancementExpanded">Same idea, the "Image Enhancement" Expander.</param>
+/// <param name="ProcessImageSelectionExpanded">Same idea, the "Image Selection" Expander.</param>
+/// <param name="CaptureOptionsPanelExpanded">Whether CaptureView.xaml's own right-hand drawer (Capture
+/// Settings/Camera Settings/Histogram/Focus Aid/Reticule/Display Settings - Start/Stop Recording and
+/// the frame counts stay on the main view, not in the drawer) is open - same idea as
+/// <see cref="ProcessOptionsPanelExpanded"/>, just for Capture's own drawer.</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -70,7 +82,12 @@ public sealed record AppSettings(
     bool ShowCrosshairReticule = false,
     bool ShowRotationReticule = false,
     double ReticuleAngleDegrees = 0,
-    double ReticuleInsetPixels = 60);
+    double ReticuleInsetPixels = 60,
+    bool ProcessOptionsPanelExpanded = true,
+    bool ProcessParametersExpanded = true,
+    bool ProcessImageEnhancementExpanded = true,
+    bool ProcessImageSelectionExpanded = true,
+    bool CaptureOptionsPanelExpanded = true);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

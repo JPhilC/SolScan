@@ -4,9 +4,11 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using SolScan.App.ViewModels.Processing;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Processing;
@@ -16,12 +18,12 @@ namespace SolScan.App.ViewModels;
 
 /// <summary>
 /// Process stage: pick a finished SER capture, inspect its header/equipment metadata, and run it
-/// through <see cref="IShgProcessor"/> - real spectral-line-curvature detection, reconstruction, and
-/// disk-edge ellipse fitting/geometry correction (see <see cref="ShgProcessor"/>'s own doc comment),
-/// producing real Raw/Reconstruction/Continuum/GeometryCorrected output images.
-/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> still needs contrast enhancement, a
-/// separate piece of work not built yet - requesting it is reported back as "not yet implemented"
-/// rather than silently skipped. Processing is manual (click Process) rather than automatic-on-capture-finish
+/// through <see cref="IShgProcessor"/> - real spectral-line-curvature detection, reconstruction,
+/// disk-edge ellipse fitting/geometry correction, and (for
+/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>) every <see cref="ContrastEnhancementMode"/>
+/// (see <see cref="ShgProcessor"/>'s own doc comment), producing real Raw/Reconstruction/Continuum/
+/// GeometryCorrected/GeometryCorrectedProcessed output images. Processing is manual (click Process)
+/// rather than automatic-on-capture-finish
 /// - see CaptureViewModel for where that recording-finished moment currently has no hook to drive
 /// from; that's real future work per SolScan CLAUDE.md's Phase 7.
 ///
@@ -37,6 +39,21 @@ namespace SolScan.App.ViewModels;
 /// same histogram/auto-stretch math the live Capture preview already uses - since the saved PNGs are
 /// deliberately unstretched real sensor-scale values (see <see cref="ShgProcessor"/>'s own doc
 /// comment) that would look flat/washed shown directly.
+///
+/// <see cref="ProcessParameters"/>/<see cref="ImageEnhancement"/>/<see cref="ImageSelection"/> - the
+/// three views that used to be Options tabs editing one shared <see cref="ProcessParams"/> via an
+/// explicit Save button (see <c>OptionsViewModel</c>'s own former doc comment) - now live directly on
+/// this view instead, as a dockable right-hand panel (<see cref="IsProcessOptionsPanelExpanded"/>) of
+/// Expanders (<see cref="IsProcessParametersExpanded"/>/<see cref="IsImageEnhancementExpanded"/>/
+/// <see cref="IsImageSelectionExpanded"/>, each persisted the same way <c>CaptureViewModel</c>'s own
+/// Expanders are). Edits auto-save instead: any of the three child view models raising
+/// <see cref="System.ComponentModel.INotifyPropertyChanged.PropertyChanged"/> (re)starts a 300ms
+/// debounce timer (same rapid-fire-write rationale as <c>CaptureViewModel.PersistSettingsIfConnected</c>'s
+/// own timer) that rebuilds one <see cref="ProcessParams"/> from all three and saves it - the exact
+/// reassembly <c>OptionsViewModel.Save</c> used to do on a button click, just automatic now.
+/// <see cref="ProcessAsync"/> flushes that timer and builds its own fresh <see cref="ProcessParams"/>
+/// from the live view models rather than re-<see cref="IProcessParamsStore.Load"/>ing, so clicking
+/// Process within the debounce window can never run against stale, pre-edit values.
 /// </summary>
 public partial class ProcessViewModel : ObservableObject
 {
@@ -44,7 +61,13 @@ public partial class ProcessViewModel : ObservableObject
     private readonly ICaptureMetadataStore _metadataStore;
     private readonly IShgProcessor _shgProcessor;
     private readonly IProcessParamsStore _processParamsStore;
+    private readonly IAppSettingsStore _appSettingsStore;
+    private readonly Dispatcher _dispatcher;
     private CancellationTokenSource? _processingCts;
+
+    // Debounces the auto-save triggered by ProcessParameters/ImageEnhancement/ImageSelection's own
+    // PropertyChanged events - see this class's own doc comment for why.
+    private DispatcherTimer? _persistProcessParamsDebounceTimer;
 
     /// <summary>One entry in <see cref="AvailableProcessedImages"/> - a PNG found in the output
     /// folder, with a display label derived from its filename (e.g. "raw.png" -> "Raw"). Public, not
@@ -90,17 +113,112 @@ public partial class ProcessViewModel : ObservableObject
     [ObservableProperty]
     private WriteableBitmap? processedImagePreview;
 
+    public ProcessParametersViewModel ProcessParameters { get; }
+    public ImageEnhancementViewModel ImageEnhancement { get; }
+    public ImageSelectionViewModel ImageSelection { get; }
+
+    /// <summary>Whether the right-hand parameters panel is docked open or collapsed to give the image
+    /// preview the full window width.</summary>
+    [ObservableProperty]
+    private bool isProcessOptionsPanelExpanded;
+
+    [ObservableProperty]
+    private bool isProcessParametersExpanded;
+
+    [ObservableProperty]
+    private bool isImageEnhancementExpanded;
+
+    [ObservableProperty]
+    private bool isImageSelectionExpanded;
+
     public ProcessViewModel(
         Func<ISerReader> serReaderFactory,
         ICaptureMetadataStore metadataStore,
         IShgProcessor shgProcessor,
-        IProcessParamsStore processParamsStore)
+        IProcessParamsStore processParamsStore,
+        IAppSettingsStore appSettingsStore)
     {
         _serReaderFactory = serReaderFactory;
         _metadataStore = metadataStore;
         _shgProcessor = shgProcessor;
         _processParamsStore = processParamsStore;
+        _appSettingsStore = appSettingsStore;
+        _dispatcher = Dispatcher.CurrentDispatcher;
+
+        var processParams = processParamsStore.Load();
+        ProcessParameters = new ProcessParametersViewModel(processParams);
+        ImageEnhancement = new ImageEnhancementViewModel(processParams);
+        ImageSelection = new ImageSelectionViewModel(processParams);
+        ProcessParameters.PropertyChanged += (_, _) => SchedulePersistProcessParams();
+        ImageEnhancement.PropertyChanged += (_, _) => SchedulePersistProcessParams();
+        ImageSelection.PropertyChanged += (_, _) => SchedulePersistProcessParams();
+
+        var appSettings = appSettingsStore.Load();
+        isProcessOptionsPanelExpanded = appSettings.ProcessOptionsPanelExpanded;
+        isProcessParametersExpanded = appSettings.ProcessParametersExpanded;
+        isImageEnhancementExpanded = appSettings.ProcessImageEnhancementExpanded;
+        isImageSelectionExpanded = appSettings.ProcessImageSelectionExpanded;
     }
+
+    partial void OnIsProcessOptionsPanelExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { ProcessOptionsPanelExpanded = value });
+
+    partial void OnIsProcessParametersExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { ProcessParametersExpanded = value });
+
+    partial void OnIsImageEnhancementExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { ProcessImageEnhancementExpanded = value });
+
+    partial void OnIsImageSelectionExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { ProcessImageSelectionExpanded = value });
+
+    private void PersistAppSetting(Func<AppSettings, AppSettings> update) =>
+        _appSettingsStore.Save(update(_appSettingsStore.Load()));
+
+    /// <summary>(Re)starts the 300ms debounce timer that rebuilds and saves one <see cref="ProcessParams"/>
+    /// from <see cref="ProcessParameters"/>/<see cref="ImageEnhancement"/>/<see cref="ImageSelection"/> -
+    /// see this class's own doc comment for why this is debounced rather than saved on every change.</summary>
+    private void SchedulePersistProcessParams()
+    {
+        _persistProcessParamsDebounceTimer ??= CreatePersistProcessParamsDebounceTimer();
+        _persistProcessParamsDebounceTimer.Stop();
+        _persistProcessParamsDebounceTimer.Start();
+    }
+
+    private DispatcherTimer CreatePersistProcessParamsDebounceTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _processParamsStore.Save(BuildCurrentProcessParams());
+        };
+        return timer;
+    }
+
+    /// <summary>Stops any pending debounced save and persists <paramref name="current"/> immediately -
+    /// called right before a Process run starts, so the sidecar/settings file on disk always matches
+    /// exactly what's about to be processed, never a value from before the debounce window elapsed.</summary>
+    private void FlushPendingProcessParams(ProcessParams current)
+    {
+        _persistProcessParamsDebounceTimer?.Stop();
+        _processParamsStore.Save(current);
+    }
+
+    /// <summary>Reassembles one <see cref="ProcessParams"/> from the three child view models' current
+    /// (in-memory, not necessarily yet saved) values - the same reassembly <c>OptionsViewModel.Save</c>
+    /// used to do on a button click.</summary>
+    private ProcessParams BuildCurrentProcessParams() => new(
+        ImageSelection.ToRequestedImages(),
+        ProcessParameters.ToSpectrumParams(),
+        ProcessParameters.ToGeometryParams(),
+        ImageEnhancement.ToContrastEnhancement(),
+        ImageEnhancement.ToClaheParams(),
+        ImageEnhancement.ToClahe2Params(),
+        ImageEnhancement.ToAutoStretchParams());
 
     private bool CanBrowse() => !IsProcessing;
 
@@ -179,7 +297,10 @@ public partial class ProcessViewModel : ObservableObject
         {
             IsProcessing = true;
 
-            var processParams = _processParamsStore.Load();
+            // Built from the live child view models, not reloaded from disk - see this class's own
+            // doc comment for why (the debounce timer may not have flushed a very recent edit yet).
+            var processParams = BuildCurrentProcessParams();
+            FlushPendingProcessParams(processParams);
             var progress = new Progress<string>(s => StatusText = s);
             var result = await _shgProcessor.ProcessAsync(SelectedFilePath, processParams, progress, _processingCts.Token);
 
@@ -355,7 +476,10 @@ public partial class ProcessViewModel : ObservableObject
 
         if (result.SkippedKinds.Count > 0)
         {
-            summary += $" Not yet implemented (needs contrast enhancement): {string.Join(", ", result.SkippedKinds)}.";
+            // Currently always empty in practice - see ShgProcessingResult.SkippedKinds' own doc
+            // comment - but kept as a generic "reported explicitly rather than silently dropped"
+            // mechanism for whenever a future kind needs it.
+            summary += $" Not yet implemented: {string.Join(", ", result.SkippedKinds)}.";
         }
 
         return summary;

@@ -9,29 +9,40 @@
         <TextBlock Text="Which line is being studied, and how it's located in the frame." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
         <TextBlock Text="Line"/>
         <ComboBox ItemsSource="{Binding AvailableRays}" SelectedItem="{Binding SelectedRay}"
-                  DisplayMemberPath="Label" Margin="0,2,0,8"/>
+                  DisplayMemberPath="Label" Margin="0,2,0,8"
+                  ToolTip="The Fraunhofer absorption line your spectroheliograph is set up to study (e.g. H-alpha, Calcium K) - this determines what layer of the Sun's atmosphere the reconstruction actually shows. Currently used to label the capture and to pick Auto contrast enhancement's method (Calcium K/H get CLAHE, everything else gets AutoStretch, see the Image Enhancement tab) - it doesn't yet drive automatic line-finding itself, which just locks onto whichever absorption line is most prominent in the frame regardless of this setting."/>
         <TextBlock Text="Detection mode"/>
-        <ComboBox ItemsSource="{Binding AvailableDetectionModes}" SelectedItem="{Binding DetectionMode}" Margin="0,2,0,0"/>
+        <ComboBox ItemsSource="{Binding AvailableDetectionModes}" SelectedItem="{Binding DetectionMode}" Margin="0,2,0,0"
+                  ToolTip="How the studied line's position should be located: Auto searches known lines, Free Search checks the Sun's whole spectrum so even an unlisted line can be found, Manual trusts your own pick above with no detection performed. Not wired into the pipeline yet - SolScan's own line-curvature detection currently just finds the most prominent absorption line in the frame regardless of this setting."/>
 
         <TextBlock Text="Pixel Shifts" FontWeight="Bold" Margin="0,20,0,0"/>
         <TextBlock Text="Relative to the detected line centre." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
         <TextBlock Text="Reconstruction pixel shift"/>
-        <TextBox Text="{Binding PixelShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+        <TextBox Text="{Binding PixelShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"
+                 ToolTip="How far from the detected line's own centre (in pixels) to sample when building the Raw/Reconstruction image. 0 samples exactly on the line's core, where absorption is strongest; moving away samples progressively more Doppler-shifted or continuum-like light - the same 'pick a depth into the line' idea a scan across a spectral line is built around, letting one SHG capture yield several different views of the Sun."/>
         <TextBlock Text="Doppler pixel shift"/>
-        <TextBox Text="{Binding DopplerShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
+        <TextBox Text="{Binding DopplerShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"
+                 ToolTip="Pixel shift intended for a future Doppler (velocity) image - sampling the line's blue-shifted and red-shifted wings reveals gas motion toward/away from the telescope. Not yet consumed by anything in SolScan; Doppler images aren't produced yet."/>
         <TextBlock Text="Continuum pixel shift"/>
-        <TextBox Text="{Binding ContinuumShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"/>
-        <CheckBox Content="Switch red/blue channels" IsChecked="{Binding SwitchRedBlueChannels}" Margin="0,4,0,0"/>
+        <TextBox Text="{Binding ContinuumShift, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,4"
+                 ToolTip="Pixel shift used for the Continuum image - far enough from the studied line's core to sample the smooth background spectrum rather than the absorption feature itself, giving something closer to an ordinary white-light image of the disk."/>
+        <CheckBox Content="Switch red/blue channels" IsChecked="{Binding SwitchRedBlueChannels}" Margin="0,4,0,0"
+                  ToolTip="Swaps which wing of the line is treated as red- vs blue-shifted in colourised output. Not yet consumed by anything in SolScan - colourised images aren't ported yet."/>
 
         <TextBlock Text="Geometry" FontWeight="Bold" Margin="0,20,0,0"/>
         <TextBlock Text="Applied to the geometry-corrected image." Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
         <TextBlock Text="Rotation"/>
-        <ComboBox ItemsSource="{Binding AvailableRotations}" SelectedItem="{Binding Rotation}" Margin="0,2,0,8"/>
+        <ComboBox ItemsSource="{Binding AvailableRotations}" SelectedItem="{Binding Rotation}" Margin="0,2,0,8"
+                  ToolTip="Rotates the reconstructed image a quarter-turn left or right before geometry correction - for when the camera's physical orientation on the spectrograph doesn't match how you want up/down and left/right to read in the final image. There's no 180° option, only left/right quarter-turns."/>
         <TextBlock Text="Autocrop"/>
-        <ComboBox ItemsSource="{Binding AvailableAutocropModes}" SelectedItem="{Binding SelectedAutocropMode}" Margin="0,2,0,4"/>
+        <ComboBox ItemsSource="{Binding AvailableAutocropModes}" SelectedItem="{Binding SelectedAutocropMode}" Margin="0,2,0,4"
+                  ToolTip="How tightly to crop the final image around the solar disk once geometry correction has warped it circular - from no cropping at all, through a few fixed margins expressed as a ratio of the disk's own radius, to a fixed pixel size you choose below."/>
         <TextBlock Text="Fixed width (px) - only used when Autocrop is FixedWidth"/>
-        <TextBox Text="{Binding FixedWidth, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"/>
-        <CheckBox Content="Mirror horizontally" IsChecked="{Binding HorizontalMirror}" Margin="0,0,0,4"/>
-        <CheckBox Content="Mirror vertically" IsChecked="{Binding VerticalMirror}"/>
+        <TextBox Text="{Binding FixedWidth, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                 ToolTip="The output image's width and height in pixels, used only when Autocrop above is set to Fixed Width."/>
+        <CheckBox Content="Mirror horizontally" IsChecked="{Binding HorizontalMirror}" Margin="0,0,0,4"
+                  ToolTip="Flips the reconstructed image left-right - useful when your optical train (an odd number of mirrors, a star diagonal, etc.) leaves the image reversed compared to the real sky."/>
+        <CheckBox Content="Mirror vertically" IsChecked="{Binding VerticalMirror}"
+                  ToolTip="Flips the reconstructed image top-bottom - same reasoning as Mirror horizontally, for the other axis."/>
     </StackPanel>
 </UserControl>

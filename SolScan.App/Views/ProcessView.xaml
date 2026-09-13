@@ -3,69 +3,134 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
+             xmlns:processing="clr-namespace:SolScan.App.Views.Processing"
              mc:Ignorable="d">
     <UserControl.Resources>
-        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <!-- Scoped to this view only, not merged into App.xaml - see Themes/MaterialDesignScoped.xaml's
+             own doc comment for why (and why it's a shared file now that CaptureView.xaml uses the same
+             md:DrawerHost pattern too). -->
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Themes/MaterialDesignScoped.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        </ResourceDictionary>
     </UserControl.Resources>
-    <StackPanel Margin="24" HorizontalAlignment="Left">
-        <TextBlock Text="{Binding StatusText}"
-                   FontSize="18"
-                   Margin="0,0,0,16" />
+    <Grid Margin="24">
+        <!-- md:DrawerHost's right-hand drawer is a full-height overlay, not a permanent Grid column -
+             it slides in on top of (not squeezing) the content below, so the preview/status area
+             underneath always has the view's full width to itself. IsRightDrawerOpen and both hamburger
+             ToggleButtons (one here to open, one inside RightDrawerContent to close) all bind to the
+             same ProcessViewModel.IsProcessOptionsPanelExpanded bool, so however it's toggled, the
+             state - and thus what gets persisted to AppSettings - stays in one place. Mirrors GSServer's
+             own md:DrawerHost usage (e.g. SkyTelescopeV.xaml's VM-bound IsLeftDrawerOpen) with Left
+             swapped for Right throughout, per the user's own request. -->
+        <md:DrawerHost HorizontalAlignment="Stretch" VerticalAlignment="Stretch" BorderThickness="0"
+                       IsRightDrawerOpen="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
+                       BorderBrush="{StaticResource MaterialDesignDivider}">
+            <md:DrawerHost.RightDrawerContent>
+                <Grid Width="340">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Content="Browse…"
-                    Command="{Binding BrowseForSerFileCommand}"
-                    Padding="12,4" />
-            <TextBlock Text="{Binding SelectedFilePath}"
-                       Margin="12,0,0,0"
-                       VerticalAlignment="Center" />
-        </StackPanel>
+                    <DockPanel Grid.Row="0" Margin="12,12,12,0">
+                        <ToggleButton DockPanel.Dock="Right"
+                                      Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                      Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
+                                      CommandParameter="{x:Static Dock.Right}"
+                                      IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
+                                      ToolTip="Hide this panel"/>
+                        <TextBlock Text="Process Options" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
 
-        <TextBlock Text="{Binding FileInfoText}"
-                   Margin="0,8,0,0"
-                   FontWeight="SemiBold" />
-        <TextBlock Text="{Binding EquipmentInfoText}"
-                   Margin="0,4,0,0" />
-        <TextBlock Text="{Binding CaptureDetailsText}"
-                   Margin="0,4,0,0"
-                   Opacity="0.8" />
-        <TextBlock Text="{Binding OutputFolderText}"
-                   Margin="0,4,0,0"
-                   Opacity="0.8" />
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                        <StackPanel Margin="12">
+                            <Expander Header="Process Parameters" IsExpanded="{Binding IsProcessParametersExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                                <processing:ProcessParametersView DataContext="{Binding ProcessParameters}"/>
+                            </Expander>
+                            <Expander Header="Image Enhancement" IsExpanded="{Binding IsImageEnhancementExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                                <processing:ImageEnhancementView DataContext="{Binding ImageEnhancement}"/>
+                            </Expander>
+                            <Expander Header="Image Selection" IsExpanded="{Binding IsImageSelectionExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                                <processing:ImageSelectionView DataContext="{Binding ImageSelection}"/>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </md:DrawerHost.RightDrawerContent>
 
-        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-            <Button Content="Process"
-                    Command="{Binding ProcessCommand}"
-                    Padding="12,4" />
-            <Button Content="Cancel"
-                    Command="{Binding CancelProcessingCommand}"
-                    Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
-                    Margin="8,0,0,0"
-                    Padding="12,4" />
-        </StackPanel>
+            <!-- Main content - unchanged from before the panel existed, just now always full-width
+                 since the panel is an overlay drawer rather than a permanent side column. -->
+            <StackPanel>
+                <DockPanel>
+                    <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Top"
+                                  Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                  Command="{x:Static md:DrawerHost.OpenDrawerCommand}"
+                                  CommandParameter="{x:Static Dock.Right}"
+                                  IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
+                                  ToolTip="Show the Process Parameters/Image Enhancement/Image Selection panel"/>
+                    <TextBlock Text="{Binding StatusText}" FontSize="18"/>
+                </DockPanel>
 
-        <!-- Empty (no items, no image) until an output folder actually has .png files in it - a bare
-             ComboBox and an Image with no Source both collapse to their minimal/zero size, so this
-             stays unobtrusive rather than needing extra visibility plumbing for the "nothing yet"
-             case. Disk-based, not tied to the most recent Process click - see ProcessViewModel's own
-             class doc comment. -->
-        <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
-            <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <ComboBox ItemsSource="{Binding AvailableProcessedImages}"
-                      SelectedItem="{Binding SelectedProcessedImage}"
-                      DisplayMemberPath="Label"
-                      Width="200" />
-        </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
+                    <Button Content="Browse…"
+                            Command="{Binding BrowseForSerFileCommand}"
+                            Padding="12,4" />
+                    <TextBlock Text="{Binding SelectedFilePath}"
+                               Margin="12,0,0,0"
+                               VerticalAlignment="Center" />
+                </StackPanel>
 
-        <!-- Auto-stretched (see ProcessViewModel.UpdateProcessedImagePreview) - the saved PNGs are
-             deliberately unstretched real sensor-scale values, which would look flat/washed here
-             without this. HighQuality scaling since the preview is downsampled then magnified back
-             up, same reasoning as CaptureView's own live-preview Image. -->
-        <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left">
-            <Image Source="{Binding ProcessedImagePreview}"
-                   Stretch="Uniform"
-                   MaxWidth="640" MaxHeight="640"
-                   RenderOptions.BitmapScalingMode="HighQuality" />
-        </Border>
-    </StackPanel>
+                <TextBlock Text="{Binding FileInfoText}"
+                           Margin="0,8,0,0"
+                           FontWeight="SemiBold" />
+                <TextBlock Text="{Binding EquipmentInfoText}"
+                           Margin="0,4,0,0" />
+                <TextBlock Text="{Binding CaptureDetailsText}"
+                           Margin="0,4,0,0"
+                           Opacity="0.8" />
+                <TextBlock Text="{Binding OutputFolderText}"
+                           Margin="0,4,0,0"
+                           Opacity="0.8" />
+
+                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                    <Button Content="Process"
+                            Command="{Binding ProcessCommand}"
+                            Padding="12,4" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelProcessingCommand}"
+                            Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Margin="8,0,0,0"
+                            Padding="12,4" />
+                </StackPanel>
+
+                <!-- Empty (no items, no image) until an output folder actually has .png files in it - a
+                     bare ComboBox and an Image with no Source both collapse to their minimal/zero size,
+                     so this stays unobtrusive rather than needing extra visibility plumbing for the
+                     "nothing yet" case. Disk-based, not tied to the most recent Process click - see
+                     ProcessViewModel's own class doc comment. -->
+                <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
+                    <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox ItemsSource="{Binding AvailableProcessedImages}"
+                              SelectedItem="{Binding SelectedProcessedImage}"
+                              DisplayMemberPath="Label"
+                              Width="200" />
+                </StackPanel>
+
+                <!-- Auto-stretched (see ProcessViewModel.UpdateProcessedImagePreview) - the saved PNGs
+                     are deliberately unstretched real sensor-scale values, which would look flat/washed
+                     here without this. HighQuality scaling since the preview is downsampled then
+                     magnified back up, same reasoning as CaptureView's own live-preview Image. -->
+                <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left">
+                    <Image Source="{Binding ProcessedImagePreview}"
+                           Stretch="Uniform"
+                           MaxWidth="640" MaxHeight="640"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                </Border>
+            </StackPanel>
+        </md:DrawerHost>
+    </Grid>
 </UserControl>

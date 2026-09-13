@@ -6,10 +6,94 @@
              mc:Ignorable="d">
     <StackPanel Margin="16" MaxWidth="420" HorizontalAlignment="Left">
         <TextBlock Text="Contrast Enhancement" FontWeight="Bold"/>
-        <TextBlock Text="Applied to the geometry-corrected (processed) image. Tuning parameters for each method aren't exposed yet - a future processing pipeline uses built-in defaults for those."
+        <TextBlock Text="Applied to the geometry-corrected (processed) image."
                    Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
         <ComboBox ItemsSource="{Binding AvailableContrastEnhancementModes}"
                   SelectedItem="{Binding SelectedContrastEnhancement}"
-                  Width="160" HorizontalAlignment="Left"/>
+                  Width="160" HorizontalAlignment="Left" Margin="0,0,0,12"
+                  ToolTip="How to bring out disk/prominence detail in the final image - a raw reconstruction alone is usually too flat to look at directly. Auto picks CLAHE for a Calcium K/H capture, AutoStretch otherwise. AutoStretch runs a multi-step automatic stretch (background neutralization, a gamma curve, and a brightness match aimed at a good disk midtone) - the closest to a one-click sensible result. CLAHE (Contrast Limited Adaptive Histogram Equalization) equalizes contrast tile-by-tile across the image rather than as one global stretch, bringing out local detail a plain stretch would miss. CLAHE2 runs CLAHE at several different tile sizes and blends the results together, pulling out both broad and fine local detail at once."/>
+
+        <!-- CLAHE tuning - visible only when Clahe is selected. -->
+        <StackPanel>
+            <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedContrastEnhancement}" Value="Clahe">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </StackPanel.Style>
+            <TextBlock Text="CLAHE tuning" FontWeight="Bold"/>
+            <TextBlock Text="How the image is tiled and how aggressively each tile is equalized."
+                       Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+            <TextBlock Text="Tile size (px)"/>
+            <ComboBox ItemsSource="{Binding AvailableClaheTileSizes}" SelectedItem="{Binding ClaheTileSize}"
+                      Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                      ToolTip="How large a square of pixels is equalized as one unit - smaller tiles bring out finer local detail but can amplify noise more; larger tiles behave closer to a single global stretch. Fixed discrete choices, matching JSolex's own tile-size list."/>
+            <TextBlock Text="Bins"/>
+            <ComboBox ItemsSource="{Binding AvailableClaheBins}" SelectedItem="{Binding ClaheBins}"
+                      Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                      ToolTip="How many histogram buckets each tile's contrast is equalized across - more bins preserve finer tonal steps but need more pixels per tile to fill sensibly. Limited to values that don't exceed Tile size squared, same cross-check JSolex enforces."/>
+            <TextBlock Text="Clip limit"/>
+            <TextBox Text="{Binding ClaheClipping, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"
+                     Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                     ToolTip="Caps how much any one tile's histogram can be stretched before the excess is spread evenly across the rest of that tile's bins - without a limit, a tile that's almost all one value (e.g. flat sky) can get amplified into visible noise. Higher values allow more aggressive equalization."/>
+        </StackPanel>
+
+        <!-- CLAHE2 tuning - visible only when Clahe2 is selected. -->
+        <StackPanel>
+            <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedContrastEnhancement}" Value="Clahe2">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </StackPanel.Style>
+            <TextBlock Text="CLAHE2 tuning" FontWeight="Bold"/>
+            <TextBlock Text="CLAHE2 runs CLAHE at several tile sizes (derived from the disk's own size) and averages the results - only the clip limit is configurable, matching JSolex."
+                       Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+            <TextBlock Text="Clip limit"/>
+            <TextBox Text="{Binding Clahe2Clipping, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"
+                     Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                     ToolTip="Same idea as CLAHE's own clip limit, applied at every tile size CLAHE2 runs internally."/>
+        </StackPanel>
+
+        <!-- AutoStretch tuning - visible only when AutoStretch is selected. -->
+        <StackPanel>
+            <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedContrastEnhancement}" Value="AutoStretch">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </StackPanel.Style>
+            <TextBlock Text="AutoStretch tuning" FontWeight="Bold"/>
+            <TextBlock Text="Background neutralization strength, gamma, and prominence contrast."
+                       Opacity="0.8" Margin="0,2,0,8" TextWrapping="Wrap"/>
+            <TextBlock Text="Gamma (&gt; 1)"/>
+            <TextBox Text="{Binding AutoStretchGamma, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"
+                     Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                     ToolTip="Power-law brightness curve applied after background neutralization - higher values lift shadows and midtones more. Must be greater than 1."/>
+            <TextBlock Text="Background threshold (0-1]"/>
+            <TextBox Text="{Binding AutoStretchBackgroundThreshold, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"
+                     Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                     ToolTip="How much of the estimated sky background to remove per iteration of the neutralization loop - closer to 1 removes it almost all at once, closer to 0 removes it very gradually over more iterations. Must be greater than 0 and no more than 1."/>
+            <TextBlock Text="Prominence stretch (&gt;= 0)"/>
+            <TextBox Text="{Binding AutoStretchProtusStretch, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:F2}}"
+                     Width="100" HorizontalAlignment="Left" Margin="0,2,0,8"
+                     ToolTip="Extra contrast boost applied specifically to prominences/the region outside the disk - 0 leaves that region unboosted beyond AutoStretch's own base processing. Must be zero or greater."/>
+        </StackPanel>
+
+        <Button Content="Reset to Defaults" HorizontalAlignment="Left" Margin="0,8,0,0"
+                Command="{Binding ResetToDefaultsCommand}"
+                ToolTip="Restores CLAHE/CLAHE2/AutoStretch's tuning fields above to SolScan's own built-in defaults - does not change which Contrast Enhancement mode is selected."/>
     </StackPanel>
 </UserControl>

@@ -234,8 +234,9 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
 - **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline, ported
   natively from `SolexVideoProcessor`'s individual workflow steps rather than shelling out to
   `jsolex-cli` (see Phase 6 below for why that original plan was skipped). Spectral line detection,
-  disk reconstruction, and ellipse fitting/geometry correction are all implemented; banding/jagging/
-  distortion corrections and contrast enhancement are not yet.
+  disk reconstruction, ellipse fitting/geometry correction, and AutoStretch/CLAHE contrast enhancement
+  (`SolScan.Processing.Stretching`, all three modes now including CLAHE2/multi-scale CLAHE) are all
+  implemented; banding/jagging/distortion corrections are not yet.
 - **SolScan.App** — WPF MVVM shell. `App.xaml.cs` is the single composition root - one
   `ServiceCollection` built once at startup (no scopes created afterward), same pattern RASTA uses.
   `MainWindow` binds to `NavigationViewModel.CurrentViewModel`, swapped via
@@ -249,7 +250,9 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   for app-wide settings that aren't equipment at all, embedded as five tabs (General / SHGs /
   Telescopes / Cameras / Setups - "SHGs" rather than "Spectrographs" as the tab header, though the
   underlying view-model/type names still say Spectrograph throughout) rather than separate modal
-  dialogs. The four equipment tabs are
+  dialogs. (It briefly grew three more tabs - Process Parameters/Image Enhancement/Image Selection -
+  before those moved onto the Process view itself; see that entry further down for where they live
+  now and why.) The four equipment tabs are
   each backed by their own list-view-model (`SpectrographLibraryViewModel`,
   `TelescopeLibraryViewModel`, `CameraLibraryViewModel`, `EquipmentSetupLibraryViewModel` under
   `ViewModels/Equipment`) editing `SolScan.Core.Equipment` records through `IEquipmentLibrary` - the
@@ -496,16 +499,17 @@ carries the ported types: `SpectralRay` (JSolex's 12 predefined lines + "Other")
 Advanced-tab fields are still excluded, now that ellipse fitting is real, as deliberately deferred
 Advanced-tab UI surface rather than a blocked dependency; `spectrumVFlip` is
 excluded because it's already captured at the equipment level, `SpectrographProfile.SpectrumVFlip`),
-`ContrastEnhancementMode` (just the method choice - Auto/CLAHE/CLAHE2/AutoStretch - not their tuning
-parameters), `RequestedImages` (the 5 Basic Images kinds only - Advanced Images/Debug/scripts/presets
-are all still out of scope), and the top-level `ProcessParams` + `IProcessParamsStore`
-(`JsonProcessParamsStore`, one JSON file under `%LocalAppData%\SolScan\`, same single-record shape as
-`IAppSettingsStore`). Because all three new Options tabs edit different slices of that one shared
-record, they don't each save through the store independently the way the equipment tabs do -
-`OptionsViewModel` loads `ProcessParams` once, seeds all three child view models from it, and
-reassembles + saves one new record when Save is clicked (see `OptionsViewModel`'s own doc comment).
-Also real: `SolScan.Core.Processing.ProcessingLocations.GetOutputFolder` - the fixed convention that
-processing output goes in a folder next to the source `.ser` file, named after it.
+`ContrastEnhancementMode` (the method choice - Auto/CLAHE/CLAHE2/AutoStretch - each method's own tuning
+parameters, `ClaheParams`/`Clahe2Params`/`AutoStretchParams`, landed later the same day the panel below
+moved onto Process - see that entry), `RequestedImages` (the 5 Basic Images kinds only - Advanced
+Images/Debug/scripts/presets are all still out of scope), and the top-level `ProcessParams` +
+`IProcessParamsStore` (`JsonProcessParamsStore`, one JSON file under `%LocalAppData%\SolScan\`, same
+single-record shape as `IAppSettingsStore`). Originally edited across three Options tabs sharing one
+Save button (since all three edit different slices of the one persisted record) - see the "Process
+pipeline options move onto the Process view" entry below for where that editing surface moved to and
+why the reassembly logic this paragraph used to describe now lives on `ProcessViewModel` instead of
+`OptionsViewModel`. Also real: `SolScan.Core.Processing.ProcessingLocations.GetOutputFolder` - the fixed
+convention that processing output goes in a folder next to the source `.ser` file, named after it.
 
 Also real: `CaptureMetadata` (`Capture` namespace, renamed from `CaptureEquipmentMetadata` -
 `ICaptureMetadataWriter` similarly renamed `ICaptureMetadataStore` - once it grew beyond just
@@ -520,9 +524,9 @@ is shared by both this and the existing per-camera-model settings persistence
 (`PersistSettingsIfConnected`), so the two field lists can't drift apart. Also carries a `StudiedRay`
 field (`SolScan.Core.Processing.SpectralRay`) - always null today, reserved for once Capture's live
 line-identification overlay (Phase 4) can set it automatically rather than it only ever being picked
-by hand in Options > Process Parameters. A sidecar written before any of this landed still reads back
-fine - the new fields just come back null, same as any other field a given recording never had a
-value for.
+by hand on the Process view's own Process Parameters panel. A sidecar written before any of this landed
+still reads back fine - the new fields just come back null, same as any other field a given recording
+never had a value for.
 
 Also real: a genuine (not simplified/placeholder) processing pipeline - `SolScan.Processing.Shg`'s
 first real content, and the biggest single port in the project so far. `IShgProcessor`/`ShgProcessor`
@@ -541,9 +545,8 @@ mid-frame, ~7 at the right edge - real "smile" distortion, not noise) in ~11 sec
 `Raw`/`Continuum` output images (`Reconstruction` is saved as the same pixel data as `Raw` - in JSolex
 it's actually a progressive *live-display* variant of the same reconstruction, not a separately
 computed image, and SolScan has no live progress view yet to make that distinction meaningful).
-`GeometryCorrectedProcessed` still needs contrast enhancement (a deliberately separate, not-yet-built
-piece of work) - requesting it is reported back as "not yet implemented" rather than silently skipped
-or faked; `GeometryCorrected` itself is now real too, see below. `SolScan.Processing` itself has zero file IO (returns in-memory
+`GeometryCorrectedProcessed` is now real too (see the AutoStretch/CLAHE entry further down) -
+`GeometryCorrected` itself is real, see below. `SolScan.Processing` itself has zero file IO (returns in-memory
 `ushort[,]` pixel buffers, native sensor range scaled up to a 16-bit container) - the actual PNG
 encode/save (`raw.png`/`reconstruction.png`/`continuum.png`) happens in `ProcessViewModel` via WPF's
 own `PngBitmapEncoder`/`PixelFormats.Gray16`, not `System.Drawing.Common` (GDI+'s 16-bit-grayscale
@@ -617,6 +620,208 @@ a correctly-*oriented* but not fully-sized correction for that particular file. 
 sensitivity threshold (astro4j's own design, `FindSamplesUsingDynamicSensitivity`) can't adapt to
 strongly non-uniform contrast within one frame; fixing that would need a real design change (e.g.
 per-region sensitivity), not another one-line fix, so it's left as a known gap.
+
+Also real: contrast enhancement, producing a genuine `GeometryCorrectedProcessed` image for
+`ContrastEnhancementMode.AutoStretch`/`.Clahe` (`.Auto` resolves to `AutoStretch`, except when
+`SpectrumParams.Ray` is `CalciumK`/`CalciumH`, where it resolves to `CLAHE` instead - matching astro4j's
+own `AUTO` exactly; this isn't image-analysis "detection" at all, just a check against whichever line is
+already selected, so it needed no new infrastructure once someone asked for it by name) -
+`SolScan.Processing.Stretching`'s
+`AutoStretchStrategy`/`ClaheStrategy`/`GammaStrategy`/`RangeExpansionStrategy`/`Histogram`, wired into
+`ShgProcessor.ApplyContrastEnhancement`. Investigating astro4j's real `ContrastEnhancement.AUTOSTRETCH`
+turned up something the initial "AutoStretch first, it's the cheap one" plan had backwards: astro4j's own
+`AutohistogramStrategy` (what `AUTOSTRETCH` actually runs) is not simpler than CLAHE - it *depends on*
+CLAHE internally (two differently-tuned passes, one for the disk and one - "eclipse" in the original's own
+naming - for the region outside it, so prominences get their own contrast treatment without the disk's
+own brightness dominating the tile statistics), on top of iterative ellipse-aware background
+neutralization, a gamma curve, and an asinh brightness-matching stretch anchored to a target disk midtone
+(solved by bisection), finished with a cubic contrast S-curve that fades to identity via the ellipse's own
+implicit conic equation so it doesn't crush prominences/the limb. Ported faithfully rather than
+simplified, once that was known - the user's own call when asked, matching this project's established
+"no shortcuts" porting precedent (ellipse fitting was the same size of undertaking). Two deliberate
+simplifications, both because `ContrastEnhancementMode` has no tunable `AutoStretchParams` yet:
+`adjustBrightness` is always true (the only value astro4j's own one real call site ever passes), and
+`protusStretch` defaults to 0 - at that value the "expand" curve applied to the prominence pass is
+provably the identity (three collinear points), so it's still ported (via an exact 3-point Lagrange
+interpolation in place of astro4j's whole `ColorCurve`/`LinearRegression` regression-and-caching
+machinery, since 3 points/3 coefficients has no residual to minimize either way) but short-circuited at
+that value rather than assumed away. `BackgroundNeutralizer` gained a second fitting method,
+`NeutralizeMasked` (astro4j's `backgroundModel`'s degree-2 case + its own `neutralizeBg` wrapper combined
+into one, with the never-non-null-in-practice subtraction-exclusion ellipse parameter dropped), alongside
+the existing `BlindNeutralize` used by `DiskEdgeDetector`'s ellipse-less first-fit - genuinely different
+algorithms (sigma-clipped + ellipse-aware vs. threshold-sampled + blind), not a refactor of one into the
+other. `Ellipse` gained `Translate`/`Rescale`/`BoundingBox` (needed for the disk-exclusion zones and the
+contrast S-curve's own fade), and `DiskGeometryCorrector.Result` gained `CorrectedEllipse` - the disk's
+ellipse re-expressed in the *final* (post-warp, post-crop) image's coordinates via
+`GeometryResampler.ComputeCorrectedCircle` plus an `Ellipse.Translate` by the crop's own origin, since
+AutoStretch needs to know where the disk actually sits in the specific image it's asked to stretch, not
+where it sat before cropping. Covered
+by `StretchingTests` (CLAHE keeps output in range and meaningfully spreads a low-contrast per-tile ramp;
+AutoStretch handles the no-ellipse case without throwing, and measurably brightens a dim disk toward its
+midtone target) and new `DiskGeometryCorrectorTests` cases (a real end-to-end `GeometryCorrectedProcessed`
+for each of Auto/AutoStretch/Clahe against the existing synthetic elliptical-disk file). NOT YET VALIDATED
+against a real capture - the synthetic disk these tests use is a clean, high-contrast one, unlike the real
+low-gain Sunscan file the geometry-correction bug above was found and fixed against; worth checking once
+better real test data exists (see that same file's "Why"/"How to apply" note in memory) whether
+AutoStretch's own fixed internal thresholds (background threshold, gamma, the CLAHE tile/clip constants)
+hold up as well as the geometry-correction fix did.
+
+`ContrastEnhancementMode.Clahe2` (astro4j's "multi-scale CLAHE") landed the same session, right after -
+`Clahe.applyMultiScaleClahe`/`computeTileSizesForImage`/`computeTileSizes`/`multiScaleClaheChannel`
+(`SolScan.Processing.Stretching.MultiScaleClaheStrategy`): runs the already-ported `ClaheStrategy` several
+times at different tile sizes (starting from one derived from the disk's own diameter via its ellipse -
+or the image size if there's none - and halving down through up to 6 levels) and averages the results, a
+much smaller port than AutoStretch turned out to be since it reuses `ClaheStrategy` entirely rather than
+introducing new machinery. The original's `RGBImage` per-channel branch is dropped - SolScan.Processing
+has no colour image type at all. `ShgProcessor`'s `NotSupportedException` for this mode is gone; all three
+`ContrastEnhancementMode` values are now real, and `ShgProcessingResult.SkippedKinds` is currently always
+empty as a result. Also landed at the same time: the `Auto` mode's own calcium-line check
+(`SpectrumParams.Ray == CalciumK/CalciumH → CLAHE`, else `AutoStretch`, matching astro4j's `AUTO` exactly)
+- prompted by the user asking about "calcium-line detection" as a future want, which turned out to
+already be almost entirely built (`SpectralRay`/`SpectrumParams.Ray` both already existed) rather than
+needing anything new; worth remembering that name could *also* mean the much bigger
+`DeepLineIdentifier`/live line-ID overlay work (see the astro4j entry above), still unstarted - don't
+assume which one a future request means without checking. Covered by two new `DiskGeometryCorrectorTests`
+cases: `GeometryCorrectedProcessed` for `Clahe2` folded into the existing per-mode theory test, and a
+dedicated calcium-routing test confirming `Auto` on `CalciumK`/`CalciumH` produces byte-identical output
+to an explicit `Clahe` request (and different output from `AutoStretch`) on the same input. Two new
+`StretchingTests` cover `MultiScaleClaheStrategy` directly (with and without an ellipse).
+
+Also real: in-app explanatory tooltips across the three Process-related Options tabs (Process
+Parameters/Image Enhancement/Image Selection) - prompted directly by the user wanting somewhere for
+someone new to SHG processing (their own words: "people, like me, who are just learning") to learn the
+background behind each setting, rather than needing to already know what a pixel shift or CLAHE is. A
+new implicit `Style TargetType="ToolTip"` in `App.xaml` (`MaxWidth="340"` plus a `ContentTemplate`
+wrapping the tooltip's own string content in a `TextBlock` with `TextWrapping="Wrap"`) makes every plain
+`ToolTip="..."` string anywhere in the app wrap at a readable width instead of rendering as one very long
+unwrapped line - WPF's own default `ToolTip` template doesn't wrap a plain string on its own. Every
+meaningful control across the three views now carries one: what each `SpectralRay`/`LineDetectionMode`
+choice means (and, honestly, that `DetectionMode` isn't actually wired into the pipeline yet - it's a
+real parameter with no consumer, same for `DopplerShift`/`SwitchRedBlueChannels`), what a pixel shift
+is and why it's measured relative to the line's own centre, what `RotationKind`/`AutocropMode`/mirror
+flags do to the image, a full explanation of all four `ContrastEnhancementMode` values (what CLAHE
+stands for, and concretely how CLAHE2 differs from plain CLAHE - several tile sizes averaged together
+rather than one - a point raised directly in conversation before this landed), and what each of the five
+`GeneratedImageKind` outputs actually represents, including which ones are still identical placeholders
+(`Reconstruction` = `Raw`) or otherwise incomplete. Deliberately scoped to tooltips only, not a separate
+glossary/help screen - agreed directly with the user as the lower-effort first step, discoverable exactly
+where someone is already looking (hovering a confusing control) rather than a whole new piece of UI to
+build and keep in sync. A dedicated glossary view, and/or a "?" info-button-plus-popup for even fuller
+explanations, were both discussed and set aside for if tooltips alone turn out not to be enough.
+
+Also real: **process pipeline options move onto the Process view.** Having used the Options-tab version
+above, the user asked for Process Parameters/Image Enhancement/Image Selection to live directly on the
+Process view instead - where they're actually used - as a right-hand dockable panel of Expanders (the
+same `Expander`-grouping convention as `CaptureView.xaml`'s own right-hand panel), plus real CLAHE/
+AutoStretch tuning parameters surfaced "like JSolex" (its own desktop UI, not just the method choice).
+Planned via `EnterPlanMode` given the size (new domain types, a persistence-model change, and a WPF
+layout pattern - a resizable/collapsible side panel - this app had never used before) - two scope
+questions were asked and confirmed before implementing: the three tabs move out of Options entirely
+(not duplicated), and edits auto-save as you go rather than through a Save button.
+
+`SolScan.Core.Processing` gained `ClaheParams`(TileSize/Bins/Clipping)/`Clahe2Params`(Clipping)/
+`AutoStretchParams`(Gamma/BackgroundThreshold/ProtusStretch) - astro4j's own tuning records, ported now
+that they're actually exposed in the UI (`ContrastEnhancementMode`'s own doc comment used to say these
+"aren't ported yet"). Each carries a `Default` matching the constant SolScan already used internally
+(`ClaheStrategy.DefaultTileSize/DefaultBins/DefaultClip`, `MultiScaleClaheStrategy.DefaultClip`,
+`AutoStretchStrategy.DefaultGamma/DefaultBackgroundThreshold/DefaultProtusStretch`) - duplicated as
+literals rather than referenced directly, since `SolScan.Core` has no dependency on `SolScan.Processing`
+(the same one-way layering every other Core/Processing split already respects). `ProcessParams` grew
+three corresponding fields; `JsonProcessParamsStore.Load()` backfills them from each type's own
+`Default` when reading an older file that predates them (a missing JSON property deserializes as
+`null` regardless of the record's non-nullable declared type, and a nested-object default can't be a
+compile-time-constant optional-parameter default the way `AppSettings`' own primitive fields use -
+see that record's doc comment for the pattern this genuinely can't reuse). `AutoStretchStrategy.Stretch`
+gained the validation guards astro4j's own `AutohistogramStrategy` constructor has and this port
+originally skipped (gamma > 1, background threshold in (0, 1], prominence stretch >= 0) - now that
+these are free-text user input for the first time, worth a clear thrown `ArgumentOutOfRangeException`
+rather than silently-wrong output. `ShgProcessor.ApplyContrastEnhancement` now takes the whole
+`ProcessParams` rather than just the mode/studied-ray, threading the real tuning values into
+`AutoStretchStrategy`/`ClaheStrategy`/`MultiScaleClaheStrategy` instead of their own hardcoded defaults.
+
+`SolScan.Core.Capture.AppSettings` gained four more persisted UI-state bools, same
+`CaptureSettingsExpanded`-shaped optional-parameter-with-default fields as Capture's own Expanders:
+`ProcessOptionsPanelExpanded` (the whole panel's dock/undock state) plus one per Expander inside it.
+`ImageEnhancementViewModel` gained the seven tuning properties plus a `ResetToDefaultsCommand`; CLAHE's
+`TileSize`/`Bins` are `ComboBox`es over JSolex's own fixed discrete option lists
+(`ImageEnhancementPanel.java`: tile size from 8 to 1024, bins from 32 to 1024) with the same
+bins-must-not-exceed-tileSize² cross-validation JSolex enforces (clamping `Bins` down when it stops
+being valid for a smaller `TileSize`); the other five values are free-text `TextBox`es, matching
+JSolex's own panel (no sliders, no declared ranges beyond `AutoStretchStrategy`'s own guards).
+`ProcessParametersViewModel`/`ImageEnhancementViewModel`/`ImageSelectionViewModel` moved from being
+owned by `OptionsViewModel` (one shared Save button reassembling `ProcessParams` from all three) to
+being owned by `ProcessViewModel` instead: its constructor seeds all three from one `Load()` exactly
+like `OptionsViewModel`'s old constructor did, then subscribes to each child's own
+`PropertyChanged` to (re)start a 300ms debounce timer (same rapid-fire-write rationale as
+`CaptureViewModel.PersistSettingsIfConnected`'s own timer - antivirus-scan `IOException`s were
+observed from calling a JSON-file save too fast) that rebuilds and saves one `ProcessParams` - the
+exact reassembly `OptionsViewModel.Save` used to do on a click, just automatic now. `ProcessAsync`
+itself no longer calls `IProcessParamsStore.Load()` - it builds `ProcessParams` from the three live
+child view models directly and flushes the debounce timer synchronously first, so clicking Process
+within that 300ms window can never run against stale, pre-edit values reloaded from disk.
+`OptionsViewModel` lost its `IProcessParamsStore` dependency and the three child properties/
+reassembly-on-Save lines entirely - Options is back to just equipment libraries + General.
+
+`ProcessView.xaml`'s panel went through two designs the same day. The first was a permanent two-column
+`Grid` (status/preview content in a `*`-width column, a `GridSplitter`, the panel itself in a 320px
+column that collapsed to zero width via a `Style`/`DataTrigger` on `ColumnDefinition.Width`) - reported
+back by the user as not really working, plus the Expander list not using the view's full height, and a
+request to instead do what GSServer does: a hamburger button revealing a slide-in panel of options, but
+from the right rather than GSServer's own left. Investigated `C:\Source\Repos\JPhilC\GSServer` directly
+rather than guessing at the mechanism - confirmed GSServer's own hamburger drawers aren't hand-rolled at
+all, they're the third-party MaterialDesignInXamlToolkit library's `DrawerHost` control
+(`GS.Server/Focuser/FocuserV.xaml`, `SkyTelescopeV.xaml`; `MaterialDesignThemes`/`MaterialDesignColors`
+4.8.0/2.1.4 per `GS.Server.csproj`), used near-identically across every GSServer view: `md:DrawerHost`
+wraps the whole view, `LeftDrawerContent`/`IsLeftDrawerOpen` for the panel, and two
+`MaterialDesignHamburgerToggleButton`-styled `ToggleButton`s (one in the main content to open, one
+inside the drawer to close) driving `DrawerHost.OpenDrawerCommand`/`CloseDrawerCommand` with
+`CommandParameter="{x:Static Dock.Left}"`. SolScan now does the same with `Dock.Right`/
+`RightDrawerContent`/`IsRightDrawerOpen` instead - asked the user directly whether to add this same
+third-party dependency (matching GSServer exactly) or hand-roll an equivalent slide-in overlay with no
+new dependency, since SolScan had used zero UI component libraries until now; they chose adding
+`MaterialDesignThemes`. Scoped to just this one view, though, unlike GSServer's own app-wide
+`App.xaml` merge (`MaterialDesignTheme.Dark.xaml` there, restyling every control in the whole
+application): the four required resource dictionaries (`MaterialDesignTheme.Light.xaml` - Light, not
+Dark, so this one view doesn't look jarringly different from SolScan's other plain-WPF-styled
+views - `MaterialDesignTheme.Defaults.xaml`, and a Grey primary/Blue accent colour dictionary) are
+merged into `ProcessView.xaml`'s own `UserControl.Resources` instead of `App.xaml.Resources` - WPF
+resolves `DynamicResource`/implicit-style lookups by walking up from the element that needs them, so a
+closer-scoped merge still satisfies `DrawerHost`/`MaterialDesignHamburgerToggleButton`/
+`MaterialDesignDivider` without reskinning Prepare/Capture/Options too. `IsRightDrawerOpen` and both
+hamburger `ToggleButton`s all bind to the same `ProcessViewModel.IsProcessOptionsPanelExpanded` bool
+(unchanged from the first design) so persistence didn't need to change - `DrawerHost`'s own drawer
+content is a full-height overlay by construction (it doesn't share column space with the main content
+the way the abandoned `GridSplitter` design did), which also resolves the "doesn't use full height"
+complaint for free. `ImageEnhancementView.xaml` gained three `StackPanel`s (one per mode's tuning
+fields) shown/hidden via the same `Style`/`DataTrigger` idiom keyed off `SelectedContrastEnhancement`,
+plus the "Reset to Defaults" button, all with the same explanatory-tooltip treatment the rest of this
+panel already has. Covered by: `StretchingTests` (the three new `AutoStretchStrategy` validation-guard
+cases), a new `DiskGeometryCorrectorTests` case proving non-default `ClaheParams`/`Clahe2Params`/
+`AutoStretchParams` values actually change `GeometryCorrectedProcessed`'s output rather than being
+accepted and silently ignored, and a new `JsonProcessParamsStoreTests` case proving an old
+process-params.json (built by stripping the three new properties back out of a real serialized
+default, rather than hand-typing brittle nested JSON) backfills real defaults rather than nulls.
+No automated UI tests exist in this repo for the panel/toggle/Expander behaviour itself (WPF, no
+existing UI test framework) - the `DrawerHost` design above is confirmed build-clean but, as of this
+writing, not yet confirmed by the user running the app (the `GridSplitter` design it replaced *looked*
+fine the same way and turned out not to actually work - see this same entry's own history above - so
+"builds" isn't being claimed as "verified" here again).
+
+The same `md:DrawerHost` pattern was then applied to `CaptureView.xaml` too, one message later - its
+own right-hand column (the six `Expander`s: Capture Settings/Camera Settings/Histogram/Focus Aid/
+Reticule/Display Settings) moved into a `RightDrawerContent` drawer the same way, with
+`CaptureViewModel.IsCaptureOptionsPanelExpanded` (new, persisted via a new `AppSettings.
+CaptureOptionsPanelExpanded` field, same `OnXChanged → PersistAppSetting` pattern as its six sibling
+Expander bools) as the toggle. Deliberately different from Process's version in one way, per the user's
+own explicit request: Start/Stop Recording and the frame-count/dropped-frame-count readouts stay on the
+main view, in a new always-visible row below the live preview, rather than moving into the drawer with
+everything else - unlike the six settings groups, these need to stay usable/visible regardless of
+whether the drawer is open. The shared MaterialDesignThemes resource-dictionary merge (Light theme +
+Defaults + Grey/Blue colours) was factored out of `ProcessView.xaml`'s own `UserControl.Resources` into
+a new `Themes/MaterialDesignScoped.xaml` file once a second view needed the identical merge, rather than
+duplicating the same four `<ResourceDictionary Source="...">` lines a second time - both views now just
+merge that one file into their own `UserControl.Resources`, keeping the scoping (not `App.xaml`)
+rationale in one place.
 
 Also real: a WiX installer and an automated GitHub release pipeline, both mirroring RASTA's own
 `Setup`/`Bundle` split (`RASTA.Setup`/`RASTA.Bundle`, `scripts\Build-Release.ps1`) with several
@@ -1029,7 +1234,7 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
      on `DeepLineIdentifier`'s confidence-gated correlation rather than `SpectrumBrowser`'s own
      ungated brute-force scan - needs its own reference solar-flux atlas and dispersion calibration
      for the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants. Once this exists, it should
-     also be able to *drive* `SpectrumParams.Ray` (Phase 6, Options > Process Parameters) rather than
+     also be able to *drive* `SpectrumParams.Ray` (Phase 6, the Process view's Process Parameters panel) rather than
      that staying a manual-only pick - whichever labeled line sits nearest the ROI's vertical centre
      is the one actually being studied, so the overlay could set it automatically instead of asking
      the user to also tell SolScan what it just showed them - not yet wired, noted for when the
@@ -1046,10 +1251,12 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    showing header + equipment info for a chosen file - no actual reconstruction yet. Second slice
    (also real): process parameters - `SpectralRay`/`SpectrumParams`/`GeometryParams`/
    `ContrastEnhancementMode`/`RequestedImages`/`ProcessParams` in `SolScan.Core.Processing`, persisted
-   via `IProcessParamsStore` and edited across three new Options tabs (Process Parameters/Image
-   Enhancement/Image Selection) rather than a separate dialog, plus `ProcessingLocations.GetOutputFolder`'s
-   fixed "output folder sits next to the source .ser file, named after it" convention - still no
-   reconstruction, just enough of the parameter surface to make a future one's output meaningful.
+   via `IProcessParamsStore` and originally edited across three new Options tabs (Process Parameters/
+   Image Enhancement/Image Selection) rather than a separate dialog - later moved onto the Process
+   view itself as a dockable panel, see "Process pipeline options move onto the Process view" below -
+   plus `ProcessingLocations.GetOutputFolder`'s fixed "output folder sits next to the source .ser file,
+   named after it" convention - still no reconstruction at this point, just enough of the parameter
+   surface to make a future one's output meaningful.
    Third slice (real - see "What's real vs. placeholder" above for the full picture): `IShgProcessor`/
    `ShgProcessor` in `SolScan.Processing.Shg` - real spectral-line-curvature detection
    (`SpectralLineCurvatureDetector`, ported from `SpectrumFrameAnalyzer`) and real reconstruction
@@ -1058,12 +1265,19 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    real Sunscan capture. Fourth slice (also real, its own genuinely separate algorithm from
    line-curvature detection, as planned): ellipse fitting and geometry correction
    (`DiskEdgeDetector`/`DiskGeometryCorrector` and friends - see "Also real" above for the full list),
-   producing a real `GeometryCorrected` image. `GeometryCorrectedProcessed` still needs contrast
-   enhancement - deliberately deferred as its own next slice, reported as "not yet implemented" rather
-   than faked. Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process
-   stage's own line identification, and a results panel mirroring JSolex's two-part info view (detected
-   line + geometry tilt/xyRatio) - `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/
-   `DetectedXyRatio` all exist but aren't shown anywhere richer than a one-line status-text summary yet.
+   producing a real `GeometryCorrected` image. Fifth slice (also real): contrast enhancement -
+   `SolScan.Processing.Stretching`'s `AutoStretchStrategy`/`ClaheStrategy`/`MultiScaleClaheStrategy`,
+   producing a real `GeometryCorrectedProcessed` image for every `ContrastEnhancementMode` value - see
+   "Also real" above for the full writeup, including why AutoStretch turned out to be the *bigger* of
+   AutoStretch/CLAHE (it depends on CLAHE internally), not the cheaper first cut originally assumed, and
+   why CLAHE2 turned out to be the smaller one (it just reuses `ClaheStrategy` at several tile sizes).
+   Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
+   identification (including the *real* "calcium-line detection" - automatically identifying which line
+   is being observed, as opposed to the `Auto` contrast-mode's own trivial `SpectrumParams.Ray` check,
+   already real - see "Also real" above), and a
+   results panel mirroring JSolex's two-part info view (detected line + geometry tilt/xyRatio) -
+   `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/`DetectedXyRatio` all exist but
+   aren't shown anywhere richer than a one-line status-text summary yet.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to

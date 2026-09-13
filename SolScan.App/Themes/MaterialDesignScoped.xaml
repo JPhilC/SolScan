@@ -1,0 +1,20 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Merged into individual views' own UserControl.Resources (not App.xaml.Resources) so
+         MaterialDesignThemes - used only for md:DrawerHost's hamburger-style side panels - doesn't
+         reskin every view in the app, just the ones that actually use it (ProcessView, CaptureView).
+         WPF resolves DynamicResource/implicit-style lookups by walking up from the element that needs
+         them, so merging at this closer scope still lets DrawerHost and its
+         MaterialDesignHamburgerToggleButton/MaterialDesignDivider styles resolve correctly for
+         everything inside whichever UserControl merges this dictionary. Same theme/colour dictionaries
+         GSServer merges at its own App.xaml for the same library (see
+         C:\Source\Repos\JPhilC\GSServer\GS.Server\App.xaml), just Light rather than Dark so these views
+         don't look jarringly different from SolScan's other plain-WPF-styled views either side of them
+         in the nav - see CLAUDE.md for the full reasoning. -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesignTheme.Light.xaml" />
+        <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesignTheme.Defaults.xaml" />
+        <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Primary/MaterialDesignColor.Grey.xaml" />
+        <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Accent/MaterialDesignColor.Blue.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+</ResourceDictionary>
