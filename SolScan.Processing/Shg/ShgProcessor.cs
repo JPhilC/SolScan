@@ -1,6 +1,7 @@
 using System.Threading;
 using SolScan.Core.Capture;
 using SolScan.Core.Processing;
+using SolScan.Processing.Color;
 using SolScan.Processing.Math;
 using SolScan.Processing.Stretching;
 
@@ -9,18 +10,18 @@ namespace SolScan.Processing.Shg;
 /// <summary>
 /// <see cref="IShgProcessor"/> orchestrating <see cref="FrameAverager"/> →
 /// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/> → (when
-/// <see cref="GeneratedImageKind.GeometryCorrected"/> or
-/// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/> is requested)
-/// <see cref="DiskGeometryCorrector"/> → (for the latter only) a
-/// <see cref="ContrastEnhancementMode"/>-selected stretch (<see cref="AutoStretchStrategy"/>,
-/// <see cref="ClaheStrategy"/>, or <see cref="MultiScaleClaheStrategy"/> - see
-/// <see cref="ApplyContrastEnhancement"/>).
-/// Deliberately returns pure in-memory <see cref="ProcessedImage"/> data (no file IO at all) rather
-/// than writing PNGs itself: SolScan has no existing image-file-writing anywhere, and WPF's own
-/// <c>PngBitmapEncoder</c> (already a hard dependency of SolScan.App, `PixelFormats.Gray16`
-/// well-supported) is more reliable for 16-bit grayscale than `System.Drawing.Common`'s well-known
-/// GDI+ save-path issues for that format - so the actual encode/save step lives in SolScan.App
-/// instead, keeping this project genuinely IO-free per its own "pure algorithms" description.
+/// <see cref="GeneratedImageKind.GeometryCorrected"/>, <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>,
+/// or <see cref="GeneratedImageKind.Colorized"/> is requested) <see cref="DiskGeometryCorrector"/> →
+/// (for the latter two) a <see cref="ContrastEnhancementMode"/>-selected stretch
+/// (<see cref="AutoStretchStrategy"/>, <see cref="ClaheStrategy"/>, or <see cref="MultiScaleClaheStrategy"/> -
+/// see <see cref="ApplyContrastEnhancement"/>) → (for Colorized only) <see cref="ProduceColorizedImage"/>.
+/// Deliberately returns pure in-memory <see cref="ProcessedImage"/>/<see cref="ProcessedColorImage"/>
+/// data (no file IO at all) rather than writing PNGs itself: SolScan has no existing image-file-writing
+/// anywhere, and WPF's own <c>PngBitmapEncoder</c> (already a hard dependency of SolScan.App,
+/// `PixelFormats.Gray16`/`Rgb48` well-supported) is more reliable for 16-bit imagery than
+/// `System.Drawing.Common`'s well-known GDI+ save-path issues - so the actual encode/save step lives
+/// in SolScan.App instead, keeping this project genuinely IO-free per its own "pure algorithms"
+/// description.
 /// </summary>
 public sealed class ShgProcessor : IShgProcessor
 {
@@ -48,11 +49,16 @@ public sealed class ShgProcessor : IShgProcessor
         var wantsContinuum = requested.IsEnabled(GeneratedImageKind.Continuum);
         var wantsGeometryCorrected = requested.IsEnabled(GeneratedImageKind.GeometryCorrected);
         var wantsGeometryCorrectedProcessed = requested.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed);
+        var wantsColorized = requested.IsEnabled(GeneratedImageKind.Colorized);
         // GeometryCorrectedProcessed's input is the geometry-corrected image itself, so it needs the
-        // same correction step run even when GeometryCorrected wasn't separately requested.
-        var needsGeometryCorrection = wantsGeometryCorrected || wantsGeometryCorrectedProcessed;
+        // same correction step run even when GeometryCorrected wasn't separately requested. Colorized's
+        // own input is that same contrast-enhanced buffer (astro4j's ProcessingWorkflow computes it
+        // whenever either GEOMETRY_CORRECTED_PROCESSED or COLORIZED is requested, for the same reason).
+        var needsGeometryCorrection = wantsGeometryCorrected || wantsGeometryCorrectedProcessed || wantsColorized;
+        var needsContrastEnhancement = wantsGeometryCorrectedProcessed || wantsColorized;
 
         var images = new List<ProcessedImage>();
+        var colorImages = new List<ProcessedColorImage>();
         QuadraticPolynomial? polynomial = null;
         DiskGeometryCorrector.Result? geometryResult = null;
 
@@ -104,12 +110,27 @@ public sealed class ShgProcessor : IShgProcessor
                         images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
                     }
 
-                    if (wantsGeometryCorrectedProcessed)
+                    if (needsContrastEnhancement)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
                         var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, processParams, maxPixelValue);
-                        images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                        if (wantsGeometryCorrectedProcessed)
+                        {
+                            images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                        }
+
+                        if (wantsColorized)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            progress?.Report("Colorizing...");
+                            var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
+                            var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, processParams.SpectrumParams.Ray);
+                            if (colorized is not null)
+                            {
+                                colorImages.Add(colorized);
+                            }
+                        }
                     }
                 }
             }
@@ -125,7 +146,60 @@ public sealed class ShgProcessor : IShgProcessor
         }
 
         progress?.Report("Done.");
-        return new ShgProcessingResult(images, skipped, polynomial, geometryResult?.TiltDegrees, geometryResult?.XyRatio);
+        return new ShgProcessingResult(images, skipped, polynomial, geometryResult?.TiltDegrees, geometryResult?.XyRatio, colorImages);
+    }
+
+    /// <summary>Produces <see cref="GeneratedImageKind.Colorized"/> from <paramref name="processed"/> -
+    /// the same contrast-enhanced buffer <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>
+    /// is built from - direct port of astro4j's <c>ProcessingWorkflow.produceColorizedImage</c>: an
+    /// arcsinh stretch anchored to the disk's own background level, a percentile clip, then either
+    /// <paramref name="ray"/>'s fixed <see cref="SpectralRay.ColorCurve"/> or (for every other named
+    /// ray) <see cref="SpectralRay.ToRgb"/>'s wavelength-approximated tint. Returns null - no image
+    /// produced at all - for <see cref="SpectralRay.Other"/>, which has no colour to derive either
+    /// way, matching astro4j's own silent no-op for that case.</summary>
+    private static ProcessedColorImage? ProduceColorizedImage(float[,] processed, float blackPoint, SpectralRay ray)
+    {
+        var working = (float[,])processed.Clone();
+        new ArcsinhStretchingStrategy(blackPoint, stretch: 2f).Stretch(working);
+        new PercentileStretchStrategy(0, 99.9).Stretch(working);
+
+        (float[,] R, float[,] G, float[,] B) rgb;
+        if (ray.ColorCurve is { } curve)
+        {
+            rgb = Colorize.WithCurve(working, curve);
+        }
+        else if (ray.WavelengthAngstroms > 0)
+        {
+            rgb = Colorize.WithWavelengthRgb(working, ray.ToRgb());
+        }
+        else
+        {
+            return null;
+        }
+
+        return BuildProcessedColorImage(rgb);
+    }
+
+    /// <summary>Like <see cref="BuildProcessedImageFromFullRange"/>, but for the three channels
+    /// <see cref="ProduceColorizedImage"/> produces - all already in the 16-bit container range.</summary>
+    private static ProcessedColorImage BuildProcessedColorImage((float[,] R, float[,] G, float[,] B) rgb)
+    {
+        var height = rgb.R.GetLength(0);
+        var width = rgb.R.GetLength(1);
+        var r = new ushort[height, width];
+        var g = new ushort[height, width];
+        var b = new ushort[height, width];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                r[y, x] = (ushort)System.Math.Clamp(rgb.R[y, x], 0, 65535);
+                g[y, x] = (ushort)System.Math.Clamp(rgb.G[y, x], 0, 65535);
+                b[y, x] = (ushort)System.Math.Clamp(rgb.B[y, x], 0, 65535);
+            }
+        }
+
+        return new ProcessedColorImage(GeneratedImageKind.Colorized, width, height, r, g, b);
     }
 
     /// <summary>Rescales the (native-ADC-range) geometry-corrected pixels up to the 16-bit "container"

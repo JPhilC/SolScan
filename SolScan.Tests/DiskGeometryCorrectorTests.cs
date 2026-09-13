@@ -284,6 +284,102 @@ public class DiskGeometryCorrectorTests
         }
     }
 
+    [Theory]
+    [InlineData("HAlpha")] // uses SpectralRay.ColorCurve
+    [InlineData("SodiumD2")] // uses SpectralRay.ToRgb's wavelength approximation
+    public async Task ProcessAsync_Colorized_ProducesARealTintedColourImage(string rayName)
+    {
+        const int width = 72;
+        const int frameCount = 64;
+        const int height = 24;
+        const int lineRow = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+        var ray = rayName == "HAlpha" ? SpectralRay.HAlpha : SpectralRay.SodiumD2;
+
+        try
+        {
+            WriteSyntheticDiskFile(path, width, height, frameCount, lineRow);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var defaults = ProcessParams.CreateDefault();
+            var processParams = defaults with
+            {
+                RequestedImages = new RequestedImages([GeneratedImageKind.Colorized]),
+                SpectrumParams = defaults.SpectrumParams with { Ray = ray },
+            };
+
+            var result = await processor.ProcessAsync(path, processParams);
+
+            // Colorized is a colour kind - it must not show up in the mono Images list, only ColorImages.
+            Assert.Empty(result.Images);
+            Assert.NotNull(result.ColorImages);
+            var colorized = Assert.Single(result.ColorImages!, i => i.Kind == GeneratedImageKind.Colorized);
+            Assert.True(colorized.Width > 0);
+            Assert.True(colorized.Height > 0);
+
+            // A real tint should leave the three channels genuinely different from each other (not a
+            // grayscale image saved through an RGB PNG), and should use a meaningful chunk of the
+            // 16-bit range somewhere.
+            var anyChannelDiffers = false;
+            ushort maxAny = 0;
+            for (var y = 0; y < colorized.Height; y++)
+            {
+                for (var x = 0; x < colorized.Width; x++)
+                {
+                    var r = colorized.R[y, x];
+                    var g = colorized.G[y, x];
+                    var b = colorized.B[y, x];
+                    if (r != g || g != b)
+                    {
+                        anyChannelDiffers = true;
+                    }
+
+                    maxAny = Math.Max(maxAny, Math.Max(r, Math.Max(g, b)));
+                }
+            }
+
+            Assert.True(anyChannelDiffers, "Expected a real colour tint to leave the R/G/B channels genuinely different somewhere in the image.");
+            Assert.True(maxAny > 10000, $"Expected the colorized image to use a meaningful part of the 16-bit range, but its max across all channels was only {maxAny}.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_Colorized_OtherRay_ProducesNoColorImageAtAll()
+    {
+        // SpectralRay.Other has no wavelength to derive a colour from either way - astro4j's own
+        // ProcessingWorkflow.produceColorizedImage silently skips this case, and so does SolScan.
+        const int width = 72;
+        const int frameCount = 64;
+        const int height = 24;
+        const int lineRow = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticDiskFile(path, width, height, frameCount, lineRow);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var defaults = ProcessParams.CreateDefault();
+            var processParams = defaults with
+            {
+                RequestedImages = new RequestedImages([GeneratedImageKind.Colorized]),
+                SpectrumParams = defaults.SpectrumParams with { Ray = SpectralRay.Other },
+            };
+
+            var result = await processor.ProcessAsync(path, processParams);
+
+            Assert.True(result.ColorImages is null || result.ColorImages.Count == 0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     /// <summary>Writes a SER file whose reconstructed disk image (stacking the row near
     /// <paramref name="lineRow"/> from every frame) comes out as a bright, axis-aligned ellipse on a
     /// dim background (semi-axes 28 columns x 20 frames): each frame/column's absorption-line depth

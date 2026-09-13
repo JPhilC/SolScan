@@ -355,9 +355,23 @@ public partial class ProcessViewModel : ObservableObject
                 SavePng(Path.Combine(folder, OutputFileName(image.Kind)), image);
             }
 
+            foreach (var colorImage in result.ColorImages ?? [])
+            {
+                var folder = ProcessingLocations.GetImagesFolder(SelectedFilePath, colorImage.Kind.GetDirectoryKind());
+                if (createdFolders.Add(folder))
+                {
+                    Directory.CreateDirectory(folder);
+                }
+
+                SaveColorPng(Path.Combine(folder, OutputFileName(colorImage.Kind)), colorImage);
+            }
+
             // Disk-based, so this also picks up the files just written above - see the class doc
             // comment for why the dropdown isn't just populated from result.Images directly.
-            RefreshProcessedImages(SelectedFilePath);
+            // preferColorized: right after a run that actually produced one, show it by default
+            // rather than whatever was previously selected (or "raw.png") - see RefreshProcessedImages'
+            // own doc comment.
+            RefreshProcessedImages(SelectedFilePath, preferColorized: result.ColorImages is { Count: > 0 });
 
             var outputFolder = ProcessingLocations.GetOutputFolder(SelectedFilePath);
             SetStatus(BuildResultSummary(result, outputFolder));
@@ -394,9 +408,13 @@ public partial class ProcessViewModel : ObservableObject
     /// <summary>Re-scans <paramref name="serFilePath"/>'s `raw` and `processed` subfolders (see
     /// <see cref="ProcessingLocations.GetImagesFolder"/>) for `.png` files and repopulates the
     /// dropdown - called both when a file is picked (so already-processed output shows up
-    /// immediately) and after a Process run finishes. Keeps the previously-selected file selected if
-    /// it's still present; otherwise prefers "raw.png", else whatever sorts first.</summary>
-    private void RefreshProcessedImages(string serFilePath)
+    /// immediately, <paramref name="preferColorized"/> false) and after a Process run finishes
+    /// (<paramref name="preferColorized"/> true when that run actually produced one - see
+    /// <see cref="ProcessAsync"/>'s own call site). When true, "colorized.png" wins over even the
+    /// previously-selected file - right after generating it, that's the result worth looking at, not
+    /// whatever happened to be on screen before. Otherwise keeps the previously-selected file selected
+    /// if it's still present; otherwise prefers "raw.png", else whatever sorts first.</summary>
+    private void RefreshProcessedImages(string serFilePath, bool preferColorized = false)
     {
         var previousPath = SelectedProcessedImage?.FilePath;
 
@@ -413,7 +431,8 @@ public partial class ProcessViewModel : ObservableObject
         AvailableProcessedImages = new ObservableCollection<ProcessedImageFile>(
             files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Select(f => new ProcessedImageFile(LabelFor(f), f)));
 
-        var defaultFile = AvailableProcessedImages.FirstOrDefault(f => f.FilePath == previousPath)
+        var defaultFile = (preferColorized ? AvailableProcessedImages.FirstOrDefault(f => string.Equals(Path.GetFileNameWithoutExtension(f.FilePath), "colorized", StringComparison.OrdinalIgnoreCase)) : null)
+            ?? AvailableProcessedImages.FirstOrDefault(f => f.FilePath == previousPath)
             ?? AvailableProcessedImages.FirstOrDefault(f => string.Equals(Path.GetFileNameWithoutExtension(f.FilePath), "raw", StringComparison.OrdinalIgnoreCase))
             ?? AvailableProcessedImages.FirstOrDefault();
 
@@ -438,10 +457,14 @@ public partial class ProcessViewModel : ObservableObject
 
     partial void OnSelectedProcessedImageChanged(ProcessedImageFile? value) => UpdateProcessedImagePreview();
 
-    /// <summary>Decodes <see cref="SelectedProcessedImage"/> straight back off disk, auto-stretches
-    /// it (see <see cref="FramePreview.ComputeAutoStretch"/>) and downsamples it (see
-    /// <see cref="FramePreview.Stretch"/>) into <see cref="ProcessedImagePreview"/> - same
-    /// WriteableBitmap-reuse pattern as <c>CaptureViewModel.RenderPreview</c>.</summary>
+    /// <summary>Decodes <see cref="SelectedProcessedImage"/> straight back off disk into
+    /// <see cref="ProcessedImagePreview"/> - a mono PNG (e.g. <c>raw.png</c>) is auto-stretched (see
+    /// <see cref="FramePreview.ComputeAutoStretch"/>) and downsampled (see <see cref="FramePreview.Stretch"/>)
+    /// the same way the live Capture preview is; a colour PNG (currently just <c>colorized.png</c>) is
+    /// shown as-is - the colorization pipeline already stretched/tinted it, so re-auto-stretching would
+    /// just wash out its own colour curve. Same WriteableBitmap-reuse pattern as
+    /// <c>CaptureViewModel.RenderPreview</c>, keyed on pixel format too now that this can produce either
+    /// a <see cref="PixelFormats.Gray8"/> or a <see cref="PixelFormats.Bgra32"/> bitmap.</summary>
     private void UpdateProcessedImagePreview()
     {
         if (SelectedProcessedImage is not { } selected)
@@ -452,23 +475,63 @@ public partial class ProcessViewModel : ObservableObject
 
         try
         {
-            var frame = LoadCameraFrameFromPng(selected.FilePath);
-            var histogram = FramePreview.ComputeHistogram(frame);
-            var (blackPoint, whitePoint) = FramePreview.ComputeAutoStretch(histogram);
-            var (pixels, width, height) = FramePreview.Stretch(frame, blackPoint, whitePoint);
-
-            if (ProcessedImagePreview is null || ProcessedImagePreview.PixelWidth != width || ProcessedImagePreview.PixelHeight != height)
+            if (IsColorPng(selected.FilePath))
             {
-                ProcessedImagePreview = new WriteableBitmap(width, height, 96, 96, PixelFormats.Gray8, palette: null);
+                var (pixels, width, height) = LoadColorPreviewPixels(selected.FilePath);
+                EnsurePreviewBitmap(width, height, PixelFormats.Bgra32);
+                ProcessedImagePreview!.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, offset: 0);
             }
-
-            ProcessedImagePreview.WritePixels(new Int32Rect(0, 0, width, height), pixels, width, offset: 0);
+            else
+            {
+                var frame = LoadCameraFrameFromPng(selected.FilePath);
+                var histogram = FramePreview.ComputeHistogram(frame);
+                var (blackPoint, whitePoint) = FramePreview.ComputeAutoStretch(histogram);
+                var (pixels, width, height) = FramePreview.Stretch(frame, blackPoint, whitePoint);
+                EnsurePreviewBitmap(width, height, PixelFormats.Gray8);
+                ProcessedImagePreview!.WritePixels(new Int32Rect(0, 0, width, height), pixels, width, offset: 0);
+            }
         }
         catch (Exception ex) when (ex is IOException or NotSupportedException or UnauthorizedAccessException)
         {
             ProcessedImagePreview = null;
             SetStatus($"Failed to load '{selected.FilePath}': {ex.Message}");
         }
+    }
+
+    private void EnsurePreviewBitmap(int width, int height, PixelFormat format)
+    {
+        if (ProcessedImagePreview is null || ProcessedImagePreview.PixelWidth != width || ProcessedImagePreview.PixelHeight != height || ProcessedImagePreview.Format != format)
+        {
+            ProcessedImagePreview = new WriteableBitmap(width, height, 96, 96, format, palette: null);
+        }
+    }
+
+    /// <summary>Whether <paramref name="path"/> is a colour PNG (currently just <c>colorized.png</c>)
+    /// rather than one of the mono outputs - peeked from the decoded frame's own pixel format, without
+    /// decoding pixel data (<see cref="BitmapCacheOption.None"/>).</summary>
+    private static bool IsColorPng(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var decoder = new PngBitmapDecoder(stream, BitmapCreateOptions.None, BitmapCacheOption.None);
+        var format = decoder.Frames[0].Format;
+        return format != PixelFormats.Gray16 && format != PixelFormats.Gray8 && format != PixelFormats.BlackWhite;
+    }
+
+    /// <summary>Reads a colour PNG back as flat Bgra32 bytes, ready for <see cref="WriteableBitmap.WritePixels(Int32Rect,Array,int,int)"/> -
+    /// no auto-stretch/downsample (see <see cref="UpdateProcessedImagePreview"/>'s own doc comment for why).</summary>
+    private static (byte[] Pixels, int Width, int Height) LoadColorPreviewPixels(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var decoder = new PngBitmapDecoder(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+        var converted = new FormatConvertedBitmap(decoder.Frames[0], PixelFormats.Bgra32, null, 0);
+
+        var width = converted.PixelWidth;
+        var height = converted.PixelHeight;
+        var stride = width * 4;
+        var data = new byte[height * stride];
+        converted.CopyPixels(data, stride, 0);
+
+        return (data, width, height);
     }
 
     /// <summary>Reads a PNG back as a 16-bit-grayscale <see cref="CameraFrame"/> - the shape
@@ -497,6 +560,7 @@ public partial class ProcessViewModel : ObservableObject
         GeneratedImageKind.Continuum => "continuum.png",
         GeneratedImageKind.GeometryCorrected => "geometry-corrected.png",
         GeneratedImageKind.GeometryCorrectedProcessed => "geometry-corrected-processed.png",
+        GeneratedImageKind.Colorized => "colorized.png",
         _ => $"{kind.ToString().ToLowerInvariant()}.png",
     };
 
@@ -573,6 +637,32 @@ public partial class ProcessViewModel : ObservableObject
 
         var stride = image.Width * 2; // 2 bytes/pixel for Gray16
         var bitmapSource = BitmapSource.Create(image.Width, image.Height, 96, 96, PixelFormats.Gray16, null, pixels, stride);
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmapSource));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
+
+    /// <summary>Saves a 16-bit-per-channel <see cref="ProcessedColorImage"/> (currently only
+    /// <see cref="GeneratedImageKind.Colorized"/>) as PNG via <see cref="PixelFormats.Rgb48"/> - the
+    /// colour counterpart to <see cref="SavePng"/>.</summary>
+    private static void SaveColorPng(string path, ProcessedColorImage image)
+    {
+        var pixels = new ushort[image.Width * image.Height * 3];
+        var index = 0;
+        for (var y = 0; y < image.Height; y++)
+        {
+            for (var x = 0; x < image.Width; x++)
+            {
+                pixels[index++] = image.R[y, x];
+                pixels[index++] = image.G[y, x];
+                pixels[index++] = image.B[y, x];
+            }
+        }
+
+        var stride = image.Width * 6; // 3 channels * 2 bytes/channel for Rgb48
+        var bitmapSource = BitmapSource.Create(image.Width, image.Height, 96, 96, PixelFormats.Rgb48, null, pixels, stride);
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmapSource));

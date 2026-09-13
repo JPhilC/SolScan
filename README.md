@@ -35,10 +35,13 @@ plan for the full detail on what's real vs. placeholder.
   "Setups") and general settings (capture save location, ASCOM Alpaca connection, site location).
 - **Process** — pick a `.ser` file and run it through a real (not simplified) SHG reconstruction
   pipeline: spectral-line-curvature detection, disk reconstruction, ellipse-fitting geometry
-  correction, and contrast enhancement (AutoStretch/CLAHE/CLAHE2, all ported from astro4j/JSol'Ex),
-  producing real `Raw`/`Reconstruction`/`Continuum`/`GeometryCorrected`/`GeometryCorrectedProcessed`
-  output images viewable right in the app. Process parameters (which line was studied, geometry/
-  contrast choices, which output images to generate) live in a dockable panel on this view itself.
+  correction, contrast enhancement (AutoStretch/CLAHE/CLAHE2, all ported from astro4j/JSol'Ex), and
+  colorization (a tinted `Colorized` image - a fixed colour curve for H-alpha, an approximated tint
+  for every other named line), producing real `Raw`/`Reconstruction`/`Continuum`/`GeometryCorrected`/
+  `GeometryCorrectedProcessed`/`Colorized` output images viewable right in the app, plus a two-part
+  results panel (detected line + geometry). Process parameters (which line was studied, geometry/
+  contrast choices, which output images to generate) live in a hideable dockable panel on this view
+  itself, same hamburger-drawer treatment as Capture's own settings.
 
 There's no automated acquisition pipeline yet (slewing and recording are both manually triggered),
 and processing is kicked off by hand rather than automatically once a recording finishes - both are
@@ -72,7 +75,8 @@ settings at it.
   equipment/settings/process-parameter storage.
 - **SolScan.Processing** — pure algorithms, no UI/hardware deps: the SHG reconstruction pipeline,
   natively ported from astro4j/JSol'Ex (spectral-line-curvature detection, disk reconstruction,
-  ellipse-fitting geometry correction, and AutoStretch/CLAHE/CLAHE2 contrast enhancement).
+  ellipse-fitting geometry correction, AutoStretch/CLAHE/CLAHE2 contrast enhancement, and
+  colorization).
 - **SolScan.App** — the WPF MVVM shell (Prepare/Capture/Process/Options).
 - **SolScan.Simulators** — a hardware-free camera implementation for development without real
   hardware.

@@ -39,7 +39,13 @@ public static class DiskGeometryCorrector
     /// no such panel yet, but the value costs nothing extra to carry for when it does.</param>
     /// <param name="XyRatio">The X/Y aspect ratio the correction detected (before any override -
     /// SolScan's trimmed <c>GeometryParams</c> has none yet) - the other half of that same info panel.</param>
-    public readonly record struct Result(float[,] Pixels, Ellipse DetectedEllipse, Ellipse CorrectedEllipse, double TiltDegrees, double XyRatio);
+    /// <param name="BlackPoint">The background level estimated from off-disk pixels of the oriented,
+    /// pre-warp image (<see cref="ImageStatistics.EstimateBlackPoint"/>, already computed internally
+    /// for the warp/autocrop fill colour) - astro4j's own <c>AnalysisUtils.estimateBlackPoint(bandingFixed,
+    /// ellipse) * 1.2f</c>, surfaced here so <c>SolScan.Processing.Shg.ShgProcessor</c> can feed it into
+    /// <see cref="Stretching.ArcsinhStretchingStrategy"/> for <see cref="GeneratedImageKind.Colorized"/>
+    /// without re-deriving it from scratch on a different (post-correction) image.</param>
+    public readonly record struct Result(float[,] Pixels, Ellipse DetectedEllipse, Ellipse CorrectedEllipse, double TiltDegrees, double XyRatio, float BlackPoint);
 
     /// <exception cref="InvalidOperationException">The disk's edge couldn't be fitted with an ellipse
     /// (see <see cref="DiskEdgeDetector.Detect"/>) - reported rather than silently skipped or faked,
@@ -64,7 +70,7 @@ public static class DiskGeometryCorrector
         var (finalImage, finalEllipse) = ApplyAutocrop(corrected, correctedCircle, geometryParams, blackPoint, width);
 
         var tiltDegrees = transform.Theta / System.Math.PI * 180;
-        return new Result(finalImage, ellipse, finalEllipse, tiltDegrees, transform.DetectedRatio);
+        return new Result(finalImage, ellipse, finalEllipse, tiltDegrees, transform.DetectedRatio, blackPoint);
     }
 
     private static (float[,] Image, Ellipse Ellipse) ApplyAutocrop(float[,] image, Ellipse correctedCircle, GeometryParams geometryParams, float blackPoint, int sourceWidth)

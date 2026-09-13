@@ -38,7 +38,7 @@
 
                     <DockPanel Grid.Row="0" Margin="12,12,12,0">
                         <ToggleButton DockPanel.Dock="Right"
-                                      Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                      Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
                                       Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
                                       CommandParameter="{x:Static Dock.Right}"
                                       IsChecked="{Binding IsCaptureOptionsPanelExpanded, Mode=TwoWay}"
@@ -313,7 +313,7 @@
                      sides genuinely need different alignment, rather than both being right-aligned. -->
                 <DockPanel Grid.Row="0">
                     <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0"
-                                  Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                  Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
                                   Command="{x:Static md:DrawerHost.OpenDrawerCommand}"
                                   CommandParameter="{x:Static Dock.Right}"
                                   IsChecked="{Binding IsCaptureOptionsPanelExpanded, Mode=TwoWay}"

@@ -96,6 +96,27 @@ back to the original Java source, per CLAUDE.md):
   - Clahe.applyMultiScaleClahe/computeTileSizesForImage/computeTileSizes/multiScaleClaheChannel
     ("CLAHE2" contrast enhancement - SolScan.Processing.Stretching.MultiScaleClaheStrategy) - the
     original's RGBImage per-channel branch dropped, SolScan.Processing having no colour image type
+  - GeneratedImageKind.COLORIZED and its production pipeline - the first Advanced Images kind ported
+    (SolScan.Core.Processing.GeneratedImageKind.Colorized/SolScan.Processing.Shg.ShgProcessor.ProduceColorizedImage):
+    ProcessingWorkflow.produceColorizedImage's arcsinh-stretch-then-percentile-clip-then-colorize
+    sequence (SolScan.Processing.Stretching.ArcsinhStretchingStrategy/PercentileStretchStrategy, CPU
+    path only, GPU dropped as elsewhere), AnalysisUtils.estimateBlackPoint (already ported as
+    SolScan.Processing.Shg.ImageStatistics.EstimateBlackPoint for geometry correction's own warp/crop
+    fill colour - now also surfaced via DiskGeometryCorrector.Result.BlackPoint for this), ColorCurve/
+    KnownCurves.H_ALPHA (SolScan.Core.Processing.ColorCurveParams data +
+    SolScan.Processing.Color.ColorCurve math - the per-channel quadratic fit reuses the existing
+    SolScan.Processing.Math.LinearRegression.SecondOrderRegression rather than porting the original's
+    own hand-derived polynomial solve/cache; KnownCurves' own unused CALCIUM/HELIUM curves aren't
+    ported, confirmed dead code even in the original), SpectralRay.toRGB/toSimpleRGB/improveEsthetics
+    (SolScan.Core.Processing.SpectralRay.ToRgb, kept in Core as dependency-free math alongside that
+    record's other data, same precedent as SolScan.Core.Astronomy.SunPosition), the
+    Colorize.doColorize(width,height,mono,int[] rgb) wavelength-tint overload
+    (SolScan.Processing.Color.Colorize.WithWavelengthRgb, reusing the already-ported GammaStrategy),
+    and ImageUtils.fromRGBtoHSL/fromHSLtoRGB plus the generic StretchingStrategy.stretch(RGBImage)
+    default method's one concrete use in this pipeline (SolScan.Processing.Color.RgbHsl/
+    Colorize.StretchByLightness - ported as a direct specialization for the one stretch strategy
+    (a plain min/max linear stretch, itself newly ported as SolScan.Processing.Stretching.LinearStretchStrategy)
+    this pipeline actually drives through it, not a general RGBImage-stretch dispatch mechanism)
 
 ================================================================================
 RASTA

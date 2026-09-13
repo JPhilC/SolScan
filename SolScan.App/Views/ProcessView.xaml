@@ -41,7 +41,7 @@
 
                     <DockPanel Grid.Row="0" Margin="12,12,12,0">
                         <ToggleButton DockPanel.Dock="Right"
-                                      Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                      Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
                                       Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
                                       CommandParameter="{x:Static Dock.Right}"
                                       IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
@@ -91,7 +91,7 @@
                      the Settings hamburger pushed to the far right. -->
                 <DockPanel Grid.Row="0">
                     <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0"
-                                  Style="{StaticResource MaterialDesignHamburgerToggleButton}"
+                                  Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
                                   Command="{x:Static md:DrawerHost.OpenDrawerCommand}"
                                   CommandParameter="{x:Static Dock.Right}"
                                   IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
@@ -183,15 +183,21 @@
                      are deliberately unstretched real sensor-scale values, which would look flat/washed
                      here without this. HighQuality scaling since the preview is downsampled then
                      magnified back up, same reasoning as CaptureView's own live-preview Image. Fills
-                     all remaining space rather than a fixed MaxWidth/MaxHeight cap; wrapped in a
-                     ScrollViewer, matching CaptureView's own preview container, for the rare case the
-                     content doesn't fit the available area. -->
+                     all remaining space rather than a fixed MaxWidth/MaxHeight cap, and zooms to fit
+                     that space via Stretch="Uniform" - deliberately NOT wrapped in a ScrollViewer this
+                     time (an earlier version was, "matching CaptureView's own preview container"): a
+                     ScrollViewer measures its content with infinite available size, which defeats
+                     Stretch="Uniform" entirely (nothing to shrink-to-fit against) - a well-known WPF
+                     gotcha, and exactly why the image was rendering at native resolution needing manual
+                     scrolling instead of fitting the view. CaptureView's own zoom (Auto/Fit Width/Fit
+                     Height/fixed %) works around the same gotcha with an explicit code-behind-computed
+                     Width/Height (see CaptureView.xaml.cs's UpdateImageSize) rather than relying on
+                     Stretch alone - not needed here, since Process has no equivalent "pixel-peep a
+                     fixed zoom level" use case CaptureView's own doc comment describes. -->
                 <Border Grid.Row="4" BorderBrush="Gray" BorderThickness="1">
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                        <Image Source="{Binding ProcessedImagePreview}"
-                               Stretch="Uniform"
-                               RenderOptions.BitmapScalingMode="HighQuality" />
-                    </ScrollViewer>
+                    <Image Source="{Binding ProcessedImagePreview}"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
                 </Border>
             </Grid>
         </md:DrawerHost>

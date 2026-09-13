@@ -234,8 +234,9 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
 - **SolScan.Processing** — pure algorithms, no UI/hardware: the SHG reconstruction pipeline, ported
   natively from `SolexVideoProcessor`'s individual workflow steps rather than shelling out to
   `jsolex-cli` (see Phase 6 below for why that original plan was skipped). Spectral line detection,
-  disk reconstruction, ellipse fitting/geometry correction, and AutoStretch/CLAHE contrast enhancement
-  (`SolScan.Processing.Stretching`, all three modes now including CLAHE2/multi-scale CLAHE) are all
+  disk reconstruction, ellipse fitting/geometry correction, AutoStretch/CLAHE contrast enhancement
+  (`SolScan.Processing.Stretching`, all three modes now including CLAHE2/multi-scale CLAHE), and
+  colorization (`SolScan.Processing.Color`, the first Advanced Images kind ported) are all
   implemented; banding/jagging/distortion corrections are not yet.
 - **SolScan.App** — WPF MVVM shell. `App.xaml.cs` is the single composition root - one
   `ServiceCollection` built once at startup (no scopes created afterward), same pattern RASTA uses.
@@ -1107,6 +1108,103 @@ only ever updated on a *successful* `ProcessAsync` completion - left untouched (
 cancel/failure, so a previous successful run's numbers stay visible rather than being wiped by an
 unrelated error on a later attempt.
 
+Also real: **the Colorized image** - `GeneratedImageKind.Colorized`, the first output landed from
+JSolex's separate "Advanced Images" section rather than "Basic Images" (astro4j's own
+`ImageSelectionPanel.java` puts its checkbox in `advancedGrid`, not the basic one - confirmed by
+reading that file directly rather than assuming from `RequestedImages.FULL_MODE`'s flat list, which
+doesn't distinguish the two). Requested directly by the user as "the other images JSolex can produce,
+starting with the colourised image" once the Process view's DrawerHost redesign was confirmed working
+in the app - a deliberate, acknowledged scope expansion past the "Basic Images only" framing
+`GeneratedImageKind`/`RequestedImages`'s own doc comments used to carry (both updated to reflect it).
+`SolScan.Core.Processing.SpectralRay` gained the two pieces astro4j's own `SpectralRay` carries for
+this and SolScan's port had previously dropped as out-of-scope: a nullable `ColorCurve` field (backed
+by a new plain-data `ColorCurveParams` record - only `HAlpha` sets one, matching astro4j exactly) and
+`ToRgb()`/`ToSimpleRgb()` (a wavelength-to-display-colour approximation plus an HSL desaturate/lighten
+pass, `improveEsthetics` in the original) - kept in Core as dependency-free math on the record itself,
+same precedent as `SolScan.Core.Astronomy.SunPosition`, rather than needing Core to depend on
+Processing. The actual per-pixel colorization math is new in `SolScan.Processing.Color`: `ColorCurve`
+(fits each channel's mono-to-output quadratic via the already-ported
+`SolScan.Processing.Math.LinearRegression.SecondOrderRegression`, rather than porting astro4j's own
+hand-derived polynomial solve/cache - a 3-point regression is cheap enough that per-instance caching
+saves nothing measurable), `RgbHsl` (array-based RGB↔HSL conversion, the whole-image counterpart to
+`SpectralRay`'s own single-pixel HSL helpers), and `Colorize` (`WithCurve` for H-alpha's fixed curve,
+`WithWavelengthRgb` for every other named line's approximated tint - gamma-stretches a copy of the mono
+data, tints it by the wavelength colour, then re-stretches the result's lightness toward white via a
+direct specialization of astro4j's generic `StretchingStrategy.stretch(RGBImage)` default method for
+the one stretch strategy this pipeline actually drives through it, a plain min/max linear stretch, not
+a general RGBImage-stretch dispatch mechanism SolScan.Processing has no other use for). Two more
+stretching strategies were ported to feed this: `ArcsinhStretchingStrategy` (CPU path only, matching
+every other GPU-capable port here) and `PercentileStretchStrategy` - both applied to a copy of the
+`GeometryCorrectedProcessed` buffer before colorizing, anchored to a black-point estimate
+(`ImageStatistics.EstimateBlackPoint`, already computed internally by `DiskGeometryCorrector.Correct`
+for its own warp/crop fill colour, now also surfaced via a new `Result.BlackPoint` field rather than
+re-derived from scratch on a different image). `SpectralRay.Other` (no wavelength) produces no
+Colorized image at all, matching astro4j's own silent no-op for that case - not reported via
+`ShgProcessingResult.SkippedKinds`, since the kind *is* implemented, it's simply inapplicable to that
+particular ray. `ShgProcessingResult` gained a new `ColorImages` list alongside the existing mono
+`Images` - kept as a genuinely separate, single-purpose type (`ProcessedColorImage`, three `ushort[,]`
+channels) rather than making `ProcessedImage.Pixels` nullable-plus-an-optional-colour-payload, since
+every consumer already needs to branch on "is this mono or colour" by file content anyway.
+`ProcessViewModel` gained a `SaveColorPng` (16-bit-per-channel `PixelFormats.Rgb48`, alongside the
+existing mono `SavePng`/`Gray16`) and the disk-based preview loader now peeks a candidate PNG's own
+decoded pixel format to decide which path to take: a colour PNG is shown as-is (no auto-stretch - the
+colorization pipeline already stretched/tinted it, so re-auto-stretching would just wash out its own
+colour curve), converted straight to `Bgra32` for display, while a mono PNG keeps the existing
+auto-stretch/downsample treatment. Image Selection's panel gained a "Colorized" checkbox under a new
+"Advanced Images" sub-heading (with its own explanatory tooltip, matching this panel's existing
+in-app-learning-tooltips goal), and the Process Parameters panel's own "Line" tooltip was updated to
+mention it now also drives Colorized's tint, not just Auto contrast enhancement's calcium-line check.
+Covered by `ColorizeTests` (the curve/wavelength math directly - anchor-point exactness, known-hue
+sanity checks for a couple of real wavelengths, tint proportionality) and two new
+`DiskGeometryCorrectorTests` cases (a real end-to-end Colorized image for both the H-alpha-curve and
+wavelength-tint paths, proving the three channels genuinely differ and use a meaningful part of the
+16-bit range; and the `SpectralRay.Other` no-op case).
+
+**Follow-up, after the user actually tried it**: three fixes/tweaks, all confirmed by evaluating the
+fitted curves/checking the actual XAML behaviour rather than guessing:
+- **H-alpha's colour curve was retuned toward orange.** astro4j's own `KnownCurves.H_ALPHA` values
+  (`84,139, 95,20, 218,65`) render a deep crimson red through most of the mid-tone range - evaluating
+  the fitted quadratics directly (not just eyeballing the raw input numbers) showed green staying under
+  ~25% of red until close to full white. `ColorCurveParams.HAlpha` is now `84,150, 60,55, 220,40` -
+  green's anchor moved from 95→20 to 60→55 (ramping up much earlier and further), red/blue nudged to
+  match - verified across the full mono range to still be smooth/monotonic, landing on a genuine
+  orange progression (dark orange → solid orange → golden orange → pale highlight) rather than red →
+  pale orange. A deliberate customization per the user's own taste, no longer astro4j's stock curve -
+  noted as such in `ColorCurveParams.HAlpha`'s own doc comment so a future astro4j-parity check doesn't
+  mistake this for drift.
+- **The Colorized image is now the default preview shown right after a Process run that produced
+  one.** `RefreshProcessedImages` gained a `preferColorized` parameter (true only from `ProcessAsync`'s
+  own call site, and only when `result.ColorImages` is non-empty) that makes `colorized.png` win the
+  default-selection race even over the previously-selected file - the browse-a-file call site (picking
+  a `.ser` to inspect, not just finished processing it) still defaults to "raw.png"/keep-previous as
+  before.
+- **The image preview now actually zooms to fit the view**, which it wasn't doing before despite the
+  `Image`'s own `Stretch="Uniform"`: it was wrapped in a `ScrollViewer` ("matching CaptureView's own
+  preview container"), and a `ScrollViewer` measures its content with infinite available size - which
+  defeats `Stretch="Uniform"` entirely, since there's nothing to shrink-to-fit against. A well-known WPF
+  gotcha, and exactly why the image was rendering at native resolution requiring manual scroll bars
+  instead of fitting the view. Fixed by removing the `ScrollViewer` - the `Image` now sits directly in
+  its `Border`, whose size is properly bounded by the surrounding `Grid` row, so `Stretch="Uniform"`
+  can actually do its job. (CaptureView's own zoom feature works around the identical gotcha a different
+  way - an explicit code-behind-computed `Width`/`Height`, see `CaptureView.xaml.cs`'s
+  `UpdateImageSize` - needed there because CaptureView also supports pixel-peeping at fixed zoom
+  percentages, a use case Process has no equivalent of; Process's own fix is the simpler one.)
+
+NOT YET VALIDATED against a real capture beyond this round of user testing - like the AutoStretch/CLAHE
+work before it, the underlying algorithm is only exercised against the existing synthetic
+elliptical-disk test fixture in automated tests.
+
+**One more follow-up, reported after the above three**: the drawer's own hamburger/close toggle button
+pointed the wrong way once opened - `MaterialDesignHamburgerToggleButton`'s built-in animation morphs
+its hamburger icon into a back-arrow that always points *left* when checked, correct for GSServer's own
+left-hand drawers (what this pattern was modelled on) but backwards for SolScan's own right-hand ones.
+Fixed with a new shared style, `MaterialDesignHamburgerToggleButtonRightDrawer`
+(`Themes/MaterialDesignScoped.xaml`, based on the stock style plus a horizontal `ScaleTransform
+ScaleX="-1"` - the hamburger icon itself is symmetric, so only the arrow it becomes when checked is
+actually affected), applied to all four hamburger `ToggleButton`s across both views with a right-hand
+drawer (Process and Capture, each with an open button and a close button) for a consistent direction
+everywhere, not just the one instance reported.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
@@ -1363,13 +1461,19 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    "Also real" above for the full writeup, including why AutoStretch turned out to be the *bigger* of
    AutoStretch/CLAHE (it depends on CLAHE internally), not the cheaper first cut originally assumed, and
    why CLAHE2 turned out to be the smaller one (it just reuses `ClaheStrategy` at several tile sizes).
+   Sixth slice (also real): the Colorized image - `SolScan.Processing.Color`'s `ColorCurve`/`RgbHsl`/
+   `Colorize`, producing a real `GeneratedImageKind.Colorized` output (H-alpha's fixed colour curve, or
+   a wavelength-approximated tint for every other named line) - see "Also real" above ("the Colorized
+   image") for the full writeup, including why this is the first kind ported from JSolex's *Advanced*
+   Images section rather than Basic Images.
    Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
    identification (including the *real* "calcium-line detection" - automatically identifying which line
    is being observed, as opposed to the `Auto` contrast-mode's own trivial `SpectrumParams.Ray` check,
-   already real - see "Also real" above). A results panel mirroring JSolex's two-part info view (detected
-   line + geometry tilt/xyRatio) is now real too - see the "Processing Results panel" entry further down
-   for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/`DetectedXyRatio`
-   are no longer only ever shown as a one-line status-text summary.
+   already real - see "Also real" above), and the rest of Advanced Images (Doppler, redshift, active
+   regions, ...)/Debug Options beyond Colorized. A results panel mirroring JSolex's two-part info view
+   (detected line + geometry tilt/xyRatio) is now real too - see the "Processing Results panel" entry
+   further down for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/
+   `DetectedXyRatio` are no longer only ever shown as a one-line status-text summary.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to

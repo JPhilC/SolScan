@@ -6,10 +6,12 @@ namespace SolScan.Core.Processing;
 
 /// <summary>
 /// Which built-in output image kind can be generated from a processed SER capture - ported from
-/// astro4j's <c>GeneratedImageKind</c> enum, but scoped for now to just the "Basic Images" values
-/// JSolex's "Image Selection and Scripts" tab exposes in its own Basic Images section. Advanced
-/// Images (colorized, Doppler, redshift, active regions, ...) and Debug Options add more values here
-/// once those sections land - see SolScan CLAUDE.md.
+/// astro4j's <c>GeneratedImageKind</c> enum. Originally scoped to just the "Basic Images" values
+/// JSolex's "Image Selection and Scripts" tab exposes in its own Basic Images section;
+/// <see cref="Colorized"/> is the first value ported from that tab's separate Advanced Images
+/// section (astro4j's own <c>ImageSelectionPanel.java</c> puts its checkbox in <c>advancedGrid</c>,
+/// not the basic one) - the rest of Advanced Images (Doppler, redshift, active regions, ...) and
+/// Debug Options still add more values here once those sections land - see SolScan CLAUDE.md.
 /// </summary>
 public enum GeneratedImageKind
 {
@@ -30,6 +32,13 @@ public enum GeneratedImageKind
     /// <summary>The geometry-corrected image with contrast enhancement applied (see
     /// <see cref="ContrastEnhancementMode"/>).</summary>
     GeometryCorrectedProcessed,
+
+    /// <summary>The geometry-corrected-and-enhanced image tinted to approximate the studied
+    /// <see cref="SpectrumParams.Ray"/>'s real colour (a fixed <see cref="SpectralRay.ColorCurve"/>
+    /// for H-alpha, otherwise <see cref="SpectralRay.ToRgb"/>'s wavelength approximation) - not
+    /// produced at all when <see cref="SpectrumParams.Ray"/> is <see cref="SpectralRay.Other"/>,
+    /// which has no wavelength to derive a colour from.</summary>
+    Colorized,
 }
 
 /// <summary>The <see cref="DirectoryKind.GetDirectoryKind"/> extension - split into its own static
@@ -51,6 +60,7 @@ public static class GeneratedImageKindExtensions
         GeneratedImageKind.Continuum => DirectoryKind.Processed,
         GeneratedImageKind.GeometryCorrected => DirectoryKind.Processed,
         GeneratedImageKind.GeometryCorrectedProcessed => DirectoryKind.Processed,
+        GeneratedImageKind.Colorized => DirectoryKind.Processed,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unmapped GeneratedImageKind - add it to GetDirectoryKind."),
     };
 }

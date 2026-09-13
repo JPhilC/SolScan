@@ -17,4 +17,24 @@
         <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Primary/MaterialDesignColor.Grey.xaml" />
         <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Accent/MaterialDesignColor.Blue.xaml" />
     </ResourceDictionary.MergedDictionaries>
+
+    <!-- MaterialDesignThemes' own MaterialDesignHamburgerToggleButton animates its hamburger icon into
+         a back-arrow that always points left when checked - correct for GSServer's own left-hand
+         drawers (which SolScan's own hamburger-drawer usage was modelled on), but backwards for
+         SolScan's own right-hand ones (Process/CaptureView, Dock.Right per the user's own request - see
+         this file's own doc comment above): with a right-side drawer, "closing" should point right,
+         toward the edge the drawer disappears to, not left. Reported directly by the user after trying
+         the drawer UI ("the hide button is pointing the wrong way"). A horizontal mirror
+         (ScaleTransform ScaleX="-1") is the simplest fix - the hamburger icon itself is symmetric so
+         looks identical either way, and only the arrow it morphs into when checked is actually
+         reversed. Used by both hamburger ToggleButtons (open and close) on both views that have a
+         right-hand drawer, so all four button instances point the same, consistent direction. -->
+    <Style x:Key="MaterialDesignHamburgerToggleButtonRightDrawer" TargetType="ToggleButton" BasedOn="{StaticResource MaterialDesignHamburgerToggleButton}">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <ScaleTransform ScaleX="-1"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

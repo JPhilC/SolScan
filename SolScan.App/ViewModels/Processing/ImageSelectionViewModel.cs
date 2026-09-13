@@ -5,8 +5,10 @@ namespace SolScan.App.ViewModels.Processing;
 
 /// <summary>
 /// Process view's "Image Selection" section (moved here from the old Options tab of the same name) -
-/// the "Basic Images" checklist from astro4j's "Image Selection and Scripts" page (Advanced Images/
-/// Debug Options/Custom Images/scripts/presets are all out of scope for now - see SolScan CLAUDE.md).
+/// the "Basic Images" checklist from astro4j's "Image Selection and Scripts" page, plus
+/// <see cref="IsColorizedSelected"/> - the first Advanced Images kind ported (see
+/// <see cref="GeneratedImageKind.Colorized"/>'s own doc comment). The rest of Advanced Images/Debug
+/// Options/Custom Images/scripts/presets are still out of scope for now - see SolScan CLAUDE.md.
 /// No store access of its own - see <see cref="ProcessParametersViewModel"/>'s doc comment for why.
 /// </summary>
 public partial class ImageSelectionViewModel : ObservableObject
@@ -26,6 +28,9 @@ public partial class ImageSelectionViewModel : ObservableObject
     [ObservableProperty]
     private bool isGeometryCorrectedProcessedSelected;
 
+    [ObservableProperty]
+    private bool isColorizedSelected;
+
     public ImageSelectionViewModel(ProcessParams processParams)
     {
         var images = processParams.RequestedImages;
@@ -34,6 +39,7 @@ public partial class ImageSelectionViewModel : ObservableObject
         isContinuumSelected = images.IsEnabled(GeneratedImageKind.Continuum);
         isGeometryCorrectedSelected = images.IsEnabled(GeneratedImageKind.GeometryCorrected);
         isGeometryCorrectedProcessedSelected = images.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed);
+        isColorizedSelected = images.IsEnabled(GeneratedImageKind.Colorized);
     }
 
     public RequestedImages ToRequestedImages()
@@ -44,6 +50,7 @@ public partial class ImageSelectionViewModel : ObservableObject
         if (IsContinuumSelected) images.Add(GeneratedImageKind.Continuum);
         if (IsGeometryCorrectedSelected) images.Add(GeneratedImageKind.GeometryCorrected);
         if (IsGeometryCorrectedProcessedSelected) images.Add(GeneratedImageKind.GeometryCorrectedProcessed);
+        if (IsColorizedSelected) images.Add(GeneratedImageKind.Colorized);
         return new RequestedImages(images);
     }
 }

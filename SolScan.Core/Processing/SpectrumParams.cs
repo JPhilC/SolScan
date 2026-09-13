@@ -21,8 +21,10 @@ namespace SolScan.Core.Processing;
 /// anything in SolScan (Doppler is an Advanced Images kind, not yet ported), carried here so the
 /// field exists once it is.</param>
 /// <param name="ContinuumShift">Pixel shift used for <see cref="GeneratedImageKind.Continuum"/>.</param>
-/// <param name="SwitchRedBlueChannels">Swaps the red/blue channels on colorized output - not yet
-/// consumed by anything in SolScan (colorized output is an Advanced Images kind, not yet ported).</param>
+/// <param name="SwitchRedBlueChannels">Swaps which of the two opposite-shift wing images is treated
+/// as red vs. blue for Doppler images (astro4j's <c>DopplerSupport</c>) - not colorized output, despite
+/// this field's name; not yet consumed by anything in SolScan (Doppler is an Advanced Images kind,
+/// not yet ported).</param>
 public sealed record SpectrumParams(
     SpectralRay Ray,
     LineDetectionMode DetectionMode,
