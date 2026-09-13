@@ -97,6 +97,29 @@ public partial class ProcessViewModel : ObservableObject
     [ObservableProperty]
     private bool isProcessing;
 
+    // The three fields below back the "Processing Results" panel (ProcessView.xaml's right-hand
+    // column) - astro4j's own two-part "detected line"/"detected geometry" info view (see
+    // ShgProcessingResult's own doc comment) plus an overall image-count/output-folder summary,
+    // previously only ever shown as one transient status-bar line (BuildResultSummary, still used
+    // for that). Unlike AvailableProcessedImages (deliberately disk-based - see this class's own
+    // doc comment), these are never persisted anywhere, so there's no way to recover them for a
+    // file processed in an earlier session without running Process again - reset to a "not yet
+    // processed" placeholder whenever a different file is selected, and only ever updated here on a
+    // *successful* ProcessAsync completion (left as-is, not blanked, on cancel/failure, so a
+    // previous successful run's numbers stay visible rather than being wiped by an unrelated error).
+    [ObservableProperty]
+    private string detectedLineText = NoLineDetectedYetText;
+
+    [ObservableProperty]
+    private string detectedGeometryText = NoGeometryDetectedYetText;
+
+    [ObservableProperty]
+    private string resultImagesText = NoImagesYetText;
+
+    private const string NoLineDetectedYetText = "No spectral line curve detected yet.";
+    private const string NoGeometryDetectedYetText = "No geometry correction detected yet.";
+    private const string NoImagesYetText = "Run Process to generate output images.";
+
     /// <summary>Whatever `.png` files are actually sitting in the current file's `raw`/`processed`
     /// subfolders right now - see the class doc comment for why this is disk-based rather than tied
     /// to the most recent <see cref="ProcessAsync"/> run.</summary>
@@ -263,6 +286,12 @@ public partial class ProcessViewModel : ObservableObject
         OutputFolderText = null;
         CaptureDetailsText = null;
 
+        // A newly-selected file's own results (if any) haven't been generated this session - see
+        // the three properties' own doc comment for why there's no way to recover them from disk.
+        DetectedLineText = NoLineDetectedYetText;
+        DetectedGeometryText = NoGeometryDetectedYetText;
+        ResultImagesText = NoImagesYetText;
+
         try
         {
             using var reader = _serReaderFactory();
@@ -330,7 +359,9 @@ public partial class ProcessViewModel : ObservableObject
             // comment for why the dropdown isn't just populated from result.Images directly.
             RefreshProcessedImages(SelectedFilePath);
 
-            SetStatus(BuildResultSummary(result, ProcessingLocations.GetOutputFolder(SelectedFilePath)));
+            var outputFolder = ProcessingLocations.GetOutputFolder(SelectedFilePath);
+            SetStatus(BuildResultSummary(result, outputFolder));
+            UpdateResultInfoPanel(result, outputFolder);
         }
         catch (OperationCanceledException)
         {
@@ -469,17 +500,35 @@ public partial class ProcessViewModel : ObservableObject
         _ => $"{kind.ToString().ToLowerInvariant()}.png",
     };
 
+    /// <summary>astro4j's own "detected line" info-panel figure, formatted as one sentence - null if
+    /// nothing needed reconstruction. Shared between <see cref="BuildResultSummary"/> (the transient
+    /// status-bar line, which omits this fragment entirely when null) and
+    /// <see cref="UpdateResultInfoPanel"/> (the persistent panel, which shows
+    /// <see cref="NoLineDetectedYetText"/> instead).</summary>
+    private static string? FormatDetectedLine(ShgProcessingResult result) =>
+        result.DetectedLinePolynomial is { } polynomial
+            ? $"Line curve: y = {polynomial.A:F6}x² + {polynomial.B:F4}x + {polynomial.C:F2}."
+            : null;
+
+    /// <summary>astro4j's own "detected geometry" info-panel figure - the other half of that same
+    /// panel alongside <see cref="FormatDetectedLine"/>, null under the same "wasn't requested"
+    /// condition.</summary>
+    private static string? FormatDetectedGeometry(ShgProcessingResult result) =>
+        result.DetectedTiltDegrees is { } tiltDegrees && result.DetectedXyRatio is { } xyRatio
+            ? $"Disk tilt: {tiltDegrees:F2}°, X/Y ratio: {xyRatio:F3}."
+            : null;
+
     private static string BuildResultSummary(ShgProcessingResult result, string outputFolder)
     {
         var summary = $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders).";
-        if (result.DetectedLinePolynomial is { } polynomial)
+        if (FormatDetectedLine(result) is { } line)
         {
-            summary += $" Line curve: y = {polynomial.A:F6}x² + {polynomial.B:F4}x + {polynomial.C:F2}.";
+            summary += $" {line}";
         }
 
-        if (result.DetectedTiltDegrees is { } tiltDegrees && result.DetectedXyRatio is { } xyRatio)
+        if (FormatDetectedGeometry(result) is { } geometry)
         {
-            summary += $" Disk tilt: {tiltDegrees:F2}°, X/Y ratio: {xyRatio:F3}.";
+            summary += $" {geometry}";
         }
 
         if (result.SkippedKinds.Count > 0)
@@ -491,6 +540,19 @@ public partial class ProcessViewModel : ObservableObject
         }
 
         return summary;
+    }
+
+    /// <summary>Populates the "Processing Results" panel's three properties from a just-completed
+    /// <paramref name="result"/> - see those properties' own doc comment for why this only ever runs
+    /// on success.</summary>
+    private void UpdateResultInfoPanel(ShgProcessingResult result, string outputFolder)
+    {
+        DetectedLineText = FormatDetectedLine(result) ?? NoLineDetectedYetText;
+        DetectedGeometryText = FormatDetectedGeometry(result) ?? NoGeometryDetectedYetText;
+        ResultImagesText = result.SkippedKinds.Count > 0
+            ? $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders). "
+                + $"Not yet implemented: {string.Join(", ", result.SkippedKinds)}."
+            : $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders).";
     }
 
     /// <summary>Saves a 16-bit grayscale <see cref="ProcessedImage"/> as PNG via WPF's own

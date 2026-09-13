@@ -70,13 +70,14 @@
                  (Browse/Process/Cancel/the processed-image picker) lives in one top toolbar row, with
                  the Settings hamburger pinned to the far right (a DockPanel, same reasoning as
                  CaptureView's own top toolbar - see that view's history for why a DockPanel is the
-                 right tool once the two sides need different alignment); file/equipment info sits in
-                 its own row underneath the buttons rather than interleaved between two separate button
-                 rows the way it used to be; and the preview fills all remaining space (a Grid row
-                 sized "*" - unlike the StackPanel this used to be, a Grid can actually stretch a row
-                 to fill leftover space) instead of being capped to a fixed 640x640 box. Status
-                 narration moved off this view entirely - see StatusBarViewModel.ProcessStatusText -
-                 so it's visible from any stage, matching Capture/Mount's own status-bar fields. -->
+                 right tool once the two sides need different alignment); a scrollable two-column row
+                 underneath the buttons holds the file/equipment info (left) alongside a new
+                 "Processing Results" panel (right, see ProcessViewModel.DetectedLineText's own doc
+                 comment); and the preview fills all remaining space (a Grid row sized "*" - unlike a
+                 StackPanel, a Grid can actually stretch a row to fill leftover space) instead of being
+                 capped to a fixed 640x640 box. Status narration moved off this view entirely - see
+                 StatusBarViewModel.ProcessStatusText - so it's visible from any stage, matching
+                 Capture/Mount's own status-bar fields. -->
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -126,21 +127,57 @@
                     </StackPanel>
                 </DockPanel>
 
-                <!-- File/equipment info - one row beneath the toolbar. -->
-                <StackPanel Grid.Row="2">
-                    <TextBlock Text="{Binding SelectedFilePath}" />
-                    <TextBlock Text="{Binding FileInfoText}"
-                               Margin="0,4,0,0"
-                               FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding EquipmentInfoText}"
-                               Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding CaptureDetailsText}"
-                               Margin="0,4,0,0"
-                               Opacity="0.8" />
-                    <TextBlock Text="{Binding OutputFolderText}"
-                               Margin="0,4,0,0"
-                               Opacity="0.8" />
-                </StackPanel>
+                <!-- File/equipment info (left) + the "Processing Results" panel (right) - one
+                     scrollable row beneath the toolbar, two columns. MaxHeight bounds it so a long
+                     info panel can't crowd out the preview below (a Grid row sized "Auto" would
+                     otherwise just grow to fit its content, leaving the image row less than it
+                     asked for); typical content is short enough that the scrollbar never actually
+                     appears. -->
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="220">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="24"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{Binding SelectedFilePath}" />
+                            <TextBlock Text="{Binding FileInfoText}"
+                                       Margin="0,4,0,0"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding EquipmentInfoText}"
+                                       Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding CaptureDetailsText}"
+                                       Margin="0,4,0,0"
+                                       Opacity="0.8" />
+                            <TextBlock Text="{Binding OutputFolderText}"
+                                       Margin="0,4,0,0"
+                                       Opacity="0.8" />
+                        </StackPanel>
+
+                        <!-- What the last Process run in this session actually detected/produced -
+                             astro4j's own two-part "detected line"/"detected geometry" info view (see
+                             ShgProcessingResult's own doc comment), plus the overall image-count/
+                             output-folder summary. Not persisted anywhere on disk (see
+                             ProcessViewModel.DetectedLineText's own doc comment), so a file with
+                             pre-existing output from an earlier session shows the "not yet processed
+                             this session" placeholders until Process is run again. -->
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Processing Results" FontWeight="Bold" />
+                            <TextBlock Text="{Binding DetectedLineText}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding DetectedGeometryText}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding ResultImagesText}"
+                                       Margin="0,4,0,0"
+                                       Opacity="0.8"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
 
                 <!-- Auto-stretched (see ProcessViewModel.UpdateProcessedImagePreview) - the saved PNGs
                      are deliberately unstretched real sensor-scale values, which would look flat/washed

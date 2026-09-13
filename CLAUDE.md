@@ -1057,6 +1057,56 @@ label, ~178px) plus the status text row once title-bar chrome and margins were a
 the window size itself to its actual content is more robust than a bigger guessed pixel value, since
 it no longer depends on Windows theme/DPI/title-bar-height assumptions.
 
+Also real: the same icon-toolbar/dark-button treatment landed on `ProcessView.xaml` too - Browse/
+Process/Cancel now use `BrowseForFile.png`/`ProcessRun.png`/`CancelProcessing.png` via the same shared
+`ToolbarIconButtonStyle`, each with an explanatory tooltip, and Cancel keeps its existing
+`IsProcessing`-gated visibility rather than gaining a stacked-button treatment (unlike Capture's
+Connect/Disconnect and Start/Stop pairs, Process's own "disabled Process + appears-while-running
+Cancel" shape was already a deliberate, working design, not something this pass needed to change).
+The view's main content was also restructured from a plain `StackPanel` into a `Grid`, matching
+`CaptureView`'s own shape: every control (Browse/Process/Cancel/the processed-image picker) now lives
+in one top toolbar row (a `DockPanel`, hamburger pinned right, same reasoning as CaptureView's own
+toolbar) instead of being split across two separate button rows with file info sandwiched between
+them; and the image preview now fills all remaining vertical space (`Grid.RowDefinition Height="*"` -
+a `StackPanel` can't stretch a child to fill leftover space the way a `Grid` row can) rather than
+being capped to a fixed `MaxWidth="640" MaxHeight="640"` box, wrapped in a `ScrollViewer` for parity
+with Capture's own preview container (in practice this rarely if ever actually needs to scroll, since
+`Stretch="Uniform"` into a sized container never overflows it - flagged to the user as a design
+trade-off rather than silently assumed, in case native-resolution-with-real-scrolling turns out to be
+what's actually wanted instead).
+
+`ProcessViewModel`'s own status narration (previously a local `StatusText` bound into a `TextBlock` at
+the top of this view) moved into the shared `StatusBarViewModel` instead - a new `ProcessStatusText`
+field (+ matching `StatusBar.xaml` entry), following the exact same pattern `CaptureFrameRateText`/
+`MountStatusText` already established. `ProcessViewModel` now takes a `StatusBarViewModel` constructor
+dependency (already a DI singleton, so no registration change needed) and every former
+`StatusText = ...` assignment became a call to a new `SetStatus(message)` helper that writes
+`_statusBar.ProcessStatusText = $"Process: {message}"` - including the `Progress<string>` callback
+threaded into `IShgProcessor.ProcessAsync`, which collapses to `new Progress<string>(SetStatus)` since
+`SetStatus`'s signature already matches `Action<string>` exactly. Status now stays visible regardless
+of which stage is on screen, matching Capture/Mount's own status-bar fields.
+
+Also real: a **"Processing Results" panel** - the results panel mirroring JSolex's two-part info view
+(detected line + geometry tilt/xyRatio) called out as still-needed in Phase 6 below, now landed.
+Requested as a natural follow-on once the icon-toolbar/layout pass above freed up room: the row
+between the toolbar and the image preview split into two columns inside one `ScrollViewer`
+(`MaxHeight="220"`, so a long info panel can't crowd out the preview below the way an unbounded
+`Auto`-height row would - typical content is short enough the scrollbar essentially never actually
+appears) - the existing file/equipment info stayed in the left column unchanged, and the right column
+is the new panel. Three new `ProcessViewModel` properties back it - `DetectedLineText`/
+`DetectedGeometryText`/`ResultImagesText` - populated by a new `UpdateResultInfoPanel` method that
+reuses the same `FormatDetectedLine`/`FormatDetectedGeometry` fragment-formatters `BuildResultSummary`
+(the transient status-bar line) already needed, refactored out so the two presentations - one a
+terse single line omitting empty fragments, the other three always-shown labeled fields with a
+placeholder - can't drift apart. Unlike `AvailableProcessedImages` (deliberately disk-based, per this
+class's own doc comment), none of these three are persisted anywhere - `ShgProcessingResult` is a
+purely in-memory return value with no sidecar file - so there's no way to recover them for a file
+whose output already exists from an earlier session without running Process again: `LoadSelectedFile`
+resets all three to "not yet processed" placeholders whenever a different file is picked, and they're
+only ever updated on a *successful* `ProcessAsync` completion - left untouched (not blanked) on
+cancel/failure, so a previous successful run's numbers stay visible rather than being wiped by an
+unrelated error on a later attempt.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
@@ -1316,10 +1366,10 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
    identification (including the *real* "calcium-line detection" - automatically identifying which line
    is being observed, as opposed to the `Auto` contrast-mode's own trivial `SpectrumParams.Ray` check,
-   already real - see "Also real" above), and a
-   results panel mirroring JSolex's two-part info view (detected line + geometry tilt/xyRatio) -
-   `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/`DetectedXyRatio` all exist but
-   aren't shown anywhere richer than a one-line status-text summary yet.
+   already real - see "Also real" above). A results panel mirroring JSolex's two-part info view (detected
+   line + geometry tilt/xyRatio) is now real too - see the "Processing Results panel" entry further down
+   for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/`DetectedXyRatio`
+   are no longer only ever shown as a one-line status-text summary.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to
