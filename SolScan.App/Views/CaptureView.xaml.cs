@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Shapes;
 using SolScan.App.ViewModels;
 
 namespace SolScan.App.Views;
@@ -22,6 +24,8 @@ public partial class CaptureView : UserControl
         PreviewScrollViewer.SizeChanged += (_, _) => UpdateImageSize();
     }
 
+    private void ReticuleOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateReticuleOverlay();
+
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (_viewModel is not null)
@@ -37,6 +41,7 @@ public partial class CaptureView : UserControl
         }
 
         UpdateImageSize();
+        UpdateReticuleOverlay();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -48,6 +53,14 @@ public partial class CaptureView : UserControl
         if (e.PropertyName is nameof(CaptureViewModel.SelectedZoomOption) or nameof(CaptureViewModel.PreviewBitmap))
         {
             UpdateImageSize();
+        }
+
+        if (e.PropertyName is nameof(CaptureViewModel.ShowCrosshairReticule)
+            or nameof(CaptureViewModel.ShowRotationReticule)
+            or nameof(CaptureViewModel.ReticuleAngleDegrees)
+            or nameof(CaptureViewModel.ReticuleInsetPixels))
+        {
+            UpdateReticuleOverlay();
         }
     }
 
@@ -111,5 +124,73 @@ public partial class CaptureView : UserControl
 
         PreviewImage.Width = width;
         PreviewImage.Height = height;
+    }
+
+    /// <summary>
+    /// Redraws the reticule overlay (crosshair + rotation guides, see CaptureViewModel's own doc
+    /// comments) against ReticuleOverlay's own live size - deliberately *not* PreviewImage's size:
+    /// the whole point is that these lines stay a fixed on-screen thickness/position regardless of
+    /// <see cref="ZoomOption"/>, so they're drawn directly against the fixed viewport (ReticuleOverlay
+    /// sits as a sibling of, on top of, PreviewScrollViewer - see CaptureView.xaml) rather than being
+    /// part of the zoomed/scrolled image content. Just clears and rebuilds the Canvas's children each
+    /// time rather than updating individual Line objects in place - this only runs on a resize or a
+    /// deliberate toggle/angle/inset change, never per preview frame, so the extra allocation is free.
+    /// </summary>
+    private void UpdateReticuleOverlay()
+    {
+        ReticuleOverlay.Children.Clear();
+
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        var width = ReticuleOverlay.ActualWidth;
+        var height = ReticuleOverlay.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        if (_viewModel.ShowCrosshairReticule)
+        {
+            ReticuleOverlay.Children.Add(CreateReticuleLine(width / 2, 0, width / 2, height));
+            ReticuleOverlay.Children.Add(CreateReticuleLine(0, height / 2, width, height / 2));
+        }
+
+        if (_viewModel.ShowRotationReticule)
+        {
+            // Clamped so a large inset (relative to a narrow/zoomed-out viewport) can't push the two
+            // lines past each other.
+            var inset = Math.Clamp(_viewModel.ReticuleInsetPixels, 0, (width / 2) - 1);
+            // Mirrored, not equal, angles: an SHG's two slit edges slope toward or away from each
+            // other (they aren't parallel the way two independently-tilted lines would be), so the
+            // right-hand line pivots by the negative of the left-hand one - together they open into a
+            // V or a diverging "outward" shape rather than both leaning the same way.
+            ReticuleOverlay.Children.Add(CreatePivotedVerticalLine(inset, height, _viewModel.ReticuleAngleDegrees));
+            ReticuleOverlay.Children.Add(CreatePivotedVerticalLine(width - inset, height, -_viewModel.ReticuleAngleDegrees));
+        }
+    }
+
+    private static Line CreateReticuleLine(double x1, double y1, double x2, double y2) => new()
+    {
+        X1 = x1,
+        Y1 = y1,
+        X2 = x2,
+        Y2 = y2,
+        Stroke = Brushes.Red,
+        StrokeThickness = 1,
+        SnapsToDevicePixels = true,
+    };
+
+    /// <summary>A full-height vertical line at <paramref name="x"/>, pivoted by <paramref name="angleDegrees"/>
+    /// about its own midpoint - "pivoting half way along the line" per the feature request, which a
+    /// <see cref="RotateTransform"/> centred at (x, height/2) gives directly without needing to compute
+    /// rotated endpoints by hand.</summary>
+    private static Line CreatePivotedVerticalLine(double x, double height, double angleDegrees)
+    {
+        var line = CreateReticuleLine(x, 0, x, height);
+        line.RenderTransform = new RotateTransform(angleDegrees, x, height / 2);
+        return line;
     }
 }

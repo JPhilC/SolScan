@@ -40,6 +40,19 @@ namespace SolScan.Core.Capture;
 /// Display Brightness).</param>
 /// <param name="FocusAidExpanded">Same idea, the "Focus Aid" panel (collimator-focus edge-steepness
 /// readout - see <see cref="Camera.FocusAnalyzer"/>).</param>
+/// <param name="ReticuleExpanded">Same idea, the "Reticule" panel (crosshair + rotation-guide overlay
+/// toggles/angle/inset - see CaptureView.xaml.cs's ReticuleOverlay).</param>
+/// <param name="ShowCrosshairReticule">Whether the fixed (non-zoom-scaling) horizontal/vertical
+/// crosshair overlay is drawn over the live preview - off by default, same "don't clutter the view
+/// until asked" stance as <see cref="IsContrastAuto"/>.</param>
+/// <param name="ShowRotationReticule">Whether the two vertical, pivotable rotation-guide lines
+/// (inset from the preview's left/right edges) are drawn - see <see cref="ReticuleAngleDegrees"/>/
+/// <see cref="ReticuleInsetPixels"/>. Off by default, same rationale as <see cref="ShowCrosshairReticule"/>.</param>
+/// <param name="ReticuleAngleDegrees">How far the two rotation-guide lines are pivoted from vertical,
+/// about each line's own midpoint - degrees, -10 to 10. Used to judge camera rotation by matching the
+/// slit's two edges to these lines.</param>
+/// <param name="ReticuleInsetPixels">How far in from the preview viewport's left/right edges the two
+/// rotation-guide lines sit, in on-screen pixels (not scaled by zoom, same as the lines themselves).</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -52,7 +65,12 @@ public sealed record AppSettings(
     bool CameraSettingsExpanded = true,
     bool HistogramExpanded = true,
     bool DisplaySettingsExpanded = true,
-    bool FocusAidExpanded = true);
+    bool FocusAidExpanded = true,
+    bool ReticuleExpanded = true,
+    bool ShowCrosshairReticule = false,
+    bool ShowRotationReticule = false,
+    double ReticuleAngleDegrees = 0,
+    double ReticuleInsetPixels = 60);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

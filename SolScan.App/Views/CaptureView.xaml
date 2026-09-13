@@ -70,24 +70,35 @@
                 <ColumnDefinition Width="260"/>
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                <!-- SharpCap-style Zoom: PreviewImage's actual Width/Height are computed and kept
-                     up to date in CaptureView.xaml.cs (CaptureViewModel.SelectedZoomOption changing,
-                     PreviewScrollViewer resizing, or a new differently-sized PreviewBitmap arriving
-                     - see UpdateImageSize) rather than any Stretch mode here - Stretch="Fill" with
-                     an explicit size is what makes a literal, fixed zoom percentage meaningful.
-                     Centred so a preview smaller than the viewport (Auto, or a low fixed %) sits in
-                     the middle rather than pinned to a corner; once it's bigger than the viewport,
-                     PreviewScrollViewer's own scrollbars appear for panning regardless of alignment. -->
-                <ScrollViewer x:Name="PreviewScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                    <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
-                         (see FramePreview's class doc comment) and then magnified back up, so a
-                         smooth scale looks right where NearestNeighbor would look blocky. -->
-                    <Image x:Name="PreviewImage" Source="{Binding PreviewBitmap}" Stretch="Fill"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           RenderOptions.BitmapScalingMode="HighQuality"/>
-                </ScrollViewer>
-            </Border>
+            <Grid Grid.Column="0">
+                <Border Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
+                    <!-- SharpCap-style Zoom: PreviewImage's actual Width/Height are computed and kept
+                         up to date in CaptureView.xaml.cs (CaptureViewModel.SelectedZoomOption changing,
+                         PreviewScrollViewer resizing, or a new differently-sized PreviewBitmap arriving
+                         - see UpdateImageSize) rather than any Stretch mode here - Stretch="Fill" with
+                         an explicit size is what makes a literal, fixed zoom percentage meaningful.
+                         Centred so a preview smaller than the viewport (Auto, or a low fixed %) sits in
+                         the middle rather than pinned to a corner; once it's bigger than the viewport,
+                         PreviewScrollViewer's own scrollbars appear for panning regardless of alignment. -->
+                    <ScrollViewer x:Name="PreviewScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
+                             (see FramePreview's class doc comment) and then magnified back up, so a
+                             smooth scale looks right where NearestNeighbor would look blocky. -->
+                        <Image x:Name="PreviewImage" Source="{Binding PreviewBitmap}" Stretch="Fill"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Reticule overlay: a sibling of (drawn on top of, not inside) PreviewScrollViewer,
+                     so it's positioned against the fixed viewport rather than the zoomed/scrolled
+                     Image content - the lines stay a constant on-screen thickness/position regardless
+                     of CaptureViewModel.SelectedZoomOption. Populated entirely in CaptureView.xaml.cs
+                     (UpdateReticuleOverlay) since the pivoted-line geometry needs real trig against the
+                     overlay's own live size, not something a XAML binding can express. -->
+                <Canvas x:Name="ReticuleOverlay" IsHitTestVisible="False" ClipToBounds="True"
+                        SizeChanged="ReticuleOverlay_SizeChanged"/>
+            </Grid>
 
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
@@ -267,6 +278,28 @@
                             <Button Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" HorizontalAlignment="Left"/>
                             <TextBlock Text="Minimize the edge width while adjusting the collimator - smaller is sharper."
                                        Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- On-screen reticule overlay (see CaptureView.xaml.cs's ReticuleOverlay) - purely
+                         a viewing aid, never affects what's recorded. The crosshair is a plain fixed
+                         centre-mark; the rotation guides are two vertical lines inset from the preview's
+                         left/right edges, each pivotable about its own midpoint (see
+                         CaptureViewModel.ReticuleAngleDegrees) so the user can judge camera rotation by
+                         matching the slit's two edges to them. Neither scales with Zoom - both are drawn
+                         against the fixed preview viewport, not the zoomed/scrolled image content. -->
+                    <Expander Header="Reticule" IsExpanded="{Binding IsReticuleExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <CheckBox Content="Crosshair" IsChecked="{Binding ShowCrosshairReticule}" Margin="0,0,0,8"/>
+                            <CheckBox Content="Rotation Guides" IsChecked="{Binding ShowRotationReticule}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="{Binding ReticuleAngleDegrees, StringFormat='Angle: {0:0.0}°'}" FontWeight="Bold" Margin="0,0,0,4"/>
+                            <Slider Minimum="-10" Maximum="10" Value="{Binding ReticuleAngleDegrees}"
+                                    IsEnabled="{Binding ShowRotationReticule}" Margin="0,0,0,12"/>
+
+                            <TextBlock Text="{Binding ReticuleInsetPixels, StringFormat='Edge Inset: {0:0} px'}" FontWeight="Bold" Margin="0,0,0,4"/>
+                            <Slider Minimum="0" Maximum="300" Value="{Binding ReticuleInsetPixels}"
+                                    IsEnabled="{Binding ShowRotationReticule}"/>
                         </StackPanel>
                     </Expander>
 

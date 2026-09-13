@@ -256,6 +256,34 @@ public partial class CaptureViewModel : ObservableObject
     private bool isFocusAidExpanded = true;
 
     [ObservableProperty]
+    private bool isReticuleExpanded = true;
+
+    /// <summary>Fixed (non-zoom-scaling) horizontal/vertical crosshair overlay - drawn by
+    /// CaptureView.xaml.cs's ReticuleOverlay directly over the preview viewport, not inside the
+    /// zoomed/scrolled Image itself, so it always renders as thin on-screen lines regardless of
+    /// <see cref="SelectedZoomOption"/>. Off by default, same "don't clutter the view until asked"
+    /// stance as <see cref="IsContrastAuto"/>.</summary>
+    [ObservableProperty]
+    private bool showCrosshairReticule;
+
+    /// <summary>Two vertical, pivotable rotation-guide lines inset from the preview viewport's left/
+    /// right edges - lets the user judge camera rotation by matching the slit's two edges to these
+    /// lines (see <see cref="ReticuleAngleDegrees"/>). Same non-zoom-scaling overlay as
+    /// <see cref="ShowCrosshairReticule"/>, off by default.</summary>
+    [ObservableProperty]
+    private bool showRotationReticule;
+
+    /// <summary>How far the two rotation-guide lines are pivoted from vertical, about each line's own
+    /// midpoint (see CaptureView.xaml.cs's CreatePivotedVerticalLine) - degrees, -10 to 10.</summary>
+    [ObservableProperty]
+    private double reticuleAngleDegrees;
+
+    /// <summary>How far in from the preview viewport's left/right edges the two rotation-guide lines
+    /// sit, in on-screen pixels - not scaled by zoom, same as the lines themselves.</summary>
+    [ObservableProperty]
+    private double reticuleInsetPixels = 60;
+
+    [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
     /// <summary>SharpCap-style Zoom dropdown options - three "fit to available space" modes plus a
@@ -394,6 +422,11 @@ public partial class CaptureViewModel : ObservableObject
         isHistogramExpanded = savedAppSettings.HistogramExpanded;
         isDisplaySettingsExpanded = savedAppSettings.DisplaySettingsExpanded;
         isFocusAidExpanded = savedAppSettings.FocusAidExpanded;
+        isReticuleExpanded = savedAppSettings.ReticuleExpanded;
+        showCrosshairReticule = savedAppSettings.ShowCrosshairReticule;
+        showRotationReticule = savedAppSettings.ShowRotationReticule;
+        reticuleAngleDegrees = savedAppSettings.ReticuleAngleDegrees;
+        reticuleInsetPixels = savedAppSettings.ReticuleInsetPixels;
 
         RefreshCameras();
     }
@@ -1131,21 +1164,40 @@ public partial class CaptureViewModel : ObservableObject
     // No debouncing needed here unlike the camera dial-in sliders - toggling an Expander is a single
     // discrete click, not something a user can rapid-fire the way a Slider drag does.
     partial void OnIsCaptureSettingsExpandedChanged(bool value) =>
-        PersistExpanderState(s => s with { CaptureSettingsExpanded = value });
+        PersistAppSetting(s => s with { CaptureSettingsExpanded = value });
 
     partial void OnIsCameraSettingsExpandedChanged(bool value) =>
-        PersistExpanderState(s => s with { CameraSettingsExpanded = value });
+        PersistAppSetting(s => s with { CameraSettingsExpanded = value });
 
     partial void OnIsHistogramExpandedChanged(bool value) =>
-        PersistExpanderState(s => s with { HistogramExpanded = value });
+        PersistAppSetting(s => s with { HistogramExpanded = value });
 
     partial void OnIsDisplaySettingsExpandedChanged(bool value) =>
-        PersistExpanderState(s => s with { DisplaySettingsExpanded = value });
+        PersistAppSetting(s => s with { DisplaySettingsExpanded = value });
 
     partial void OnIsFocusAidExpandedChanged(bool value) =>
-        PersistExpanderState(s => s with { FocusAidExpanded = value });
+        PersistAppSetting(s => s with { FocusAidExpanded = value });
 
-    private void PersistExpanderState(Func<AppSettings, AppSettings> update) =>
+    partial void OnIsReticuleExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { ReticuleExpanded = value });
+
+    // Reticule toggles/angle/inset - a UI display preference with nothing to do with which camera is
+    // connected (the overlay is pure on-screen geometry, see CaptureView.xaml.cs's ReticuleOverlay),
+    // so these go through IAppSettingsStore the same way the Expander open/collapsed states above do,
+    // rather than ICameraSettingsStore/PersistSettingsIfConnected.
+    partial void OnShowCrosshairReticuleChanged(bool value) =>
+        PersistAppSetting(s => s with { ShowCrosshairReticule = value });
+
+    partial void OnShowRotationReticuleChanged(bool value) =>
+        PersistAppSetting(s => s with { ShowRotationReticule = value });
+
+    partial void OnReticuleAngleDegreesChanged(double value) =>
+        PersistAppSetting(s => s with { ReticuleAngleDegrees = value });
+
+    partial void OnReticuleInsetPixelsChanged(double value) =>
+        PersistAppSetting(s => s with { ReticuleInsetPixels = value });
+
+    private void PersistAppSetting(Func<AppSettings, AppSettings> update) =>
         _appSettingsStore.Save(update(_appSettingsStore.Load()));
 
     partial void OnSelectedColorSpaceChanged(CameraOutputFormat value) => ScheduleApplyOutputFormatChange();
