@@ -8,6 +8,9 @@ namespace SolScan.App.ViewModels;
 /// whichever stage view model is currently active pushing updates into it). Started with just the
 /// Capture view's live frame rate; SolScan.App.Services.MountService now pushes the mount's
 /// connection/tracking/slewing/parked status and live RA/Dec here too, once a second.
+/// <see cref="ProcessStatusText"/> is <c>ProcessViewModel</c>'s own progress/result narration,
+/// moved here (off the Process view itself) so it stays visible regardless of which stage is
+/// currently on screen, same reasoning as the other two fields.
 /// </summary>
 public partial class StatusBarViewModel : ObservableObject
 {
@@ -19,4 +22,7 @@ public partial class StatusBarViewModel : ObservableObject
 
     [ObservableProperty]
     private string mountCoordinateText = "RA: --  Dec: --";
+
+    [ObservableProperty]
+    private string processStatusText = "Process: --";
 }

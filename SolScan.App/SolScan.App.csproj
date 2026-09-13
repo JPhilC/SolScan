@@ -70,6 +70,13 @@
     <Resource Include="Assets\Icons\HandControlLeft.png" />
     <Resource Include="Assets\Icons\HandControlRight.png" />
     <Resource Include="Assets\Icons\HandControlStop.png" />
+    <!-- ProcessView.xaml's Browse/Process/Cancel button icons. -->
+    <None Remove="Assets\Icons\BrowseForFile.png" />
+    <None Remove="Assets\Icons\ProcessRun.png" />
+    <None Remove="Assets\Icons\CancelProcessing.png" />
+    <Resource Include="Assets\Icons\BrowseForFile.png" />
+    <Resource Include="Assets\Icons\ProcessRun.png" />
+    <Resource Include="Assets\Icons\CancelProcessing.png" />
   </ItemGroup>
 
   <ItemGroup>

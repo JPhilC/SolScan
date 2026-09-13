@@ -13,6 +13,9 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="/Themes/MaterialDesignScoped.xaml" />
+                <!-- ToolbarIconButtonStyle - see that file's own doc comment; shared with
+                     CaptureView.xaml/HandControlWindow.xaml. -->
+                <ResourceDictionary Source="/Themes/IconButtonStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         </ResourceDictionary>
@@ -62,75 +65,98 @@
                 </Grid>
             </md:DrawerHost.RightDrawerContent>
 
-            <!-- Main content - unchanged from before the panel existed, just now always full-width
-                 since the panel is an overlay drawer rather than a permanent side column. -->
-            <StackPanel>
-                <DockPanel>
-                    <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Top"
+            <!-- Main content - always full-width since the panel is an overlay drawer rather than a
+                 permanent side column. Restructured to match CaptureView's shape: every control
+                 (Browse/Process/Cancel/the processed-image picker) lives in one top toolbar row, with
+                 the Settings hamburger pinned to the far right (a DockPanel, same reasoning as
+                 CaptureView's own top toolbar - see that view's history for why a DockPanel is the
+                 right tool once the two sides need different alignment); file/equipment info sits in
+                 its own row underneath the buttons rather than interleaved between two separate button
+                 rows the way it used to be; and the preview fills all remaining space (a Grid row
+                 sized "*" - unlike the StackPanel this used to be, a Grid can actually stretch a row
+                 to fill leftover space) instead of being capped to a fixed 640x640 box. Status
+                 narration moved off this view entirely - see StatusBarViewModel.ProcessStatusText -
+                 so it's visible from any stage, matching Capture/Mount's own status-bar fields. -->
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Top bar: Browse/Process/Cancel + the processed-image picker, left-aligned, with
+                     the Settings hamburger pushed to the far right. -->
+                <DockPanel Grid.Row="0">
+                    <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0"
                                   Style="{StaticResource MaterialDesignHamburgerToggleButton}"
                                   Command="{x:Static md:DrawerHost.OpenDrawerCommand}"
                                   CommandParameter="{x:Static Dock.Right}"
                                   IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
                                   ToolTip="Show the Process Parameters/Image Enhancement/Image Selection panel"/>
-                    <TextBlock Text="{Binding StatusText}" FontSize="18"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding BrowseForSerFileCommand}"
+                                ToolTip="Browse for a .ser file to process.">
+                            <Image Source="/Assets/Icons/BrowseForFile.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding ProcessCommand}"
+                                ToolTip="Run the SHG reconstruction pipeline on the selected file.">
+                            <Image Source="/Assets/Icons/ProcessRun.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding CancelProcessingCommand}"
+                                Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                ToolTip="Cancel the running processing job.">
+                            <Image Source="/Assets/Icons/CancelProcessing.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+
+                        <!-- Empty (no items) until an output folder actually has .png files in it - a
+                             bare ComboBox collapses to its minimal size, so this stays unobtrusive
+                             rather than needing extra visibility plumbing for the "nothing yet" case.
+                             Disk-based, not tied to the most recent Process click - see
+                             ProcessViewModel's own class doc comment. -->
+                        <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,8,0" />
+                        <ComboBox ItemsSource="{Binding AvailableProcessedImages}"
+                                  SelectedItem="{Binding SelectedProcessedImage}"
+                                  DisplayMemberPath="Label"
+                                  Width="200" VerticalAlignment="Center" />
+                    </StackPanel>
                 </DockPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
-                    <Button Content="Browse…"
-                            Command="{Binding BrowseForSerFileCommand}"
-                            Padding="12,4" />
-                    <TextBlock Text="{Binding SelectedFilePath}"
-                               Margin="12,0,0,0"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-
-                <TextBlock Text="{Binding FileInfoText}"
-                           Margin="0,8,0,0"
-                           FontWeight="SemiBold" />
-                <TextBlock Text="{Binding EquipmentInfoText}"
-                           Margin="0,4,0,0" />
-                <TextBlock Text="{Binding CaptureDetailsText}"
-                           Margin="0,4,0,0"
-                           Opacity="0.8" />
-                <TextBlock Text="{Binding OutputFolderText}"
-                           Margin="0,4,0,0"
-                           Opacity="0.8" />
-
-                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                    <Button Content="Process"
-                            Command="{Binding ProcessCommand}"
-                            Padding="12,4" />
-                    <Button Content="Cancel"
-                            Command="{Binding CancelProcessingCommand}"
-                            Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            Margin="8,0,0,0"
-                            Padding="12,4" />
-                </StackPanel>
-
-                <!-- Empty (no items, no image) until an output folder actually has .png files in it - a
-                     bare ComboBox and an Image with no Source both collapse to their minimal/zero size,
-                     so this stays unobtrusive rather than needing extra visibility plumbing for the
-                     "nothing yet" case. Disk-based, not tied to the most recent Process click - see
-                     ProcessViewModel's own class doc comment. -->
-                <StackPanel Orientation="Horizontal" Margin="0,16,0,8">
-                    <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <ComboBox ItemsSource="{Binding AvailableProcessedImages}"
-                              SelectedItem="{Binding SelectedProcessedImage}"
-                              DisplayMemberPath="Label"
-                              Width="200" />
+                <!-- File/equipment info - one row beneath the toolbar. -->
+                <StackPanel Grid.Row="2">
+                    <TextBlock Text="{Binding SelectedFilePath}" />
+                    <TextBlock Text="{Binding FileInfoText}"
+                               Margin="0,4,0,0"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding EquipmentInfoText}"
+                               Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding CaptureDetailsText}"
+                               Margin="0,4,0,0"
+                               Opacity="0.8" />
+                    <TextBlock Text="{Binding OutputFolderText}"
+                               Margin="0,4,0,0"
+                               Opacity="0.8" />
                 </StackPanel>
 
                 <!-- Auto-stretched (see ProcessViewModel.UpdateProcessedImagePreview) - the saved PNGs
                      are deliberately unstretched real sensor-scale values, which would look flat/washed
                      here without this. HighQuality scaling since the preview is downsampled then
-                     magnified back up, same reasoning as CaptureView's own live-preview Image. -->
-                <Border BorderBrush="Gray" BorderThickness="1" HorizontalAlignment="Left">
-                    <Image Source="{Binding ProcessedImagePreview}"
-                           Stretch="Uniform"
-                           MaxWidth="640" MaxHeight="640"
-                           RenderOptions.BitmapScalingMode="HighQuality" />
+                     magnified back up, same reasoning as CaptureView's own live-preview Image. Fills
+                     all remaining space rather than a fixed MaxWidth/MaxHeight cap; wrapped in a
+                     ScrollViewer, matching CaptureView's own preview container, for the rare case the
+                     content doesn't fit the available area. -->
+                <Border Grid.Row="4" BorderBrush="Gray" BorderThickness="1">
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <Image Source="{Binding ProcessedImagePreview}"
+                               Stretch="Uniform"
+                               RenderOptions.BitmapScalingMode="HighQuality" />
+                    </ScrollViewer>
                 </Border>
-            </StackPanel>
+            </Grid>
         </md:DrawerHost>
     </Grid>
 </UserControl>

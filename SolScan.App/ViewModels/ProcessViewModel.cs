@@ -62,6 +62,7 @@ public partial class ProcessViewModel : ObservableObject
     private readonly IShgProcessor _shgProcessor;
     private readonly IProcessParamsStore _processParamsStore;
     private readonly IAppSettingsStore _appSettingsStore;
+    private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private CancellationTokenSource? _processingCts;
 
@@ -75,9 +76,6 @@ public partial class ProcessViewModel : ObservableObject
     /// which can't be less accessible than the property itself; still only reachable as the nested
     /// ProcessViewModel.ProcessedImageFile from outside this class.</summary>
     public sealed record ProcessedImageFile(string Label, string FilePath);
-
-    [ObservableProperty]
-    private string statusText = "Pick a .ser file to inspect its header and equipment metadata.";
 
     [ObservableProperty]
     private string? selectedFilePath;
@@ -136,13 +134,15 @@ public partial class ProcessViewModel : ObservableObject
         ICaptureMetadataStore metadataStore,
         IShgProcessor shgProcessor,
         IProcessParamsStore processParamsStore,
-        IAppSettingsStore appSettingsStore)
+        IAppSettingsStore appSettingsStore,
+        StatusBarViewModel statusBarViewModel)
     {
         _serReaderFactory = serReaderFactory;
         _metadataStore = metadataStore;
         _shgProcessor = shgProcessor;
         _processParamsStore = processParamsStore;
         _appSettingsStore = appSettingsStore;
+        _statusBar = statusBarViewModel;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
         var processParams = processParamsStore.Load();
@@ -158,7 +158,15 @@ public partial class ProcessViewModel : ObservableObject
         isProcessParametersExpanded = appSettings.ProcessParametersExpanded;
         isImageEnhancementExpanded = appSettings.ProcessImageEnhancementExpanded;
         isImageSelectionExpanded = appSettings.ProcessImageSelectionExpanded;
+
+        SetStatus("Pick a .ser file to inspect its header and equipment metadata.");
     }
+
+    /// <summary>Narrates progress/results into the shared <see cref="StatusBarViewModel"/> (see its
+    /// own doc comment) rather than a status TextBlock local to this view - so it stays visible
+    /// regardless of which stage is currently on screen, matching Capture/Mount's own status-bar
+    /// fields.</summary>
+    private void SetStatus(string message) => _statusBar.ProcessStatusText = $"Process: {message}";
 
     partial void OnIsProcessOptionsPanelExpandedChanged(bool value) =>
         PersistAppSetting(s => s with { ProcessOptionsPanelExpanded = value });
@@ -274,11 +282,11 @@ public partial class ProcessViewModel : ObservableObject
             OutputFolderText = $"Output folder: {ProcessingLocations.GetOutputFolder(SelectedFilePath)}";
             RefreshProcessedImages(SelectedFilePath);
 
-            StatusText = "Loaded. Click Process to run spectral-line detection and reconstruction.";
+            SetStatus("Loaded. Click Process to run spectral-line detection and reconstruction.");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            StatusText = $"Failed to read '{SelectedFilePath}': {ex.Message}";
+            SetStatus($"Failed to read '{SelectedFilePath}': {ex.Message}");
         }
     }
 
@@ -301,7 +309,7 @@ public partial class ProcessViewModel : ObservableObject
             // doc comment for why (the debounce timer may not have flushed a very recent edit yet).
             var processParams = BuildCurrentProcessParams();
             FlushPendingProcessParams(processParams);
-            var progress = new Progress<string>(s => StatusText = s);
+            var progress = new Progress<string>(SetStatus);
             var result = await _shgProcessor.ProcessAsync(SelectedFilePath, processParams, progress, _processingCts.Token);
 
             // Each kind goes in its own raw/processed subfolder, matching real JSolex's own layout -
@@ -322,15 +330,15 @@ public partial class ProcessViewModel : ObservableObject
             // comment for why the dropdown isn't just populated from result.Images directly.
             RefreshProcessedImages(SelectedFilePath);
 
-            StatusText = BuildResultSummary(result, ProcessingLocations.GetOutputFolder(SelectedFilePath));
+            SetStatus(BuildResultSummary(result, ProcessingLocations.GetOutputFolder(SelectedFilePath)));
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Processing cancelled.";
+            SetStatus("Processing cancelled.");
         }
         catch (Exception ex)
         {
-            StatusText = $"Processing failed: {ex.Message}";
+            SetStatus($"Processing failed: {ex.Message}");
         }
         finally
         {
@@ -428,7 +436,7 @@ public partial class ProcessViewModel : ObservableObject
         catch (Exception ex) when (ex is IOException or NotSupportedException or UnauthorizedAccessException)
         {
             ProcessedImagePreview = null;
-            StatusText = $"Failed to load '{selected.FilePath}': {ex.Message}";
+            SetStatus($"Failed to load '{selected.FilePath}': {ex.Message}");
         }
     }
 
