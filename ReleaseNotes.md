@@ -22,17 +22,19 @@ what's real vs. placeholder.
   window for manually jogging the mount.
 - **Capture** — camera discovery (ZWO ASI, Altair, or a hardware-free simulator), a SharpCap-style
   live preview (gain/exposure/USB-bandwidth/contrast sliders, a histogram, ROI, zoom, colour
-  space/binning), and manual start/stop recording to standard `.ser` files. "Find Sun…" slews to
-  today's computed solar position and offers a camera-brightness fine-tune plus an Alpaca pointing
-  sync. Connecting a camera auto-registers it in the equipment library; every recording gets a
-  `.equipment.json` sidecar snapshotting the equipment, camera settings, and mount pointing used.
-- **Options** — a full equipment library (SHGs, telescopes, cameras, saved Setups), general
-  settings (capture save location, ASCOM Alpaca connection, site location), and process parameters
-  feeding the Process stage.
+  space/binning, a collimator-focus aid, an on-screen reticule) in a hideable icon-toolbar/drawer
+  panel, and manual start/stop recording to standard `.ser` files. "Find Sun…" slews to today's
+  computed solar position and offers a camera-brightness fine-tune plus an Alpaca pointing sync; a
+  pop-out Hand Control window jogs the mount manually. Connecting a camera auto-registers it in the
+  equipment library; every recording gets a `.equipment.json` sidecar snapshotting the equipment,
+  camera settings, and mount pointing used.
+- **Options** — a full equipment library (SHGs, telescopes, cameras, saved Setups) and general
+  settings (capture save location, ASCOM Alpaca connection, site location).
 - **Process** — pick a `.ser` file and run it through a real SHG reconstruction pipeline: spectral
-  line-curvature detection, disk reconstruction, and ellipse-fitting geometry correction, all
-  ported from astro4j/JSol'Ex, producing `Raw`/`Reconstruction`/`Continuum`/`GeometryCorrected`
-  output images viewable in the app. Contrast-enhanced output is not yet implemented.
+  line-curvature detection, disk reconstruction, ellipse-fitting geometry correction, and contrast
+  enhancement (AutoStretch/CLAHE/CLAHE2), all ported from astro4j/JSol'Ex, producing
+  `Raw`/`Reconstruction`/`Continuum`/`GeometryCorrected`/`GeometryCorrectedProcessed` output images
+  viewable in the app. Process parameters live in a dockable panel on the Process view itself.
 
 ### Known limitations
 

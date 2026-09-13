@@ -12,6 +12,9 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="/Themes/MaterialDesignScoped.xaml" />
+                <!-- ToolbarIconButtonStyle - see that file's own doc comment; shared with
+                     HandControlWindow.xaml. -->
+                <ResourceDictionary Source="/Themes/IconButtonStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </UserControl.Resources>
@@ -304,8 +307,10 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Top bar: title on the left, camera picker + connect/play + disconnect + the
-                     Settings hamburger top-right -->
+                <!-- Top bar: camera picker + connect/disconnect + zoom + Find Sun/Sync/Hand Control,
+                     left-aligned, with the Settings hamburger pushed to the far right - back to a
+                     DockPanel (see the removal further up in this view's history) now that the two
+                     sides genuinely need different alignment, rather than both being right-aligned. -->
                 <DockPanel Grid.Row="0">
                     <ToggleButton DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0"
                                   Style="{StaticResource MaterialDesignHamburgerToggleButton}"
@@ -313,26 +318,54 @@
                                   CommandParameter="{x:Static Dock.Right}"
                                   IsChecked="{Binding IsCaptureOptionsPanelExpanded, Mode=TwoWay}"
                                   ToolTip="Show the Capture/Camera/Histogram/Focus Aid/Reticule/Display Settings panel"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel Orientation="Horizontal">
                         <ComboBox Width="220" Margin="0,0,8,0"
                                   ItemsSource="{Binding AvailableCameras}"
                                   SelectedItem="{Binding SelectedCamera}"
                                   DisplayMemberPath="Name"/>
-                        <Button Content="Refresh" Width="70" Margin="0,0,8,0"
-                                Command="{Binding RefreshCamerasCommand}"/>
-                        <Button Width="70" Margin="0,0,8,0" Command="{Binding ToggleLiveViewCommand}">
-                            <Button.Style>
-                                <Style TargetType="Button">
-                                    <Setter Property="Content" Value="▶ Play"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsLive}" Value="True">
-                                            <Setter Property="Content" Value="⏹ Stop"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding RefreshCamerasCommand}"
+                                ToolTip="Refresh the list of detected cameras.">
+                            <Image Source="/Assets/Icons/RefreshCameraList.png" Width="20" Height="20" Stretch="Uniform"/>
                         </Button>
-                        <Button Content="Disconnect" Width="80" Command="{Binding DisconnectCommand}"/>
+
+                        <!-- Connect/Disconnect: two buttons occupying the same cell, only the relevant
+                             one visible - based on IsConnected. This collapses the underlying 3-state
+                             model (disconnected / connected-and-paused / connected-and-live - see
+                             CaptureViewModel.ToggleLiveViewAsync/DisconnectAsync's own doc comments) down
+                             to 2 for the toolbar: once connected, this always shows Disconnect rather than
+                             a way to pause the live view while staying connected - that state is no longer
+                             reachable from here (a deliberate simplification, not an oversight). -->
+                        <Grid Margin="0,0,8,0">
+                            <Button Margin="0" Command="{Binding ToggleLiveViewCommand}"
+                                    ToolTip="Connect to the selected camera and start the live view.">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButtonStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                                <Image Source="/Assets/Icons/CameraConnect.png" Width="20" Height="20" Stretch="Uniform"/>
+                            </Button>
+                            <Button Margin="0" Command="{Binding DisconnectCommand}"
+                                    ToolTip="Disconnect the camera.">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButtonStyle}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                                <Image Source="/Assets/Icons/CameraDisconnect.png" Width="20" Height="20" Stretch="Uniform"/>
+                            </Button>
+                        </Grid>
+
                         <TextBlock Text="Zoom:" VerticalAlignment="Center" Margin="8,0,4,0"/>
                         <ComboBox Width="90" Margin="0,0,8,0"
                                   ItemsSource="{Binding AvailableZoomOptions}"
@@ -342,19 +375,27 @@
                              (see CaptureViewModel.FindSunAsync) - lives here, not on Prepare, since the
                              fine-tune step needs whatever camera is live in this view. Enabled only once
                              the mount is connected. -->
-                        <Button Content="Find Sun…" Width="90" Margin="0,0,8,0"
-                                Command="{Binding FindSunCommand}"/>
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding FindSunCommand}"
+                                ToolTip="Slew the mount to today's computed Sun position, then optionally fine-tune pointing using the live camera view.">
+                            <Image Source="/Assets/Icons/FindSun.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
                         <!-- Manual counterpart to Find Sun's own end-of-flow sync offer - for when the user
                              has aligned the Sun in the preview themselves (e.g. via Hand Control) and just
                              wants to sync the mount's pointing model to that alignment now. -->
-                        <Button Content="Sync" Width="60" Margin="0,0,8,0"
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
                                 Command="{Binding SyncMountCommand}"
-                                ToolTip="Sync the mount's pointing model to today's computed Sun position - use once the Sun is centred in the live view."/>
+                                ToolTip="Sync the mount's pointing model to today's computed Sun position - use once the Sun is centred in the live view.">
+                            <Image Source="/Assets/Icons/SyncTelescope.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
                         <!-- Pop-out, modeless hand control (see HandControlWindow.xaml) - lives here rather
                              than on Prepare since the user will typically be watching this live preview
                              while jogging the mount. Enabled only once the mount is connected. -->
-                        <Button Content="Hand Control…" Width="110" Margin="0,0,8,0"
-                                Command="{Binding OpenHandControlCommand}"/>
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding OpenHandControlCommand}"
+                                ToolTip="Open the Hand Control window to manually jog the mount.">
+                            <Image Source="/Assets/Icons/TelescopeControls.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
                     </StackPanel>
                 </DockPanel>
 
@@ -394,8 +435,37 @@
                      the user's own request) so they stay visible and usable whether or not that drawer
                      is open. -->
                 <StackPanel Grid.Row="4" Orientation="Horizontal">
-                    <Button Content="Start Recording" Command="{Binding StartRecordingCommand}" Padding="12,4"/>
-                    <Button Content="Stop Recording" Command="{Binding StopRecordingCommand}" Padding="12,4" Margin="8,0,0,0"/>
+                    <!-- Start/Stop Recording: two buttons occupying the same cell, only the relevant
+                         one visible - based on IsRecording. -->
+                    <Grid Margin="0,0,8,0">
+                        <Button Margin="0" Command="{Binding StartRecordingCommand}"
+                                ToolTip="Start recording the live view to a .ser file.">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButtonStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Image Source="/Assets/Icons/StartRecording.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+                        <Button Margin="0" Command="{Binding StopRecordingCommand}"
+                                ToolTip="Stop the current recording.">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButtonStyle}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Image Source="/Assets/Icons/StopRecording.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+                    </Grid>
                     <TextBlock Text="{Binding FrameCount, StringFormat='Frames written: {0}'}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                     <TextBlock Text="{Binding DroppedFrameCount, StringFormat='Dropped frames: {0}'}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                 </StackPanel>

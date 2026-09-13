@@ -4,9 +4,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         mc:Ignorable="d"
-        Title="Hand Control" Width="300" Height="250"
+        Title="Hand Control" Width="300" SizeToContent="Height"
         ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
         Topmost="True">
+    <Window.Resources>
+        <!-- ToolbarIconButtonStyle - see that file's own doc comment; shared with CaptureView.xaml. -->
+        <ResourceDictionary Source="/Themes/IconButtonStyles.xaml" />
+    </Window.Resources>
     <!-- Modeless (shown via .Show(), not .ShowDialog(), from CaptureViewModel.OpenHandControl) so
          the camera preview stays usable while jogging the mount - see SolScan CLAUDE.md's mount-
          control notes. Visually modelled on GSServer's HandControlV/HandController: a compass of
@@ -37,29 +41,39 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <Button x:Name="UpButton" Grid.Row="0" Grid.Column="1" Width="56" Height="56"
-                        FontSize="20" Content="&#9650;" ToolTip="North (Dec+)"
+                <Button x:Name="UpButton" Grid.Row="0" Grid.Column="1" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="North (Dec+)"
                         IsEnabled="{Binding IsConnected}"
-                        PreviewMouseLeftButtonDown="OnUpDown" PreviewMouseLeftButtonUp="OnDirectionUp"/>
+                        PreviewMouseLeftButtonDown="OnUpDown" PreviewMouseLeftButtonUp="OnDirectionUp">
+                    <Image Source="/Assets/Icons/HandControlUp.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
 
-                <Button x:Name="LeftButton" Grid.Row="1" Grid.Column="0" Width="56" Height="56"
-                        FontSize="20" Content="&#9664;" ToolTip="West (RA-)"
+                <Button x:Name="LeftButton" Grid.Row="1" Grid.Column="0" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="West (RA-)"
                         IsEnabled="{Binding IsConnected}"
-                        PreviewMouseLeftButtonDown="OnLeftDown" PreviewMouseLeftButtonUp="OnDirectionUp"/>
+                        PreviewMouseLeftButtonDown="OnLeftDown" PreviewMouseLeftButtonUp="OnDirectionUp">
+                    <Image Source="/Assets/Icons/HandControlLeft.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
 
-                <Button x:Name="StopButton" Grid.Row="1" Grid.Column="1" Width="56" Height="56"
-                        FontSize="16" Content="&#9632;" ToolTip="Stop"
-                        IsEnabled="{Binding IsConnected}" Click="OnStopClick"/>
+                <Button x:Name="StopButton" Grid.Row="1" Grid.Column="1" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="Stop"
+                        IsEnabled="{Binding IsConnected}" Click="OnStopClick">
+                    <Image Source="/Assets/Icons/HandControlStop.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
 
-                <Button x:Name="RightButton" Grid.Row="1" Grid.Column="2" Width="56" Height="56"
-                        FontSize="20" Content="&#9654;" ToolTip="East (RA+)"
+                <Button x:Name="RightButton" Grid.Row="1" Grid.Column="2" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="East (RA+)"
                         IsEnabled="{Binding IsConnected}"
-                        PreviewMouseLeftButtonDown="OnRightDown" PreviewMouseLeftButtonUp="OnDirectionUp"/>
+                        PreviewMouseLeftButtonDown="OnRightDown" PreviewMouseLeftButtonUp="OnDirectionUp">
+                    <Image Source="/Assets/Icons/HandControlRight.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
 
-                <Button x:Name="DownButton" Grid.Row="2" Grid.Column="1" Width="56" Height="56"
-                        FontSize="20" Content="&#9660;" ToolTip="South (Dec-)"
+                <Button x:Name="DownButton" Grid.Row="2" Grid.Column="1" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="South (Dec-)"
                         IsEnabled="{Binding IsConnected}"
-                        PreviewMouseLeftButtonDown="OnDownDown" PreviewMouseLeftButtonUp="OnDirectionUp"/>
+                        PreviewMouseLeftButtonDown="OnDownDown" PreviewMouseLeftButtonUp="OnDirectionUp">
+                    <Image Source="/Assets/Icons/HandControlDown.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
             </Grid>
 
             <!-- Speed: 1-8, matching GSServer's own HcSpeed range/default - see

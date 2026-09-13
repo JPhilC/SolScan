@@ -193,9 +193,4 @@ public partial class CaptureView : UserControl
         line.RenderTransform = new RotateTransform(angleDegrees, x, height / 2);
         return line;
     }
-
-    private void Button_Click(object sender, RoutedEventArgs e)
-    {
-
-    }
 }

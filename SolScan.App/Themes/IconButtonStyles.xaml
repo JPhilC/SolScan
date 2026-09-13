@@ -1,0 +1,38 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Shared by every view that renders its buttons as icons (see Assets/Icons) rather than text -
+         CaptureView.xaml and HandControlWindow.xaml so far. Originally defined inline in
+         CaptureView.xaml's own UserControl.Resources; factored out here once HandControlWindow needed
+         the identical style too, same "factor out once a second view needs it" precedent as
+         MaterialDesignScoped.xaml's own doc comment.
+
+         A dark background is deliberate, not just decorative: several of the icons are drawn
+         white/light-grey (e.g. RefreshCameraList.png, the HandControlUp/Down/Left/Right/Stop
+         compass), which disappears against a plain light ComboBox/Window background otherwise -
+         matches the dark panels used elsewhere in CaptureView (the preview/histogram borders'
+         #FF1E1E1E/#FF3F3F3F). Width/Height/Margin here are just CaptureView's own toolbar-button
+         sizing default - a view whose buttons need a different footprint (e.g. HandControlWindow's
+         56x56 compass) sets Width/Height/Margin locally per button, which wins over these Setters
+         under WPF's normal local-value-beats-style-value precedence. -->
+    <Style x:Key="ToolbarIconButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="36"/>
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="Margin" Value="0,0,8,0"/>
+        <Setter Property="Padding" Value="4"/>
+        <Setter Property="Background" Value="#FF2A2A2A"/>
+        <Setter Property="BorderBrush" Value="#FF3F3F3F"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#FF3F3F3F"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="#FF505050"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background" Value="#FF1E1E1E"/>
+                <Setter Property="Opacity" Value="0.5"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+</ResourceDictionary>

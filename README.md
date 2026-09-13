@@ -23,21 +23,22 @@ plan for the full detail on what's real vs. placeholder.
   manually jogging the mount while watching the live preview on Capture.
 - **Capture** — camera discovery (ZWO ASI via its native SDK, Altair, or a hardware-free simulator),
   a SharpCap-style live preview (gain/exposure/USB-bandwidth/contrast sliders, a histogram, ROI,
-  zoom, colour space/binning), and manual start/stop recording to standard `.ser` files. A "Find
+  zoom, colour space/binning, a collimator-focus edge-width aid, an on-screen reticule), all tucked
+  into a hideable icon-toolbar/hamburger-drawer panel so the preview itself gets the space. A "Find
   Sun…" button slews to today's computed solar position (a ported low-precision analytic ephemeris)
-  and offers a camera-brightness hill-climb fine-tune plus an Alpaca pointing sync. Connecting a
-  camera auto-registers it in the equipment library (pixel size queried straight from the hardware);
-  every recording gets a `.equipment.json` sidecar snapshotting the SHG/telescope/camera used, the
-  camera settings dialled in, and the mount's pointing at the time.
+  and offers a camera-brightness hill-climb fine-tune plus an Alpaca pointing sync; a pop-out Hand
+  Control window jogs the mount manually while watching the preview. Connecting a camera
+  auto-registers it in the equipment library (pixel size queried straight from the hardware); every
+  recording gets a `.equipment.json` sidecar snapshotting the SHG/telescope/camera used, the camera
+  settings dialled in, and the mount's pointing at the time.
 - **Options** — a full equipment library (SHGs, telescopes, cameras, and saved SHG+telescope
-  "Setups"), general settings (capture save location, ASCOM Alpaca connection, site location), and
-  process parameters (which line was studied, geometry/contrast choices, which output images to
-  generate) feeding the Process stage below.
+  "Setups") and general settings (capture save location, ASCOM Alpaca connection, site location).
 - **Process** — pick a `.ser` file and run it through a real (not simplified) SHG reconstruction
-  pipeline: spectral-line-curvature detection and disk reconstruction, both ported from astro4j/
-  JSol'Ex, producing real `Raw`/`Reconstruction`/`Continuum` output images viewable right in the app.
-  Geometry-corrected/contrast-enhanced output still needs ellipse-fitting geometry correction - a
-  separate, not-yet-built piece of work - and is reported as not yet implemented rather than faked.
+  pipeline: spectral-line-curvature detection, disk reconstruction, ellipse-fitting geometry
+  correction, and contrast enhancement (AutoStretch/CLAHE/CLAHE2, all ported from astro4j/JSol'Ex),
+  producing real `Raw`/`Reconstruction`/`Continuum`/`GeometryCorrected`/`GeometryCorrectedProcessed`
+  output images viewable right in the app. Process parameters (which line was studied, geometry/
+  contrast choices, which output images to generate) live in a dockable panel on this view itself.
 
 There's no automated acquisition pipeline yet (slewing and recording are both manually triggered),
 and processing is kicked off by hand rather than automatically once a recording finishes - both are
@@ -70,8 +71,8 @@ settings at it.
   Altair camera wrappers (native SDK P/Invoke), `.ser` file reader/writer, and JSON-file-backed
   equipment/settings/process-parameter storage.
 - **SolScan.Processing** — pure algorithms, no UI/hardware deps: the SHG reconstruction pipeline,
-  natively ported from astro4j/JSol'Ex (spectral-line-curvature detection, disk reconstruction;
-  ellipse-fitting geometry correction is still ahead).
+  natively ported from astro4j/JSol'Ex (spectral-line-curvature detection, disk reconstruction,
+  ellipse-fitting geometry correction, and AutoStretch/CLAHE/CLAHE2 contrast enhancement).
 - **SolScan.App** — the WPF MVVM shell (Prepare/Capture/Process/Options).
 - **SolScan.Simulators** — a hardware-free camera implementation for development without real
   hardware.

@@ -41,6 +41,35 @@
          manually from App.OnStartup, is what actually honors this image's transparency - see
          RASTA.App.csproj for the same note against the equivalent asset. -->
     <Resource Include="Assets\SolScanSplash.png" />
+    <!-- Toolbar button icons (CaptureView.xaml) - same Remove/Include pairing as the assets above,
+         needed for the same reason (RG1000 duplicate-key error otherwise). -->
+    <None Remove="Assets\Icons\CameraConnect.png" />
+    <None Remove="Assets\Icons\CameraDisconnect.png" />
+    <None Remove="Assets\Icons\FindSun.png" />
+    <None Remove="Assets\Icons\RefreshCameraList.png" />
+    <None Remove="Assets\Icons\StartRecording.png" />
+    <None Remove="Assets\Icons\StopRecording.png" />
+    <None Remove="Assets\Icons\SyncTelescope.png" />
+    <None Remove="Assets\Icons\TelescopeControls.png" />
+    <Resource Include="Assets\Icons\CameraConnect.png" />
+    <Resource Include="Assets\Icons\CameraDisconnect.png" />
+    <Resource Include="Assets\Icons\FindSun.png" />
+    <Resource Include="Assets\Icons\RefreshCameraList.png" />
+    <Resource Include="Assets\Icons\StartRecording.png" />
+    <Resource Include="Assets\Icons\StopRecording.png" />
+    <Resource Include="Assets\Icons\SyncTelescope.png" />
+    <Resource Include="Assets\Icons\TelescopeControls.png" />
+    <!-- Hand Control window's compass icons (HandControlWindow.xaml). -->
+    <None Remove="Assets\Icons\HandControlUp.png" />
+    <None Remove="Assets\Icons\HandControlDown.png" />
+    <None Remove="Assets\Icons\HandControlLeft.png" />
+    <None Remove="Assets\Icons\HandControlRight.png" />
+    <None Remove="Assets\Icons\HandControlStop.png" />
+    <Resource Include="Assets\Icons\HandControlUp.png" />
+    <Resource Include="Assets\Icons\HandControlDown.png" />
+    <Resource Include="Assets\Icons\HandControlLeft.png" />
+    <Resource Include="Assets\Icons\HandControlRight.png" />
+    <Resource Include="Assets\Icons\HandControlStop.png" />
   </ItemGroup>
 
   <ItemGroup>

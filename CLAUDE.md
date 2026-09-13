@@ -1015,6 +1015,48 @@ explicit line-detection/exclusion step was added on top of the existing median -
 would have added real complexity (essentially porting some version of `SpectralLineCurvatureDetector`
 to run live) for no measurable accuracy gain over what the median already provides for free.
 
+Also real: icon-based toolbar buttons across Capture and the Hand Control window, replacing plain
+text buttons, once a set of PNGs landed under `Assets/Icons/` (8 for CaptureView - Refresh/Connect/
+Disconnect/FindSun/Sync/HandControl/StartRecording/StopRecording - plus 5 for HandControlWindow's
+compass - Up/Down/Left/Right/Stop). A shared `ToolbarIconButtonStyle`
+(`SolScan.App/Themes/IconButtonStyles.xaml`, merged into both `CaptureView.xaml` and
+`HandControlWindow.xaml` - factored out once the second view needed the identical style, same
+"factor out on second use" precedent as `MaterialDesignScoped.xaml`'s own doc comment) gives every
+icon button a dark background (`#FF2A2A2A`, lighter on hover/pressed, dimmed when disabled) -
+deliberate, not just decorative: several of the supplied icons are drawn white/light-grey
+(`RefreshCameraList.png`, the HandControl compass icons) and disappear against a plain light
+control/window background otherwise. Every icon button carries an explanatory `ToolTip`.
+
+Connect/Disconnect and Start/Stop Recording each collapse into a single toolbar slot - two
+`Button`s occupying the same `Grid` cell, `Visibility` toggled by a `DataTrigger` on
+`IsConnected`/`IsRecording` respectively, so only the relevant one is ever visible. This is a
+deliberate simplification of the underlying 3-state model (disconnected / connected-and-paused /
+connected-and-live - see `CaptureViewModel.ToggleLiveViewAsync`/`DisconnectAsync`'s own doc
+comments), confirmed with the user rather than assumed (that mid-state was itself a deliberate
+earlier design choice - `ToggleLiveViewAsync`'s own comment already called it out as "deliberately
+distinct from DisconnectAsync"): once connected, the toolbar now always shows Disconnect rather than
+a way to pause the live view while staying connected - that state is no longer reachable from the
+toolbar.
+
+The Capture view's top-bar container went through a few iterations the same session, each a direct
+answer to a follow-up question rather than a single upfront design: originally a `DockPanel`
+(hamburger docked right, the rest of the toolbar also right-aligned) from the original
+hamburger-drawer work; simplified to a single right-aligned `StackPanel` once asked whether the
+`DockPanel` was actually needed - true at the time, since both children were already right-aligned
+and nothing needed dock/fill behaviour; then left-aligned (`HorizontalAlignment="Right"` removed)
+once a vestigial "title on the left" comment/expectation was dropped along with an unused title
+`TextBlock`; then finally back to a `DockPanel` once the ask became "hamburger on the right,
+everything else left" - a genuine dock+fill need this time (unlike the first iteration), with the
+hamburger `ToggleButton` docked right and the rest of the toolbar in an inner `StackPanel` filling
+the remainder.
+
+`HandControlWindow.xaml`'s fixed `Height="250"` was replaced with `SizeToContent="Height"` after the
+Speed column's "Speed"/value `TextBlock`s were reported showing only half - the fixed height genuinely
+wasn't enough for the compass grid (3×56px) plus the speed slider column (label + 130px slider + value
+label, ~178px) plus the status text row once title-bar chrome and margins were accounted for. Letting
+the window size itself to its actual content is more robust than a bigger guessed pixel value, since
+it no longer depends on Windows theme/DPI/title-bar-height assumptions.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
