@@ -38,6 +38,8 @@ namespace SolScan.Core.Capture;
 /// <param name="HistogramExpanded">Same idea, the Histogram panel.</param>
 /// <param name="DisplaySettingsExpanded">Same idea, "Display Settings" (Contrast black/white point +
 /// Display Brightness).</param>
+/// <param name="FocusAidExpanded">Same idea, the "Focus Aid" panel (collimator-focus edge-steepness
+/// readout - see <see cref="Camera.FocusAnalyzer"/>).</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -49,7 +51,8 @@ public sealed record AppSettings(
     bool CaptureSettingsExpanded = true,
     bool CameraSettingsExpanded = true,
     bool HistogramExpanded = true,
-    bool DisplaySettingsExpanded = true);
+    bool DisplaySettingsExpanded = true,
+    bool FocusAidExpanded = true);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

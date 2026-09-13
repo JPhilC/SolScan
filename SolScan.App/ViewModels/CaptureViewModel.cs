@@ -253,6 +253,9 @@ public partial class CaptureViewModel : ObservableObject
     private bool isDisplaySettingsExpanded = true;
 
     [ObservableProperty]
+    private bool isFocusAidExpanded = true;
+
+    [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
     /// <summary>SharpCap-style Zoom dropdown options - three "fit to available space" modes plus a
@@ -303,6 +306,44 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private string histogramStatsText = string.Empty;
 
+    /// <summary>Collimator-focus aid readout - see <see cref="FocusAnalyzer.MeasureEdgeSteepness"/>.
+    /// The number to *minimize* while adjusting the collimator: a sharper disk/slit edge transitions
+    /// over fewer pixels. Unlike a raw gradient-magnitude metric, this is a physical distance (in
+    /// pixels) that stays comparable across different Gain/Exposure settings on the same Binning/ROI
+    /// - it's meant to be watched the same way sunscan-app's own equivalent readout is, just with the
+    /// opposite "smaller is better" direction (the same convention astrophotography autofocus routines
+    /// use for HFD/HFR).</summary>
+    [ObservableProperty]
+    private string edgeWidthText = "—";
+
+    /// <summary>Running low-water mark of <see cref="EdgeWidthText"/>'s underlying pixel value since
+    /// the live view was last (re)started or <see cref="ResetBestEdgeWidthCommand"/> was last pressed
+    /// - see <see cref="_bestEdgeWidthPixels"/> and sunscan-app's own "(Best: …)" readout (CLAUDE.md's
+    /// sunscan-app entry) this mirrors: lets the user dial the collimator back and forth past the true
+    /// optimum and still see the best (narrowest) point actually reached, rather than only the
+    /// current, possibly-already-past-optimum reading.</summary>
+    [ObservableProperty]
+    private string bestEdgeWidthText = "—";
+
+    /// <summary>Backing value for <see cref="BestEdgeWidthText"/> - the raw (not display-formatted)
+    /// low-water mark itself, in pixels, so each new reading can be compared against it directly.
+    /// <see cref="double.PositiveInfinity"/> means "nothing recorded yet" (so the very first
+    /// measurement always counts as a new best). Only ever touched from the UI thread (set from
+    /// <see cref="ProcessPreviewFrame"/>'s dispatcher callback, reset from the UI-thread-only
+    /// <see cref="ResetBestEdgeWidth"/>/<see cref="ToggleLiveViewAsync"/>), same threading rationale
+    /// as <see cref="_lastFrameAverageBrightness"/> above.</summary>
+    private double _bestEdgeWidthPixels = double.PositiveInfinity;
+
+    /// <summary>How many recent valid <see cref="FocusAnalyzer.MeasureEdgeSteepness"/> readings are
+    /// kept for <see cref="SmoothEdgeWidth"/>'s rolling median - see its own doc comment. Small enough
+    /// that a real focus change still shows up within a few preview frames (well under a second at
+    /// the ~20fps preview redraw rate).</summary>
+    private const int RecentEdgeWidthWindowSize = 5;
+
+    /// <summary>Backing store for <see cref="SmoothEdgeWidth"/>'s rolling median - only ever touched
+    /// from the UI thread, same threading rationale as <see cref="_bestEdgeWidthPixels"/>.</summary>
+    private readonly List<double> _recentEdgeWidthsPixels = new(RecentEdgeWidthWindowSize);
+
     [ObservableProperty]
     private int frameCount;
 
@@ -352,6 +393,7 @@ public partial class CaptureViewModel : ObservableObject
         isCameraSettingsExpanded = savedAppSettings.CameraSettingsExpanded;
         isHistogramExpanded = savedAppSettings.HistogramExpanded;
         isDisplaySettingsExpanded = savedAppSettings.DisplaySettingsExpanded;
+        isFocusAidExpanded = savedAppSettings.FocusAidExpanded;
 
         RefreshCameras();
     }
@@ -746,6 +788,7 @@ public partial class CaptureViewModel : ObservableObject
 
         _frameArrivalCount = 0;
         _lastFrameRateUpdateUtc = DateTime.UtcNow;
+        ResetBestEdgeWidth(); // a "best" carried over from a previous live-view session isn't meaningful for this one
         SelectedCamera.FrameCaptured += OnFrameCaptured;
         await SelectedCamera.StartStreamingAsync();
         IsLive = true;
@@ -1042,6 +1085,38 @@ public partial class CaptureViewModel : ObservableObject
         RoiHeight = 0;
     }
 
+    /// <summary>The "Reset" button on the Focus Aid panel - clears the running best-so-far low-water
+    /// mark, e.g. before starting a fresh collimator adjustment pass. Also called automatically
+    /// whenever live view (re)starts (see <see cref="ToggleLiveViewAsync"/>) - a "best" carried over
+    /// from a previous session/camera/ROI isn't a meaningful target for a new one.</summary>
+    [RelayCommand]
+    private void ResetBestEdgeWidth()
+    {
+        _bestEdgeWidthPixels = double.PositiveInfinity;
+        BestEdgeWidthText = "—";
+        _recentEdgeWidthsPixels.Clear();
+    }
+
+    /// <summary>Rolling-median smoothing over the last <see cref="RecentEdgeWidthWindowSize"/> valid
+    /// readings - a median rather than a mean so it resists an occasional bad frame (a burst of
+    /// sensor noise, a stray reflection) the same way <see cref="FocusAnalyzer"/>'s own per-column
+    /// median does, rather than letting one bad frame either flash a wrong number on screen or wrongly
+    /// set a new "Best". Frames where <see cref="EdgeFocusStats.HasEdge"/> is false don't get added
+    /// here at all - the window just keeps showing the last confident reading rather than being
+    /// diluted by "no measurement" frames.</summary>
+    private double SmoothEdgeWidth(double edgeWidthPixels)
+    {
+        _recentEdgeWidthsPixels.Add(edgeWidthPixels);
+        if (_recentEdgeWidthsPixels.Count > RecentEdgeWidthWindowSize)
+        {
+            _recentEdgeWidthsPixels.RemoveAt(0);
+        }
+
+        var sorted = _recentEdgeWidthsPixels.OrderBy(v => v).ToList();
+        var n = sorted.Count;
+        return n % 2 == 1 ? sorted[n / 2] : (sorted[(n / 2) - 1] + sorted[n / 2]) / 2.0;
+    }
+
     partial void OnContrastBlackPointChanged(double value) => PersistSettingsIfConnected();
 
     partial void OnContrastWhitePointChanged(double value) => PersistSettingsIfConnected();
@@ -1066,6 +1141,9 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnIsDisplaySettingsExpandedChanged(bool value) =>
         PersistExpanderState(s => s with { DisplaySettingsExpanded = value });
+
+    partial void OnIsFocusAidExpandedChanged(bool value) =>
+        PersistExpanderState(s => s with { FocusAidExpanded = value });
 
     private void PersistExpanderState(Func<AppSettings, AppSettings> update) =>
         _appSettingsStore.Save(update(_appSettingsStore.Load()));
@@ -1397,6 +1475,12 @@ public partial class CaptureViewModel : ObservableObject
             var (stretchedPixels, previewWidth, previewHeight) = FramePreview.Stretch(frame, blackPoint, whitePoint, stretchMaxDimension, DisplayBrightness);
             var droppedFrames = camera?.DroppedFrameCount ?? 0;
 
+            // Collimator-focus aid (see FocusAnalyzer's own doc comment) - operates on frame at its
+            // own native resolution, not a downsampled copy: sub-pixel edge-width measurement needs
+            // full column resolution, and downsampling the width would blur exactly the edge
+            // transition this is trying to measure.
+            var focusStats = FocusAnalyzer.MeasureEdgeSteepness(frame);
+
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
             // so read it back here (cheap; already off the capture thread) and reflect it on the
             // slider, guarded so OnXChanged doesn't immediately push it right back.
@@ -1410,6 +1494,20 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
                 _lastFrameAverageBrightness = stats.AverageValue; // see FindSunAsync's fine-tune hill-climb
+                if (focusStats.HasEdge)
+                {
+                    var smoothedEdgeWidth = SmoothEdgeWidth(focusStats.EdgeWidthPixels);
+                    EdgeWidthText = $"{smoothedEdgeWidth:0.00} px";
+                    if (smoothedEdgeWidth < _bestEdgeWidthPixels)
+                    {
+                        _bestEdgeWidthPixels = smoothedEdgeWidth;
+                        BestEdgeWidthText = $"{_bestEdgeWidthPixels:0.00} px";
+                    }
+                }
+                else
+                {
+                    EdgeWidthText = "No edge detected";
+                }
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
 
                 if (isContrastAuto)

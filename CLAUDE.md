@@ -703,9 +703,116 @@ interactive Windows install session, no `7z` available to unpack the bootstrappe
 entry above) - worth revisiting by hand later if xcopy deployment of those specific runtime files
 turns out to matter.
 
+Also real: the collimator-focus aid - `SolScan.Core.Camera.FocusAnalyzer.MeasureEdgeSteepness` (see
+CLAUDE.md's sunscan-app entry above for why this is a *second*, distinct focus aid from the
+still-unbuilt camera-focus/FWHM one), now on its fourth design, each revision driven by a concrete
+real-hardware failure rather than by guesswork:
+
+1. A method-for-method port of sunscan-backend's `focus_analyzer.py`'s `measure_focus_two_edges` - a
+   raw two-point-gradient peak over a 40-row sample, deliberately cheap to fit that code's real-time
+   Python/Raspberry-Pi budget.
+2. Replaced immediately (SolScan has no equivalent hardware constraint) with a **sub-pixel edge-width**
+   design: average many more rows into one horizontal (spatial-axis) profile, then measure the 10%-90%
+   threshold-crossing width of its steepest transition(s) - the same technique real optical MTF/
+   edge-response testing uses, and the same sub-pixel threshold-crossing approach
+   `SolScan.Processing.Shg.DiskEdgeDetector` already uses for the offline geometry-correction
+   pipeline. A physical pixel distance rather than an intensity-gradient number, so (unlike the first
+   version) it's stable across Gain/Exposure changes and interpretable on its own.
+3. **Reworked again** after real-hardware testing under a genuinely difficult scene (an overcast sky
+   forcing a very high Gain, hence very noisy frames) produced wildly unstable and sometimes
+   physically-impossible readings - an "edge width" reported as *larger than the frame itself*. Two
+   design flaws in version 2 caused this: thresholds were derived from the *whole profile's* observed
+   min/max, so anything else unusual anywhere in a wide frame (a faint unrelated line, one very dark/
+   bright column) skewed the calibration for the edge actually being measured; and the threshold-
+   crossing search itself had no distance limit, so on a noisy frame where the (mis-calibrated)
+   threshold was never cleanly crossed nearby, it kept walking regardless - sometimes most of the way
+   across the frame. Fixed by deriving the low/high reference levels from small *fixed-distance*
+   windows near the candidate edge itself rather than the whole profile, only trusting an edge if
+   those local levels spanned enough of the profile's real overall range, and capping the threshold-
+   crossing walk at a fixed distance. The profile itself was also changed to the *median* of each
+   column's sampled rows rather than the mean, and lightly median-smoothed along its width afterward
+   (`SmoothingRadius`) - both edge-preserving denoising steps still in place today (a median resists an
+   isolated noisy/hot pixel or a thin unrelated feature grazing a few sampled rows, without smearing a
+   genuinely sharp transition the way a mean/box blur would).
+4. **Reworked a third time** after a *different* real-hardware session reported "no edge detected" on
+   a capture that looked reasonably close to focus. Two further design flaws, both fundamentally about
+   version 3's constants being *fixed pixel counts*, which don't generalize across resolutions/fields
+   of view - a real optical edge's width in pixels scales with sensor resolution, not a universal
+   constant, so a perfectly reasonable, close-to-focus edge at a high native resolution can legitimately
+   span far more pixels than a small fixed window/search-distance was ever built to reach:
+   - The fixed-distance local reference windows (15px gap, 20px window) couldn't reach a real edge's
+     true flat plateaus once the transition itself was wider than that. Replaced by `FindPlateau`:
+     search *outward* from the edge, in growing steps, until a window of consecutive columns is
+     verified genuinely flat (low internal variance relative to the profile's overall range) -
+     however far that takes, bounded only by `MaxPlateauSearchFraction` (30% of the frame's own
+     width, so the bound itself scales with resolution instead of needing a bigger fixed guess).
+   - Even once (this) let a genuinely wide-but-real edge reach the confidence-gating step, version
+     3's *gate itself* rejected it: it required each candidate's peak two-point gradient to clear a
+     fraction of the profile's range (and the weaker candidate to clear a fraction of the stronger
+     one) - but peak two-point gradient is inherently *smaller* the more pixels the same total
+     amplitude is spread over, so that gate structurally penalized exactly the wide edges the
+     `FindPlateau` fix above was just built to reach. Removed entirely - `IsSeparationTrustworthy`,
+     comparing the *actual achieved* low/high plateau levels once found (`MinPlateauSeparationFraction`,
+     25% of the profile's overall range), is already a strictly better confidence gate for this: it's
+     width/scale-invariant, unlike a derivative, so it doesn't need a second, redundant gate on top.
+
+Reports whichever of the rising/falling transitions have *some* slope in that direction at all (an
+edge with none - the genuine single-slit-edge case - has an exact-zero-or-negative peak in that
+direction, not just a small one, so this cheaply skips a direction with nothing there before ever
+attempting a plateau search on it) and then pass `IsSeparationTrustworthy` - one edge for the
+slit-edge case, two (averaged) for a full disk crossing, or "no edge" for a flat/blank frame, a
+transition too close to the frame's own border, or one with no flat plateau reachable within
+`MaxPlateauSearchFraction` on either side. Wired into `CaptureViewModel`'s existing throttled preview
+pipeline (`ProcessPreviewFrame`, alongside the histogram/stretch work already computed there) rather
+than a separate compute path, shown in a "Focus Aid" Expander on the Capture view (`EdgeWidthText`)
+alongside a running `BestEdgeWidthText` low-water mark - the same "(Best: …)" readout sunscan-app's
+own Focus assistant keeps (CLAUDE.md's sunscan-app entry), just tracking a *minimum* rather than a
+maximum since smaller pixel widths are sharper (the same "smaller is better" convention as an
+autofocus routine's HFD/HFR reading). `CaptureViewModel` additionally keeps a short
+(`RecentEdgeWidthWindowSize` = 5) rolling *median* across frames (`SmoothEdgeWidth`) before updating
+either the displayed text or the Best tracker - the UI-level counterpart to `FocusAnalyzer`'s own
+per-column median, so one remaining bad frame can't flash a wrong number on screen or falsely set a
+new "Best" even after the per-frame fixes above. Both the per-frame Best tracker and this rolling
+window reset via a "Reset Best" button or automatically whenever live view (re)starts, since a best
+(or a smoothing history) carried over from a previous session/camera/ROI isn't meaningful for a new
+one. Covered by `FocusAnalyzerTests` - sharper-vs-softer synthetic edges scoring a smaller width, a
+two-edge disk crossing, a single slit edge, a fully flat frame, a frame narrower than the algorithm's
+own minimum usable width, an edge too close to the frame border, a transition too gradual to reach a
+trustworthy plateau separation, an unrelated distant feature that must not affect a real edge's
+measurement, a genuinely sharp edge staying bounded and confident under heavy synthetic noise, a
+moderately soft (150px) edge at full-sensor-scale width measuring correctly rather than being rejected
+(the regression test for this specific reported bug), 16-bit samples, and a frame shorter than the
+default row-sample count. No graph/profile visualization was added - the whole point of this feature
+is that the numeric readout replaces needing one. NOT YET VALIDATED against real hardware/optics
+beyond the two sessions that prompted these reworks - the remaining threshold fractions (10%/90%,
+`PlateauFlatnessFraction`, `MaxPlateauSearchFraction`, `MinPlateauSeparationFraction`) are reasonable
+choices, not calibrated against a real SHG/collimator across varied conditions, and a genuinely very
+gradual (not just wide) real transition could in principle still find a spuriously "flat" window
+partway through a slow, steady change rather than reaching the true plateau - `MinPlateauSeparationFraction`
+catches this in practice (a falsely-early plateau found partway up a ramp won't differ enough from the
+other side to pass), but it's a secondary safety net catching a primary check's imprecision, not a
+first-choice design.
+
+One follow-up question worth recording since it was raised and checked rather than assumed: does the
+darker, slightly curved ("smile") spectral-line band an SHG wide view *always* shows - not just an
+occasional unrelated feature, but a structural, ever-present part of the scene - need explicit
+detection/exclusion? Verified it doesn't, rather than just reasoning it through: `BuildProfile`'s
+per-column *median* already ignores it for free, because at any single column the line only occupies
+its own local thickness out of however many rows are sampled there, and the curvature only changes
+*which* rows that is per column, not *how many* - so it stays a small minority of samples everywhere
+(median tolerates any minority below 50%) as long as the line's own thickness stays under half the
+sampled row height, true for any reasonably tall framing view. Confirmed directly by
+`FocusAnalyzerTests.MeasureEdgeSteepness_IgnoresACurvedSpectralLineRunningThroughTheWholeFrame` - a
+genuinely 2D synthetic frame (unlike every other test here, which just repeats one row down the whole
+height) with a curved band running straight through the real edge's own local reference windows, not
+just somewhere spatially separate from it the way the distant-feature regression test above is. No
+explicit line-detection/exclusion step was added on top of the existing median - it wasn't needed, and
+would have added real complexity (essentially porting some version of `SpectralLineCurvatureDetector`
+to run live) for no measurable accuracy gain over what the median already provides for free.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
-toggle* (see the centred ROI note above for what's real there instead), no camera-focus/collimator-
-focus aids, no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
+toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
+no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
 doesn't yet cover Az/Alt slewing or custom tracking rates/FindHome/AtHome; Phase 3's ephemeris slew
 doesn't yet include a lead-offset, and its fine-tune is the simple hill-climb described above, not yet
 the full spiral-search-then-hill-climb design - all later phases per the build plan below.
@@ -911,9 +1018,10 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
      value that reaches the reconstruction goal, since every extra row costs frame-rate/USB-bandwidth
      budget the scan-sampling fps target also needs
    - a camera focus aid (port `calculate_fwhm`'s spectral-line-width measurement - narrower FWHM
-     means sharper camera focus)
+     means sharper camera focus) - still outstanding
    - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
-     disk edges mean better collimator alignment)
+     disk edges mean better collimator alignment) - **done**, see the "Also real" note above
+     (`FocusAnalyzer`/CaptureView.xaml's "Focus Aid" panel)
    - a live line-identification overlay for the wide view, so labeled Fraunhofer lines scroll into
      place as the diffraction grating is rotated. Rendering/dispersion-matching/labeling modelled on
      `SpectrumBrowser` (real-optics dispersion via `SpectrumAnalyzer.computeSpectralDispersion`,

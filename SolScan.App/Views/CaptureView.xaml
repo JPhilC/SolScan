@@ -253,6 +253,23 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- Collimator-focus aid (see FocusAnalyzer/CaptureViewModel.EdgeWidthText) - the
+                         sub-pixel width (in pixels) of the sharpest disk/slit edge transition found;
+                         dial the collimator towards the *smallest* number rather than eyeballing a
+                         graph's slope (same "smaller is better" convention as an autofocus routine's
+                         HFD/HFR reading). "Best" is a running low-water mark since live view
+                         (re)started or Reset was last pressed, so overshooting the true optimum while
+                         adjusting still leaves the best (narrowest) point actually reached visible. -->
+                    <Expander Header="Focus Aid" IsExpanded="{Binding IsFocusAidExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                        <StackPanel Margin="0,8,0,0">
+                            <TextBlock Text="{Binding EdgeWidthText, StringFormat='Edge Width: {0}'}" FontWeight="Bold"/>
+                            <TextBlock Text="{Binding BestEdgeWidthText, StringFormat='Best: {0}'}" Margin="0,4,0,8"/>
+                            <Button Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" HorizontalAlignment="Left"/>
+                            <TextBlock Text="Minimize the edge width while adjusting the collimator - smaller is sharper."
+                                       Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Expander>
+
                     <Expander Header="Display Settings" IsExpanded="{Binding IsDisplaySettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                         <StackPanel Margin="0,8,0,0">
                             <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only,
