@@ -3,6 +3,16 @@
 // file for full attribution. Trimmed to the one generic entry point <see cref="DiskEdgeDetector"/>
 // needs - astro4j's own `ImageMath` also carries separable-Gaussian/Sobel/Laplacian fast paths not
 // used by that port.
+//
+// No longer clamps its output to [0, maxPixelValue] - matching upstream's own 89244f0c "fix:
+// Fix convolution clamping pixels" (astro4j v5.4.3): a convolution's output can legitimately fall
+// outside the source's own value range (a kernel with negative weights - sharpening/unsharp-mask -
+// can overshoot either end; data already shifted outside [0, maxPixelValue] by an earlier step, e.g.
+// background subtraction, must stay outside it through a blur too). Currently a no-op for this port's
+// one call site (DiskEdgeDetector.Prepare passes only non-negative-weight kernels summing to 1 - a
+// convex combination, so its output is already bounded within the non-negative raw source data's own
+// range) but kept out anyway so a future reuse of this generic helper (e.g. a sharpening kernel) can't
+// silently reintroduce the same bug.
 
 namespace SolScan.Processing.Shg;
 
@@ -12,8 +22,9 @@ public static class ImageConvolution
 {
     /// <summary>Convolves <paramref name="source"/> with <paramref name="kernel"/> (its own
     /// <paramref name="factor"/> normalizer applied after summing), replicating edge pixels for
-    /// out-of-bounds taps and clamping the result to <c>[0, maxPixelValue]</c>.</summary>
-    public static float[,] Convolve(float[,] source, float[,] kernel, float factor, double maxPixelValue)
+    /// out-of-bounds taps. Does not clamp the result to the source's own value range - see this
+    /// file's header comment.</summary>
+    public static float[,] Convolve(float[,] source, float[,] kernel, float factor)
     {
         var height = source.GetLength(0);
         var width = source.GetLength(1);
@@ -38,7 +49,7 @@ public static class ImageConvolution
                     }
                 }
 
-                output[y, x] = (float)System.Math.Clamp(sum * factor, 0, maxPixelValue);
+                output[y, x] = sum * factor;
             }
         }
 

@@ -49,9 +49,9 @@ public static class DiskEdgeDetector
     private static float[,] Prepare(float[,] sourceImage, double maxPixelValue)
     {
         var working = Truncate((float[,])sourceImage.Clone());
-        working = ImageConvolution.Convolve(working, ImageConvolution.GaussianBlur3X3, ImageConvolution.GaussianBlur3X3Factor, maxPixelValue);
+        working = ImageConvolution.Convolve(working, ImageConvolution.GaussianBlur3X3, ImageConvolution.GaussianBlur3X3Factor);
         var (boxKernel, boxFactor) = ImageConvolution.BoxKernel(BoxBlurSize);
-        working = ImageConvolution.Convolve(working, boxKernel, boxFactor, maxPixelValue);
+        working = ImageConvolution.Convolve(working, boxKernel, boxFactor);
 
         // Stretch *before* background neutralization, not just after (astro4j's own equivalent only
         // stretches at the end - see the class header comment for why that's not enough here): the

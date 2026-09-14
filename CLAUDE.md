@@ -96,7 +96,36 @@ interface exists.
     with no confidence gate. For SolScan: build the live overlay's rendering/dispersion/labeling on
     this browser's approach, but keep `DeepLineIdentifier`'s confidence gating for the identification
     step rather than this browser's ungated brute-force scan - a live view shouldn't confidently
-    mislabel an ambiguous stretch of spectrum.
+    mislabel an ambiguous stretch of spectrum. **Superseded as the design basis for this by
+    `SpectralWindowIdentifier` below** (landed in astro4j after the above was written) - the
+    `DeepLineIdentifier`-core-plus-`SpectrumBrowser`-rendering combination was always an assembly of
+    two pieces not built for this together; astro4j has since shipped the purpose-built live/narrow-
+    window equivalent directly.
+  - **`SpectralWindowIdentifier`** (`jsolex-core/.../spectrum/SpectralWindowIdentifier.java`, new in
+    astro4j's "identify spectral lines live while tuning the spectroheliograph" commit, 2026-09-13,
+    v5.4.3→5.5.0) — a real, shipped answer to the exact problem SolScan's own still-unbuilt live
+    wide-view line-ID overlay (Phase 4) describes: identifying which line is being looked at from a
+    live, narrow capture window while the grating is being turned, rather than `DeepLineIdentifier`'s
+    own whole-recorded-file design. Companioned by two new types: `WavelengthSolution` (the per-frame
+    curvature-polynomial/pixel↔wavelength fit) and `TelluricTransmission` (a bundled NSO/Kitt Peak
+    ground-based atmospheric-absorption atlas, `jsolex-core/src/nso/visatl-telluric.dat`) - added
+    because telluric lines near H-alpha are as deep as the solar ones and were throwing off
+    identification for anything observed through Earth's atmosphere; `DeepLineIdentifier` and
+    `SpectrumBrowser` were both reworked in the same commit to share this same telluric-aware
+    reference, so a future SolScan port of either should pull in the telluric atlas too, not just the
+    solar one. Exposed as a real HTTP API on JSolex's own embedded server -
+    `jsolex-server/.../SpectrumController.java`'s `POST /api/spectrum/identify` (raw pixel bytes +
+    width/height/format, or an image/FITS file; optional `pixelSize`/`binning`/`instrument`/`average`
+    query params; returns JSON: curvature polynomial, identified line + score/confidence, Å/pixel
+    dispersion, and every line found in the window with its position/depth relative to frame centre;
+    `DELETE` resets the running frame-average) - already consumed by a real capture-software
+    integration, `scripts/sharpcap/jsolex_spectral_lines.py`, doing for SharpCap exactly what this
+    project's own Phase 4 live-overlay item wants for SolScan's Capture view. Not yet acted on in
+    SolScan as of this writing - two integration paths exist (a native C# port of
+    `SpectralWindowIdentifier`/`WavelengthSolution`/`TelluricTransmission`, matching this project's
+    established porting precedent and keeping SolScan self-contained; or driving JSolex's own server
+    API from `CaptureViewModel`, far less work but a runtime dependency on a separate JSolex install/
+    process) - deliberately deferred rather than picked, pending Phase 4's own turn.
   - **`SpectralLineCatalog`** (same package) — a curated "other interesting lines in this window"
     lookup, backed by a bundled `interesting-lines.txt` resource (`wavelength;element;identifier;
     difficulty`), used once the studied line's wavelength is known to label secondary lines nearby.
@@ -1418,12 +1447,15 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
      disk edges mean better collimator alignment) - **done**, see the "Also real" note above
      (`FocusAnalyzer`/CaptureView.xaml's "Focus Aid" panel)
    - a live line-identification overlay for the wide view, so labeled Fraunhofer lines scroll into
-     place as the diffraction grating is rotated. Rendering/dispersion-matching/labeling modelled on
-     `SpectrumBrowser` (real-optics dispersion via `SpectrumAnalyzer.computeSpectralDispersion`,
-     labels from `SpectralLineCatalog`'s `interesting-lines.txt`), but identification logic modelled
-     on `DeepLineIdentifier`'s confidence-gated correlation rather than `SpectrumBrowser`'s own
-     ungated brute-force scan - needs its own reference solar-flux atlas and dispersion calibration
-     for the Sol'ex + ASI678MM combination, not Sunscan's atlas/constants. Once this exists, it should
+     place as the diffraction grating is rotated. Design basis is now astro4j's own
+     `SpectralWindowIdentifier`/`WavelengthSolution`/`TelluricTransmission` (see the astro4j entry
+     above) - a purpose-built live/narrow-window identifier astro4j shipped after this bullet was
+     first written, superseding the original plan of assembling `SpectrumBrowser`'s rendering with
+     `DeepLineIdentifier`'s confidence-gated correlation by hand; still needs its own reference
+     solar-flux-plus-telluric atlas and dispersion calibration for the Sol'ex + ASI678MM combination,
+     not Sunscan's atlas/constants, and a choice between porting those astro4j classes natively or
+     driving JSolex's own new `/api/spectrum/identify` server endpoint instead (see that entry for the
+     trade-off - deliberately not decided yet). Once this exists, it should
      also be able to *drive* `SpectrumParams.Ray` (Phase 6, the Process view's Process Parameters panel) rather than
      that staying a manual-only pick - whichever labeled line sits nearest the ROI's vertical centre
      is the one actually being studied, so the overlay could set it automatically instead of asking
