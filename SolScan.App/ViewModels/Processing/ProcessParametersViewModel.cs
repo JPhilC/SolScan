@@ -6,7 +6,7 @@ namespace SolScan.App.ViewModels.Processing;
 /// <summary>
 /// Process view's "Process Parameters" section: which spectral line is being studied and how its pixel
 /// shifts/geometry are set up - the slice of astro4j's "Process parameters" dialog page SolScan needs
-/// for its Basic Images to mean something (see <see cref="SpectrumParams"/>/<see cref="GeometryParams"/>'s
+/// for its output images to mean something (see <see cref="SpectrumParams"/>/<see cref="GeometryParams"/>'s
 /// own doc comments for what's deliberately not ported yet). No store access of its own - seeded from a
 /// <see cref="ProcessParams"/> passed in by <c>ProcessViewModel</c> (moved here from the old Options
 /// tab of the same name), and read back out via <see cref="ToSpectrumParams"/>/<see cref="ToGeometryParams"/>

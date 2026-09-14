@@ -6,12 +6,12 @@ namespace SolScan.Core.Processing;
 
 /// <summary>
 /// Which built-in output image kind can be generated from a processed SER capture - ported from
-/// astro4j's <c>GeneratedImageKind</c> enum. Originally scoped to just the "Basic Images" values
-/// JSolex's "Image Selection and Scripts" tab exposes in its own Basic Images section;
-/// <see cref="Colorized"/> is the first value ported from that tab's separate Advanced Images
-/// section (astro4j's own <c>ImageSelectionPanel.java</c> puts its checkbox in <c>advancedGrid</c>,
-/// not the basic one) - the rest of Advanced Images (Doppler, redshift, active regions, ...) and
-/// Debug Options still add more values here once those sections land - see SolScan CLAUDE.md.
+/// astro4j's <c>GeneratedImageKind</c> enum. JSolex itself splits its "Image Selection and Scripts"
+/// tab into "Basic Images"/"Advanced Images" sections (plus Debug Options/custom ImageMath scripts,
+/// neither ported at all); SolScan doesn't carry that split forward - these are the images v1 is
+/// scoped to produce, full stop, with no separate "advanced" tier presented to the user. Anyone
+/// wanting JSolex's fuller image set (Doppler, redshift, active regions, Debug Options, scripts, ...)
+/// still has the original SER file to hand it to JSolex itself - see SolScan CLAUDE.md.
 /// </summary>
 public enum GeneratedImageKind
 {
@@ -39,6 +39,15 @@ public enum GeneratedImageKind
     /// produced at all when <see cref="SpectrumParams.Ray"/> is <see cref="SpectralRay.Other"/>,
     /// which has no wavelength to derive a colour from.</summary>
     Colorized,
+
+    /// <summary>A "virtual eclipse"/coronagraph view: the solar disk itself is blanked out, then the
+    /// surrounding region is background-neutralized and arcsinh-stretched, so faint prominences and
+    /// streamers near the limb - normally buried by the disk's own far greater brightness - become
+    /// visible the way they would during a real eclipse (<c>SolScan.Processing.Shg.Coronagraph</c>).
+    /// Its input is the plain <see cref="GeometryCorrected"/> image (not the contrast-enhanced
+    /// <see cref="GeometryCorrectedProcessed"/>/<see cref="Colorized"/> ones), so it's produced
+    /// whenever an ellipse fit exists at all, independent of whether either of those was requested.</summary>
+    VirtualEclipse,
 }
 
 /// <summary>The <see cref="DirectoryKind.GetDirectoryKind"/> extension - split into its own static
@@ -61,6 +70,7 @@ public static class GeneratedImageKindExtensions
         GeneratedImageKind.GeometryCorrected => DirectoryKind.Processed,
         GeneratedImageKind.GeometryCorrectedProcessed => DirectoryKind.Processed,
         GeneratedImageKind.Colorized => DirectoryKind.Processed,
+        GeneratedImageKind.VirtualEclipse => DirectoryKind.Processed,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unmapped GeneratedImageKind - add it to GetDirectoryKind."),
     };
 }

@@ -380,6 +380,74 @@ public class DiskGeometryCorrectorTests
         }
     }
 
+    [Fact]
+    public async Task ProcessAsync_VirtualEclipse_ProducesARealCoronagraphImage()
+    {
+        const int width = 72;
+        const int frameCount = 64;
+        const int height = 24;
+        const int lineRow = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticDiskFile(path, width, height, frameCount, lineRow);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var processParams = ProcessParams.CreateDefault() with
+            {
+                // Requested alongside GeometryCorrected - its own real, un-enhanced input - to prove
+                // VirtualEclipse is a genuinely separate transformation, not a copy of it. Also proves
+                // it's produced without GeometryCorrectedProcessed/Colorized needing to be requested
+                // too - its own input is the plain geometry-corrected image, not the contrast-enhanced
+                // one (see ShgProcessor.Process's own comment on needsGeometryCorrection).
+                RequestedImages = new RequestedImages([GeneratedImageKind.GeometryCorrected, GeneratedImageKind.VirtualEclipse]),
+            };
+
+            var result = await processor.ProcessAsync(path, processParams);
+
+            var geometryCorrected = Assert.Single(result.Images, i => i.Kind == GeneratedImageKind.GeometryCorrected);
+            var eclipse = Assert.Single(result.Images, i => i.Kind == GeneratedImageKind.VirtualEclipse);
+            Assert.True(eclipse.Width > 0);
+            Assert.True(eclipse.Height > 0);
+            Assert.NotEqual(geometryCorrected.Pixels, eclipse.Pixels);
+
+            // DiskFill blanks the disk interior to exactly 0 before neutralization/stretching, and
+            // every step downstream leaves an already-zero pixel exactly zero (each neutralization
+            // pass' background subtraction clamps at 0; ArcsinhStretchingStrategy short-circuits v==0
+            // to 0 outright; the final min/max renormalization maps the image's own minimum - which an
+            // exact 0 already is - to 0) - so the blanked disk should read back as a sizeable block of
+            // exact zeros, unlike the un-enhanced GeometryCorrected image (whose disk interior is
+            // bright, not blanked).
+            var eclipseZeroCount = CountZeroPixels(eclipse.Pixels, eclipse.Width, eclipse.Height);
+            var geometryCorrectedZeroCount = CountZeroPixels(geometryCorrected.Pixels, geometryCorrected.Width, geometryCorrected.Height);
+            var total = eclipse.Width * eclipse.Height;
+            Assert.True(eclipseZeroCount > total / 10, $"Expected the blanked disk to leave a sizeable block of exactly-zero pixels, but only {eclipseZeroCount}/{total} were zero.");
+            Assert.True(eclipseZeroCount > geometryCorrectedZeroCount * 5, $"Expected far more exactly-zero pixels in the virtual eclipse image ({eclipseZeroCount}) than in the un-enhanced geometry-corrected one ({geometryCorrectedZeroCount}).");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static int CountZeroPixels(ushort[,] pixels, int width, int height)
+    {
+        var count = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                if (pixels[y, x] == 0)
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
     /// <summary>Writes a SER file whose reconstructed disk image (stacking the row near
     /// <paramref name="lineRow"/> from every frame) comes out as a bright, axis-aligned ellipse on a
     /// dim background (semi-axes 28 columns x 20 frames): each frame/column's absorption-line depth

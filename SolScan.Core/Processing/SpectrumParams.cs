@@ -6,8 +6,8 @@ namespace SolScan.Core.Processing;
 
 /// <summary>
 /// Which spectral line is being studied and how the reconstruction's pixel shifts are chosen -
-/// ported from astro4j's <c>SpectrumParams</c>, trimmed to the fields SolScan's Basic Images actually
-/// need (dropped nothing beyond that - this is the full JSolex record).
+/// ported from astro4j's <c>SpectrumParams</c>, trimmed to the fields SolScan's own output images
+/// actually need (dropped nothing beyond that - this is the full JSolex record).
 /// </summary>
 /// <param name="Ray">The spectral line being studied - currently always picked by hand in Options >
 /// Process Parameters. Once Capture's live line-identification overlay exists (CLAUDE.md Phase 4),

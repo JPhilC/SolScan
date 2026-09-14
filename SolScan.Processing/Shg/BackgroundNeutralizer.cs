@@ -29,26 +29,37 @@ public static class BackgroundNeutralizer
     /// <summary>Retries with progressively coarser histograms (64 bins up to 1024) if the fit looks
     /// unreliable (see the <c>avgBackground &gt; 8*background</c> guard below) - matches astro4j's own
     /// retry loop. Falls back to the (zero-pixel-cleaned) image unchanged, with a background of 0, if
-    /// every attempt fails.</summary>
-    public static Result BlindNeutralize(float[,] image, double maxPixelValue)
+    /// every attempt fails. <paramref name="ellipse"/> - null for the first, ellipse-less disk-edge fit
+    /// (<see cref="DiskEdgeDetector"/>'s own only call site) - restricts sampling to pixels outside it
+    /// and switches the initial background estimate from the histogram-based
+    /// <see cref="ImageStatistics.EstimateBackgroundLevel"/> to the plain off-disk mean
+    /// (<see cref="ImageStatistics.EstimateBackground"/>), matching astro4j's own
+    /// <c>blindBackgroundNeutralization2</c> exactly (it switches on whether the image already carries
+    /// Ellipse metadata) - used by <see cref="Coronagraph"/>, which already knows the disk's ellipse.
+    /// The histogram bin count retry loop still applies either way, though in practice an ellipse-aware
+    /// fit almost never needs it - the initial estimate no longer depends on <paramref name="bins"/> at
+    /// all.</summary>
+    public static Result BlindNeutralize(float[,] image, double maxPixelValue, Ellipse? ellipse = null)
     {
         var bins = 64;
-        var result = TryNeutralize(image, bins, maxPixelValue);
+        var result = TryNeutralize(image, bins, maxPixelValue, ellipse);
         while (result is null && bins < 1024)
         {
             bins *= 2;
-            result = TryNeutralize(image, bins, maxPixelValue);
+            result = TryNeutralize(image, bins, maxPixelValue, ellipse);
         }
 
         return result ?? new Result(RemoveZeroPixels(image), 0);
     }
 
-    private static Result? TryNeutralize(float[,] image, int bins, double maxPixelValue)
+    private static Result? TryNeutralize(float[,] image, int bins, double maxPixelValue, Ellipse? ellipse)
     {
         var data = RemoveZeroPixels(image);
         var height = data.GetLength(0);
         var width = data.GetLength(1);
-        var background = 0.8 * ImageStatistics.EstimateBackgroundLevel(data, bins, maxPixelValue);
+        var background = ellipse is { } knownEllipse
+            ? 0.8 * ImageStatistics.EstimateBackground(data, knownEllipse)
+            : 0.8 * ImageStatistics.EstimateBackgroundLevel(data, bins, maxPixelValue);
 
         // x/y are normalized to [0,1] before building/evaluating the model. Astro4j's own version
         // gets away with raw pixel coordinates because Apache Commons Math's OLSMultipleLinearRegression
@@ -71,6 +82,11 @@ public static class BackgroundNeutralizer
             {
                 for (var x = 0; x < width; x += 8)
                 {
+                    if (ellipse is { } e && e.IsWithin(x, y))
+                    {
+                        continue;
+                    }
+
                     var value = data[y, x];
                     if (value < background && value > 0)
                     {

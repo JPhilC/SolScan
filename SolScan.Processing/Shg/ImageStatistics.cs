@@ -1,7 +1,8 @@
 // Adapted from astro4j's jsolex-core/src/main/java/me/champeau/a4j/jsolex/processing/sun/tasks/EllipseFittingTask.java
 // (the private `statsOf`/`Stats` helper) and .../sun/workflow/AnalysisUtils.java (`estimateBlackPoint`,
-// `estimateBackgroundLevel`) and .../util/Histogram.java (Apache License, Version 2.0:
-// http://www.apache.org/licenses/LICENSE-2.0). See SolScan's NOTICE file for full attribution.
+// `estimateBackgroundLevel`, `estimateBackground`) and .../util/Histogram.java (Apache License,
+// Version 2.0: http://www.apache.org/licenses/LICENSE-2.0). See SolScan's NOTICE file for full
+// attribution.
 
 using SolScan.Processing.Math;
 
@@ -88,6 +89,39 @@ public static class ImageStatistics
         }
 
         return count == 0 ? 0 : blackEstimate;
+    }
+
+    /// <summary>The plain (unweighted) average value of pixels outside <paramref name="ellipse"/> -
+    /// astro4j's own <c>AnalysisUtils.estimateBackground</c>, used (unlike the offcenter-weighted
+    /// <see cref="EstimateBlackPoint"/>) as <see cref="BackgroundNeutralizer.BlindNeutralize"/>'s
+    /// initial background estimate once an ellipse is already known, in place of the histogram-based
+    /// <see cref="EstimateBackgroundLevel"/> a first, ellipse-less fit has to fall back on.</summary>
+    public static double EstimateBackground(float[,] image, Ellipse ellipse)
+    {
+        var height = image.GetLength(0);
+        var width = image.GetLength(1);
+        var average = double.MaxValue;
+        var count = 0;
+
+        for (var x = 0; x < width; x++)
+        {
+            for (var y = 0; y < height; y++)
+            {
+                if (ellipse.IsWithin(x, y))
+                {
+                    continue;
+                }
+
+                var v = image[y, x];
+                if (v > 0 && float.IsFinite(v))
+                {
+                    count++;
+                    average += (v - average) / count;
+                }
+            }
+        }
+
+        return count == 0 ? 0 : average;
     }
 
     /// <summary>Estimates the background (sky/off-disk) level via histogram analysis: walks the

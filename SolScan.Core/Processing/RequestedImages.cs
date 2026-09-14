@@ -5,11 +5,11 @@
 namespace SolScan.Core.Processing;
 
 /// <summary>
-/// Which built-in image kinds to generate from a processed capture - the "Basic Images" checklist
-/// slice of astro4j's own <c>RequestedImages</c> (which also carries pixel-shift bookkeeping and
-/// ImageMath script wiring, both out of scope until there's a real pipeline to feed them), plus
-/// <see cref="GeneratedImageKind.Colorized"/> - the first Advanced Images kind ported (see that
-/// value's own doc comment).
+/// Which built-in image kinds to generate from a processed capture - a flat checklist over every
+/// <see cref="GeneratedImageKind"/> SolScan v1 supports (see that enum's own doc comment for why it
+/// doesn't carry forward JSolex's own Basic/Advanced Images split). Astro4j's own <c>RequestedImages</c>
+/// also carries pixel-shift bookkeeping and ImageMath script wiring, both out of scope until there's a
+/// use for them.
 /// </summary>
 /// <param name="Images">A concrete <see cref="HashSet{T}"/>, not <see cref="IReadOnlySet{T}"/> -
 /// <c>System.Text.Json</c> needs a concrete collection type to deserialize into.</param>
@@ -17,8 +17,8 @@ public sealed record RequestedImages(HashSet<GeneratedImageKind> Images)
 {
     public bool IsEnabled(GeneratedImageKind kind) => Images.Contains(kind);
 
-    /// <summary>All 6 currently-ported kinds selected - mirrors astro4j's own out-of-the-box default
-    /// (<c>RequestedImages.FULL_MODE</c>, everything except debug/advanced kinds not yet ported)
+    /// <summary>Every currently-ported kind selected - mirrors astro4j's own out-of-the-box default
+    /// (<c>RequestedImages.FULL_MODE</c>, everything except Debug Options/scripts not yet ported)
     /// scoped down to what SolScan actually declares today.</summary>
     public static RequestedImages Default { get; } = new([
         GeneratedImageKind.Raw,
@@ -27,6 +27,7 @@ public sealed record RequestedImages(HashSet<GeneratedImageKind> Images)
         GeneratedImageKind.GeometryCorrected,
         GeneratedImageKind.GeometryCorrectedProcessed,
         GeneratedImageKind.Colorized,
+        GeneratedImageKind.VirtualEclipse,
     ]);
 
     // Records auto-generate Equals/GetHashCode that compare the Images field via

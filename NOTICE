@@ -117,6 +117,16 @@ back to the original Java source, per CLAUDE.md):
     Colorize.StretchByLightness - ported as a direct specialization for the one stretch strategy
     (a plain min/max linear stretch, itself newly ported as SolScan.Processing.Stretching.LinearStretchStrategy)
     this pipeline actually drives through it, not a general RGBImage-stretch dispatch mechanism)
+  - CoronagraphTask, and DiskFill.doFillWithGradient(Ellipse, float[][], float) - the "virtual
+    eclipse"/coronagraph view (SolScan.Core.Processing.GeneratedImageKind.VirtualEclipse/
+    SolScan.Processing.Shg.Coronagraph/DiskFill): blanks the solar disk via a subpixel-antialiased
+    gradient fill, then runs two rounds of ellipse-aware BackgroundRemoval.neutralizeBackground
+    (SolScan.Processing.Shg.BackgroundNeutralizer.BlindNeutralize, extended to accept an already-known
+    ellipse - it previously only ported the ellipse-less code path) before a final arcsinh stretch. The
+    original constructor's blackPoint parameter is dropped - confirmed dead in astro4j itself, never
+    read by doCall - and AnalysisUtils.estimateBackground (the plain unweighted off-disk mean
+    BackgroundRemoval.blindBackgroundNeutralization2 uses once an ellipse is already known) is newly
+    ported alongside it as SolScan.Processing.Shg.ImageStatistics.EstimateBackground
 
 ================================================================================
 RASTA

@@ -21,8 +21,8 @@ namespace SolScan.App.ViewModels;
 /// through <see cref="IShgProcessor"/> - real spectral-line-curvature detection, reconstruction,
 /// disk-edge ellipse fitting/geometry correction, and (for
 /// <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>) every <see cref="ContrastEnhancementMode"/>
-/// (see <see cref="ShgProcessor"/>'s own doc comment), producing real Raw/Reconstruction/Continuum/
-/// GeometryCorrected/GeometryCorrectedProcessed output images. Processing is manual (click Process)
+/// (see <see cref="ShgProcessor"/>'s own doc comment), producing every real output image SolScan
+/// declares (see <see cref="GeneratedImageKind"/>). Processing is manual (click Process)
 /// rather than automatic-on-capture-finish
 /// - see CaptureViewModel for where that recording-finished moment currently has no hook to drive
 /// from; that's real future work per SolScan CLAUDE.md's Phase 7.
@@ -561,6 +561,7 @@ public partial class ProcessViewModel : ObservableObject
         GeneratedImageKind.GeometryCorrected => "geometry-corrected.png",
         GeneratedImageKind.GeometryCorrectedProcessed => "geometry-corrected-processed.png",
         GeneratedImageKind.Colorized => "colorized.png",
+        GeneratedImageKind.VirtualEclipse => "virtual-eclipse.png",
         _ => $"{kind.ToString().ToLowerInvariant()}.png",
     };
 

@@ -44,6 +44,8 @@ public class ProcessingLocationsTests
     [InlineData(GeneratedImageKind.Continuum, DirectoryKind.Processed)]
     [InlineData(GeneratedImageKind.GeometryCorrected, DirectoryKind.Processed)]
     [InlineData(GeneratedImageKind.GeometryCorrectedProcessed, DirectoryKind.Processed)]
+    [InlineData(GeneratedImageKind.Colorized, DirectoryKind.Processed)]
+    [InlineData(GeneratedImageKind.VirtualEclipse, DirectoryKind.Processed)]
     public void GetDirectoryKind_MatchesRealJSolexMapping(GeneratedImageKind kind, DirectoryKind expected)
     {
         Assert.Equal(expected, kind.GetDirectoryKind());

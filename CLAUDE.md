@@ -279,9 +279,12 @@ exercise the domain contracts without pulling in real hardware or the WPF app.)
   natively from `SolexVideoProcessor`'s individual workflow steps rather than shelling out to
   `jsolex-cli` (see Phase 6 below for why that original plan was skipped). Spectral line detection,
   disk reconstruction, ellipse fitting/geometry correction, AutoStretch/CLAHE contrast enhancement
-  (`SolScan.Processing.Stretching`, all three modes now including CLAHE2/multi-scale CLAHE), and
-  colorization (`SolScan.Processing.Color`, the first Advanced Images kind ported) are all
-  implemented; banding/jagging/distortion corrections are not yet.
+  (`SolScan.Processing.Stretching`, all three modes now including CLAHE2/multi-scale CLAHE),
+  colorization (`SolScan.Processing.Color`), and the virtual eclipse/coronagraph view
+  (`SolScan.Processing.Shg.Coronagraph`) are all implemented - v1's full image set, now that JSolex's
+  own Basic/Advanced Images split (and everything beyond it) is deliberately out of scope, see the
+  "Basic/Advanced Images split is gone" entry below; banding/jagging/distortion corrections are not
+  part of that set at all.
 - **SolScan.App** — WPF MVVM shell. `App.xaml.cs` is the single composition root - one
   `ServiceCollection` built once at startup (no scopes created afterward), same pattern RASTA uses.
   `MainWindow` binds to `NavigationViewModel.CurrentViewModel`, swapped via
@@ -1249,6 +1252,47 @@ actually affected), applied to all four hamburger `ToggleButton`s across both vi
 drawer (Process and Capture, each with an open button and a close button) for a consistent direction
 everywhere, not just the one instance reported.
 
+Also real: **the Basic/Advanced Images split is gone, and the virtual eclipse image landed.** The
+user decided v1's image set is done: anyone wanting JSolex's fuller catalogue (Doppler, redshift,
+active regions, Debug Options, custom ImageMath scripts, ...) still has the original SER file to hand
+JSol'Ex itself - no need for SolScan to keep growing toward parity with it, or to keep presenting its
+own smaller set as a "Basic" tier implying a missing "Advanced" one. `GeneratedImageKind`/
+`RequestedImages`' own doc comments, `ImageSelectionViewModel`, and `ImageSelectionView.xaml` (now one
+flat checklist, no "Basic Images"/"Advanced Images" `TextBlock` headers) were all updated accordingly;
+earlier CLAUDE.md entries above that used astro4j's own Basic/Advanced terminology to describe what
+wasn't ported *yet* are left as the historical record they are, not rewritten. Alongside that,
+`GeneratedImageKind.VirtualEclipse` - astro4j's "virtual eclipse"/coronagraph view - landed as a real,
+not placeholder, output: the solar disk itself is blanked out (`SolScan.Processing.Shg.DiskFill`,
+ported from `DiskFill.doFillWithGradient` - a 4x4-subpixel-sampled antialiased fill, not a hard per-
+pixel cutoff), then the surrounding region is neutralized (two rounds of an ellipse-aware
+`BackgroundNeutralizer.BlindNeutralize` - that method previously only ported astro4j's ellipse-*less*
+code path, since `DiskEdgeDetector`'s own first-fit was its only caller; now extended with an optional
+`Ellipse?` that switches the initial background estimate from the histogram-based
+`EstimateBackgroundLevel` to a new `ImageStatistics.EstimateBackground` - the plain off-disk mean,
+matching astro4j's own `AnalysisUtils.estimateBackground` - and restricts sampling to pixels outside
+it, matching astro4j's own `blindBackgroundNeutralization2` exactly) and arcsinh-stretched
+(`SolScan.Processing.Shg.Coronagraph`, direct port of `CoronagraphTask.doCall`), so faint prominences/
+streamers near the limb - normally buried by the disk's own far greater brightness - become visible
+the way they would during a real eclipse. `CoronagraphTask`'s own constructor `blackPoint` parameter
+is dropped - confirmed dead in astro4j itself (stored but never read by `doCall`), matching this
+project's established "confirmed dead code isn't faithfully reproduced" precedent. Its input is the
+plain `GeometryCorrected` image, not the contrast-enhanced `GeometryCorrectedProcessed`/`Colorized`
+one, so `ShgProcessor` produces it off the ellipse fit alone, independent of whether either of those
+was separately requested (mirroring astro4j's own `ProcessingWorkflow.produceCoronagraph`, which runs
+unconditionally off `WorkflowResults.GEOMETRY_CORRECTION`) - a small scaling helper
+(`ShgProcessor.ScaleToContainerRange`) was factored out of the existing contrast-enhancement code path
+so both it and the new coronagraph call site share the same native-ADC-to-16-bit-container rescale.
+Covered by a new `ProcessingLocationsTests` case (`VirtualEclipse` maps to the `Processed` directory,
+alongside a `Colorized` case that had been missing too) and a new `DiskGeometryCorrectorTests` case
+proving it's a real, separate transformation against the existing synthetic elliptical-disk fixture -
+requested alongside `GeometryCorrected` to prove the two differ, and asserting the blanked disk reads
+back as a sizeable block of exact-zero pixels (traced through the pipeline: `DiskFill` writes literal
+zeros, each neutralization pass' background subtraction clamps at zero rather than going negative,
+`ArcsinhStretchingStrategy` short-circuits `v==0` to `0` outright, and the final min/max renormalization
+maps the image's own minimum - already zero - back to zero) far outnumbering the un-enhanced
+`GeometryCorrected` image's own near-zero count. NOT YET VALIDATED against a real capture - same
+caveat as AutoStretch/CLAHE/Colorized before it.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
@@ -1511,16 +1555,20 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    Sixth slice (also real): the Colorized image - `SolScan.Processing.Color`'s `ColorCurve`/`RgbHsl`/
    `Colorize`, producing a real `GeneratedImageKind.Colorized` output (H-alpha's fixed colour curve, or
    a wavelength-approximated tint for every other named line) - see "Also real" above ("the Colorized
-   image") for the full writeup, including why this is the first kind ported from JSolex's *Advanced*
-   Images section rather than Basic Images.
-   Also still needed: porting `DeepLineIdentifier`/`SpectralLineCatalog` for the Process stage's own line
-   identification (including the *real* "calcium-line detection" - automatically identifying which line
-   is being observed, as opposed to the `Auto` contrast-mode's own trivial `SpectrumParams.Ray` check,
-   already real - see "Also real" above), and the rest of Advanced Images (Doppler, redshift, active
-   regions, ...)/Debug Options beyond Colorized. A results panel mirroring JSolex's two-part info view
-   (detected line + geometry tilt/xyRatio) is now real too - see the "Processing Results panel" entry
-   further down for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/`DetectedTiltDegrees`/
-   `DetectedXyRatio` are no longer only ever shown as a one-line status-text summary.
+   image") for the full writeup, including why this was the first kind ported from JSolex's own
+   *Advanced* Images section rather than Basic Images - a distinction SolScan itself no longer carries
+   (see below). Seventh slice (also real): the virtual eclipse image -
+   `SolScan.Processing.Shg.Coronagraph`/`DiskFill`, producing a real
+   `GeneratedImageKind.VirtualEclipse` coronagraph-style output - see the "Basic/Advanced Images split
+   is gone, and the virtual eclipse image landed" entry above for the full writeup. That same entry is
+   also where v1's image set was decided closed: JSolex's fuller catalogue (Doppler, redshift, active
+   regions, Debug Options, custom ImageMath scripts, `DeepLineIdentifier`/`SpectralLineCatalog`-driven
+   line identification, ...) is out of scope for SolScan by choice now, not "still needed" - anyone
+   wanting it has the original SER file to hand JSol'Ex itself. A results panel mirroring JSolex's
+   two-part info view (detected line + geometry tilt/xyRatio) is real too - see the "Processing Results
+   panel" entry further down for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/
+   `DetectedTiltDegrees`/`DetectedXyRatio` are no longer only ever shown as a one-line status-text
+   summary.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to

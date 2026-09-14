@@ -11,8 +11,9 @@ namespace SolScan.Processing.Shg;
 /// <see cref="IShgProcessor"/> orchestrating <see cref="FrameAverager"/> →
 /// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/> → (when
 /// <see cref="GeneratedImageKind.GeometryCorrected"/>, <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>,
-/// or <see cref="GeneratedImageKind.Colorized"/> is requested) <see cref="DiskGeometryCorrector"/> →
-/// (for the latter two) a <see cref="ContrastEnhancementMode"/>-selected stretch
+/// <see cref="GeneratedImageKind.Colorized"/>, or <see cref="GeneratedImageKind.VirtualEclipse"/> is
+/// requested) <see cref="DiskGeometryCorrector"/> → (for VirtualEclipse only) <see cref="Coronagraph"/>,
+/// or (for the middle two) a <see cref="ContrastEnhancementMode"/>-selected stretch
 /// (<see cref="AutoStretchStrategy"/>, <see cref="ClaheStrategy"/>, or <see cref="MultiScaleClaheStrategy"/> -
 /// see <see cref="ApplyContrastEnhancement"/>) → (for Colorized only) <see cref="ProduceColorizedImage"/>.
 /// Deliberately returns pure in-memory <see cref="ProcessedImage"/>/<see cref="ProcessedColorImage"/>
@@ -50,11 +51,16 @@ public sealed class ShgProcessor : IShgProcessor
         var wantsGeometryCorrected = requested.IsEnabled(GeneratedImageKind.GeometryCorrected);
         var wantsGeometryCorrectedProcessed = requested.IsEnabled(GeneratedImageKind.GeometryCorrectedProcessed);
         var wantsColorized = requested.IsEnabled(GeneratedImageKind.Colorized);
+        var wantsVirtualEclipse = requested.IsEnabled(GeneratedImageKind.VirtualEclipse);
         // GeometryCorrectedProcessed's input is the geometry-corrected image itself, so it needs the
         // same correction step run even when GeometryCorrected wasn't separately requested. Colorized's
         // own input is that same contrast-enhanced buffer (astro4j's ProcessingWorkflow computes it
         // whenever either GEOMETRY_CORRECTED_PROCESSED or COLORIZED is requested, for the same reason).
-        var needsGeometryCorrection = wantsGeometryCorrected || wantsGeometryCorrectedProcessed || wantsColorized;
+        // VirtualEclipse's own input is the plain (un-enhanced) geometry-corrected image - it only
+        // needs the ellipse fit itself, not contrast enhancement - matching astro4j's own
+        // ProcessingWorkflow.produceCoronagraph, which runs off WorkflowResults.GEOMETRY_CORRECTION
+        // independent of whether GEOMETRY_CORRECTED_PROCESSED/COLORIZED were requested.
+        var needsGeometryCorrection = wantsGeometryCorrected || wantsGeometryCorrectedProcessed || wantsColorized || wantsVirtualEclipse;
         var needsContrastEnhancement = wantsGeometryCorrectedProcessed || wantsColorized;
 
         var images = new List<ProcessedImage>();
@@ -108,6 +114,15 @@ public sealed class ShgProcessor : IShgProcessor
                     if (wantsGeometryCorrected)
                     {
                         images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
+                    }
+
+                    if (wantsVirtualEclipse)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report("Generating virtual eclipse...");
+                        var scaled = ScaleToContainerRange(geometryResult.Value.Pixels, maxPixelValue);
+                        var eclipse = Coronagraph.Produce(scaled, geometryResult.Value.CorrectedEllipse);
+                        images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.VirtualEclipse, eclipse));
                     }
 
                     if (needsContrastEnhancement)
@@ -204,22 +219,33 @@ public sealed class ShgProcessor : IShgProcessor
 
     /// <summary>Rescales the (native-ADC-range) geometry-corrected pixels up to the 16-bit "container"
     /// range every ported stretching algorithm here assumes (matching astro4j's own <c>ImageWrapper32</c>
-    /// convention, and this class's own <see cref="BuildProcessedImage"/> scaling) before running the
-    /// requested <see cref="ContrastEnhancementMode"/>. Rescaling pixel <em>values</em> doesn't affect
-    /// <paramref name="ellipse"/>'s spatial coordinates, so it's passed through unchanged.</summary>
-    private static float[,] ApplyContrastEnhancement(float[,] pixels, Ellipse ellipse, ProcessParams processParams, int nativeMaxPixelValue)
+    /// convention, and this class's own <see cref="BuildProcessedImage"/> scaling) - shared by
+    /// <see cref="ApplyContrastEnhancement"/> and <see cref="Coronagraph.Produce"/>'s own call site,
+    /// which needs the same rescale before running on the plain (un-enhanced) geometry-corrected
+    /// image.</summary>
+    private static float[,] ScaleToContainerRange(float[,] pixels, int nativeMaxPixelValue)
     {
         var height = pixels.GetLength(0);
         var width = pixels.GetLength(1);
         var scale = 65535.0 / nativeMaxPixelValue;
-        var working = new float[height, width];
+        var scaled = new float[height, width];
         for (var y = 0; y < height; y++)
         {
             for (var x = 0; x < width; x++)
             {
-                working[y, x] = (float)(pixels[y, x] * scale);
+                scaled[y, x] = (float)(pixels[y, x] * scale);
             }
         }
+
+        return scaled;
+    }
+
+    /// <summary>Rescales via <see cref="ScaleToContainerRange"/> before running the requested
+    /// <see cref="ContrastEnhancementMode"/>. Rescaling pixel <em>values</em> doesn't affect
+    /// <paramref name="ellipse"/>'s spatial coordinates, so it's passed through unchanged.</summary>
+    private static float[,] ApplyContrastEnhancement(float[,] pixels, Ellipse ellipse, ProcessParams processParams, int nativeMaxPixelValue)
+    {
+        var working = ScaleToContainerRange(pixels, nativeMaxPixelValue);
 
         // astro4j's own AUTO picks CLAHE for a calcium-line capture (K or H), AutoStretch otherwise -
         // not an image-analysis "detection" at all, just a check against whichever line SpectrumParams.Ray

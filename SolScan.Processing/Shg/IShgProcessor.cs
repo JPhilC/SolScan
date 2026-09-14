@@ -6,13 +6,12 @@ namespace SolScan.Processing.Shg;
 
 /// <summary>
 /// Processes a finished SER capture into output images, per <see cref="SolScan.Core.Processing.ProcessParams"/>.
-/// This implementation (<see cref="ShgProcessor"/>) produces real <see cref="GeneratedImageKind.Raw"/>/
-/// <see cref="GeneratedImageKind.Reconstruction"/>/<see cref="GeneratedImageKind.Continuum"/>/
-/// <see cref="GeneratedImageKind.GeometryCorrected"/>/<see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>/
-/// <see cref="GeneratedImageKind.Colorized"/> images - spectral-line-curvature detection, reconstruction,
-/// disk-edge ellipse fitting, geometry correction, contrast enhancement (every
-/// <see cref="ContrastEnhancementMode"/> - AutoStretch, CLAHE, and CLAHE2), and colorization (a fixed
-/// colour curve for H-alpha, a wavelength-approximated tint for every other named line) are all real.
+/// This implementation (<see cref="ShgProcessor"/>) produces every <see cref="GeneratedImageKind"/>
+/// value SolScan declares - spectral-line-curvature detection, reconstruction, disk-edge ellipse
+/// fitting, geometry correction, contrast enhancement (every <see cref="ContrastEnhancementMode"/> -
+/// AutoStretch, CLAHE, and CLAHE2), colorization (a fixed colour curve for H-alpha, a
+/// wavelength-approximated tint for every other named line), and the virtual-eclipse/coronagraph view
+/// (<see cref="GeneratedImageKind.VirtualEclipse"/>) are all real.
 /// </summary>
 public interface IShgProcessor
 {
