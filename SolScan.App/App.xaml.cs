@@ -16,6 +16,7 @@ using SolScan.Infrastructure.Capture;
 using SolScan.Infrastructure.Equipment;
 using SolScan.Infrastructure.Processing;
 using SolScan.Infrastructure.Telescope;
+using SolScan.Processing.Capture;
 using SolScan.Processing.Shg;
 using SolScan.Simulators;
 
@@ -134,6 +135,15 @@ public partial class App : Application
         services.AddTransient<HandControlViewModel>();
         services.AddTransient<HandControlWindow>();
         services.AddSingleton<Func<HandControlWindow>>(sp => sp.GetRequiredService<HandControlWindow>);
+
+        // Crops a full-frame .ser recording (one made before a hardware ROI was set up) down to a
+        // narrower, centred height - see ISerCropper's own doc comment. Transient like IShgProcessor
+        // above (stateless); the pop-out window itself follows the same
+        // fresh-instance-per-open/factory-delegate shape as HandControlWindow above.
+        services.AddTransient<ISerCropper, SerCropper>();
+        services.AddTransient<SerCropViewModel>();
+        services.AddTransient<SerCropWindow>();
+        services.AddSingleton<Func<SerCropWindow>>(sp => sp.GetRequiredService<SerCropWindow>);
 
         services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<NavigationViewModel>();

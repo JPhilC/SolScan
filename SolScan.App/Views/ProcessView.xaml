@@ -114,6 +114,14 @@
                             <Image Source="/Assets/Icons/CancelProcessing.png" Width="20" Height="20" Stretch="Uniform"/>
                         </Button>
 
+                        <!-- Opens the pop-out "Crop SER" window (see SerCropWindow.xaml) for old
+                             captures recorded without setting a hardware ROI first. -->
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding OpenSerCropCommand}"
+                                ToolTip="Crop a full-frame .ser recording down to a narrower height, centred vertically - for old captures recorded without setting an ROI first.">
+                            <Image Source="/Assets/Icons/CropVideo.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
+
                         <!-- Empty (no items) until an output folder actually has .png files in it - a
                              bare ComboBox collapses to its minimal size, so this stays unobtrusive
                              rather than needing extra visibility plumbing for the "nothing yet" case.

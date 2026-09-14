@@ -70,13 +70,17 @@
     <Resource Include="Assets\Icons\HandControlLeft.png" />
     <Resource Include="Assets\Icons\HandControlRight.png" />
     <Resource Include="Assets\Icons\HandControlStop.png" />
-    <!-- ProcessView.xaml's Browse/Process/Cancel button icons. -->
+    <!-- ProcessView.xaml's Browse/Process/Cancel button icons, plus its "Crop SER…" button (Crop
+         SER's own icon landed after that button first shipped as plain text - see ProcessView.xaml
+         for the switch to ToolbarIconButtonStyle). -->
     <None Remove="Assets\Icons\BrowseForFile.png" />
     <None Remove="Assets\Icons\ProcessRun.png" />
     <None Remove="Assets\Icons\CancelProcessing.png" />
+    <None Remove="Assets\Icons\CropVideo.png" />
     <Resource Include="Assets\Icons\BrowseForFile.png" />
     <Resource Include="Assets\Icons\ProcessRun.png" />
     <Resource Include="Assets\Icons\CancelProcessing.png" />
+    <Resource Include="Assets\Icons\CropVideo.png" />
   </ItemGroup>
 
   <ItemGroup>

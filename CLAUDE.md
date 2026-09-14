@@ -1293,6 +1293,40 @@ maps the image's own minimum - already zero - back to zero) far outnumbering the
 `GeometryCorrected` image's own near-zero count. NOT YET VALIDATED against a real capture - same
 caveat as AutoStretch/CLAHE/Colorized before it.
 
+Also real: a **"Crop SER" utility** for old full-frame captures - requested directly by the user
+after recording several real SHG scans without first setting up a hardware ROI (see the centred-ROI
+note above), leaving them at full sensor height with no way to re-capture. `SolScan.Processing.Capture`
+gained `ISerCropper`/`SerCropper` (same "resolve `ISerReader`/`ISerWriter` through a DI factory
+delegate, never reference SolScan.Infrastructure directly" shape as `ShgProcessor`'s own constructor):
+reads every frame of a source `.ser` file and re-writes a vertically centred slice of it - full
+original width and frame count unchanged, only the height narrowed - to a new file, leaving the
+original untouched. The kept height is specified as a percentage (0, 100] of the source height, not a
+raw pixel count, per the user's own framing of the request ("a fraction of the height"); centring
+rounds the kept-height calculation to the nearest row (`SerCropper.ComputeCroppedHeight`, shared
+between the actual crop and `SerCropViewModel`'s own live preview text so the two can never disagree)
+and floor-divides the remainder evenly above/below. A pop-out, modeless "Crop SER" window
+(`Views/SerCropWindow.xaml`/`ViewModels/SerCropViewModel.cs`) opens from a `CropVideo.png` icon button
+on the Process view's toolbar (`ToolbarIconButtonStyle`, same as its Browse/Process/Cancel siblings -
+this button briefly shipped as plain text before the icon asset landed) - same
+window-per-open/`Closed`-clears-the-reference shape as `CaptureViewModel.OpenHandControl`,
+and the same `Closing`-cancels-any-in-flight-work safety net as `HandControlWindow`'s own Closing
+handler, just cancelling a background crop instead of a live mount jog. Lets the user pick a source
+file (reads its header immediately - dimensions/bit depth/frame count - and suggests an output path
+alongside it with a `_cropped` suffix), type a height percentage (with a live "cropped height: Npx
+(rows X-Y of Z)" preview), confirm/browse the output path, then Crop with progress narration and
+Cancel support; a cropped/cancelled-partway file is deleted on cancellation or failure
+(`SerCropViewModel.TryDeletePartialOutput`, best-effort) so a failed run never leaves behind something
+that looks like a valid, if incomplete, crop. The source recording's `.equipment.json` sidecar (if
+any) is copied alongside the cropped output too (`SerCropViewModel.CopyEquipmentSidecarIfPresent`) -
+cropping doesn't change which SHG/telescope/camera/mount-pointing/camera-settings produced the
+recording, so Process's own file picker should still show the same equipment info for the cropped
+file as the original. Registered transient in `App.xaml.cs`, same "stateless, no reason to share an
+instance" reasoning as `IShgProcessor`. Covered by `SerCropperTests` - a centred crop verified by
+exact per-row byte values (not just dimensions), a Mono16 (2-bytes-per-pixel) case, invalid
+height-fraction rejection, and `ComputeCroppedHeight`'s own clamping at both ends of its range. NOT
+YET VALIDATED against a real full-frame capture - built and unit-tested against synthetic SER data
+only, same caveat every recent Processing addition above carries at this point.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also

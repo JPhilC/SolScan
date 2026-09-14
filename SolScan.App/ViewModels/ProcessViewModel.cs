@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using SolScan.App.ViewModels.Processing;
+using SolScan.App.Views;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Processing;
@@ -62,9 +63,11 @@ public partial class ProcessViewModel : ObservableObject
     private readonly IShgProcessor _shgProcessor;
     private readonly IProcessParamsStore _processParamsStore;
     private readonly IAppSettingsStore _appSettingsStore;
+    private readonly Func<SerCropWindow> _serCropWindowFactory;
     private readonly StatusBarViewModel _statusBar;
     private readonly Dispatcher _dispatcher;
     private CancellationTokenSource? _processingCts;
+    private SerCropWindow? _serCropWindow;
 
     // Debounces the auto-save triggered by ProcessParameters/ImageEnhancement/ImageSelection's own
     // PropertyChanged events - see this class's own doc comment for why.
@@ -158,6 +161,7 @@ public partial class ProcessViewModel : ObservableObject
         IShgProcessor shgProcessor,
         IProcessParamsStore processParamsStore,
         IAppSettingsStore appSettingsStore,
+        Func<SerCropWindow> serCropWindowFactory,
         StatusBarViewModel statusBarViewModel)
     {
         _serReaderFactory = serReaderFactory;
@@ -165,6 +169,7 @@ public partial class ProcessViewModel : ObservableObject
         _shgProcessor = shgProcessor;
         _processParamsStore = processParamsStore;
         _appSettingsStore = appSettingsStore;
+        _serCropWindowFactory = serCropWindowFactory;
         _statusBar = statusBarViewModel;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
@@ -272,6 +277,25 @@ public partial class ProcessViewModel : ObservableObject
 
         SelectedFilePath = dialog.FileName;
         LoadSelectedFile();
+    }
+
+    /// <summary>Opens the pop-out, modeless "Crop SER" window (see Views/SerCropWindow.xaml) - for
+    /// recordings made before a hardware ROI was set up, so their full-sensor-height frames can be
+    /// trimmed down to roughly what a proper ROI capture would have produced. Brings the existing
+    /// window to front instead of opening a second if one's already open - same reasoning as
+    /// CaptureViewModel.OpenHandControl's own doc comment.</summary>
+    [RelayCommand]
+    private void OpenSerCrop()
+    {
+        if (_serCropWindow is not null)
+        {
+            _serCropWindow.Activate();
+            return;
+        }
+
+        _serCropWindow = _serCropWindowFactory();
+        _serCropWindow.Closed += (_, _) => _serCropWindow = null;
+        _serCropWindow.Show();
     }
 
     private void LoadSelectedFile()
