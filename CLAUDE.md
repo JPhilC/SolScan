@@ -27,6 +27,21 @@ e.g. `DeepLineIdentifier`, `SolexVideoProcessor`) and items actually landed (`Sp
 `SpectrumParams`/`GeometryParams`/etc. from the Processing v1 work below, each also carrying its own
 per-file header comment) - keep both groups accurate as more phases land real code.
 
+`ADDITIONAL-PERMISSIONS.md` (2026-09-14, prompted by Cedric Champeau's reply to a courtesy email about
+SolScan - see below) additionally licenses all of SolScan's own code under Apache-2.0 too, at Phil
+Crompton's discretion as its copyright holder, *except* the Sunscan-derived (GPL-3.0) portions, which
+aren't his to relicense unilaterally. Not a change to SolScan's own overall license (still AGPL-3.0) -
+a standing additional permission on top of it, so fixes/extensions to the astro4j-derived pipeline (or
+anything else in SolScan without third-party GPL lineage) can flow back into JSol'Ex or any other
+Apache-2.0 project without asking case by case. Prompted directly: emailed Cedric, Guillaume Bertrand
+(sunscan-app/sunscan-backend, crediting the wider STAROS team), and this repo as a courtesy once the
+astro4j sync above turned up real prior art relevant to SolScan's own roadmap (see
+[[astro4j-sync-2026-09-14]] in memory) - Cedric replied pointing out AGPL-3.0 code can't flow back into
+his own Apache-2.0 project without relicensing, which is correct (copyleft-to-permissive is a one-way
+door; the ASF formally classifies AGPL as "Category X", banned from Apache projects). This file is the
+fix - scoped to exclude the GPL-3.0 Sunscan material (which really isn't Phil's to grant) and phrased
+as a standing permission for anyone relying on it, not just Cedric.
+
 It's early-stage scaffolding as of this writing — see "Phased build plan" below for what's actually
 implemented vs. still a placeholder. Don't assume a component is wired up just because a project or
 interface exists.
