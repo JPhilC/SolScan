@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A small standalone console project - the first of its kind in this solution. Two dev-only
+       commands (see Program.cs): "extract-atlas" (a one-off, reproducible extraction of the bundled
+       SolScan.Processing.Spectrum reference-window resource from a local BASS2000 atlasvi.dat file -
+       never run by end users, not part of any shipped release) and "annotate" (feeds a real full-frame
+       .ser capture through SpectralProfileExtractor/SpectralLineIdentifier and prints the result, for
+       validating the identifier against real data - see CLAUDE.md's spectral-line-identifier entry).
+       Not referenced by SolScan.Setup/SolScan.Bundle - this never ships in the installer. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>AnyCPU;x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
+    <ProjectReference Include="..\SolScan.Infrastructure\SolScan.Infrastructure.csproj" />
+    <ProjectReference Include="..\SolScan.Processing\SolScan.Processing.csproj" />
+  </ItemGroup>
+
+</Project>

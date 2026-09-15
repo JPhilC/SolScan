@@ -65,6 +65,24 @@ namespace SolScan.Core.Capture;
 /// Settings/Camera Settings/Histogram/Focus Aid/Reticule/Display Settings - Start/Stop Recording and
 /// the frame counts stay on the main view, not in the drawer) is open - same idea as
 /// <see cref="ProcessOptionsPanelExpanded"/>, just for Capture's own drawer.</param>
+/// <param name="ShowSpectralLineLabels">Whether the live overlay labelling the 12 named
+/// <see cref="Processing.SpectralRay"/> lines currently visible in the preview (see
+/// SolScan.Processing.Spectrum.SpectralOverlayAnalyzer, in the downstream Processing project this
+/// Core-level record can't reference directly) is drawn - on by default, unlike the Reticule overlays
+/// above: this one's specifically meant to aid someone still learning to find a line, so it should be
+/// visible without first discovering a settings toggle.</param>
+/// <param name="ShowSpectralColorBand">Whether the coloured gradient band showing what part of the
+/// visible spectrum the current view spans is drawn - same on-by-default rationale as
+/// <see cref="ShowSpectralLineLabels"/>, a separate toggle since the two are visually independent.</param>
+/// <param name="SpectralOverlayExpanded">Whether CaptureView.xaml's own "Spectral Overlay" Expander
+/// (the two toggles above, the fallback pixel size, and the "Load Test Image…" dev feature) is open -
+/// same "remembered across sessions" rationale as <see cref="CaptureSettingsExpanded"/>.</param>
+/// <param name="SpectralOverlayFallbackPixelSizeMicrons">Pixel size used for the live spectral overlay
+/// when no connected camera's own <see cref="SolScan.Core.Equipment.CameraProfile.PixelSizeMicrons"/> is known - the
+/// normal case being a loaded test image (see SolScan.App.Services.TestImageLoader), which isn't tied
+/// to any real camera at all, but also a graceful degrade if a connected camera's own SDK never
+/// reported a pixel size. Defaults to 2.0µm, the same ASI678MM ballpark <c>SolScan.Tools</c>' own
+/// <c>annotate</c> command falls back to.</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -87,7 +105,11 @@ public sealed record AppSettings(
     bool ProcessParametersExpanded = true,
     bool ProcessImageEnhancementExpanded = true,
     bool ProcessImageSelectionExpanded = true,
-    bool CaptureOptionsPanelExpanded = true);
+    bool CaptureOptionsPanelExpanded = true,
+    bool ShowSpectralLineLabels = true,
+    bool ShowSpectralColorBand = true,
+    bool SpectralOverlayExpanded = true,
+    double SpectralOverlayFallbackPixelSizeMicrons = 2.0);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

@@ -16,6 +16,7 @@
                      HandControlWindow.xaml. -->
                 <ResourceDictionary Source="/Themes/IconButtonStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         </ResourceDictionary>
     </UserControl.Resources>
     <Grid Margin="16">
@@ -246,6 +247,38 @@
                                 </StackPanel>
                             </Expander>
 
+                            <!-- Live line-identification overlay (labels + colour gradient band - see
+                                 SolScan.Processing.Spectrum.SpectralOverlayAnalyzer/CaptureView.xaml's own
+                                 SpectralLabelOverlay/gradient Border) - aids finding a particular
+                                 Fraunhofer line while turning the grating. "Load Test Image…" is a dev/
+                                 test feature: feeds a PNG/TIFF file through the same live-preview pipeline
+                                 a real camera frame would go through, so the overlay can be tried without
+                                 a camera or telescope connected at all - see CaptureViewModel.LoadTestImage. -->
+                            <Expander Header="Spectral Overlay" IsExpanded="{Binding IsSpectralOverlayExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                                <StackPanel Margin="0,8,0,0">
+                                    <CheckBox Content="Line Labels" IsChecked="{Binding ShowSpectralLineLabels}" Margin="0,0,0,8"
+                                              ToolTip="Show a label over each of the 12 named spectral lines currently visible in the preview, hovering closer to full opacity the more confident the identification is."/>
+                                    <CheckBox Content="Colour Band" IsChecked="{Binding ShowSpectralColorBand}" Margin="0,0,0,8"
+                                              ToolTip="Show a coloured gradient band on the left edge of the preview, indicating which part of the visible spectrum the current view spans."/>
+
+                                    <TextBlock Text="Fallback pixel size (µm)" Margin="0,8,0,4"
+                                               ToolTip="Used for the overlay above whenever no connected camera's own pixel size is known - the normal case for a loaded test image below, since it isn't tied to any real camera."/>
+                                    <TextBox Text="{Binding SpectralOverlayFallbackPixelSizeMicrons, StringFormat=F2}" Margin="0,0,0,8"/>
+
+                                    <Button Content="Load Test Image…" Command="{Binding LoadTestImageCommand}" HorizontalAlignment="Left"
+                                            ToolTip="Load a PNG or TIFF file into the preview to see what the spectral overlay looks like on it - a dev/test feature, no camera or telescope needed."/>
+                                    <TextBlock Text="Loads a still image into the preview above to test the line labels/colour band without a camera connected."
+                                               Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                                    <!-- Diagnostics - see CaptureViewModel.SpectralOverlayDiagnosticsText's own
+                                         doc comment: real numbers behind the overlay, to check an unexpected
+                                         label position/colour against rather than guessing from the preview.
+                                         Blank (nothing rendered) until the first successful overlay pass. -->
+                                    <TextBlock Text="{Binding SpectralOverlayDiagnosticsText}"
+                                               FontFamily="Consolas" FontSize="10" Opacity="0.85" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                </StackPanel>
+                            </Expander>
+
                             <Expander Header="Display Settings" IsExpanded="{Binding IsDisplaySettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                                 <StackPanel Margin="0,8,0,0">
                                     <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only,
@@ -412,13 +445,55 @@
                              the middle rather than pinned to a corner; once it's bigger than the viewport,
                              PreviewScrollViewer's own scrollbars appear for panning regardless of alignment. -->
                         <ScrollViewer x:Name="PreviewScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                            <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
-                                 (see FramePreview's class doc comment) and then magnified back up, so a
-                                 smooth scale looks right where NearestNeighbor would look blocky. -->
-                            <Image x:Name="PreviewImage" Source="{Binding PreviewBitmap}" Stretch="Fill"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <!-- A Grid, not just the Image directly, so SpectralLabelOverlay (below) can
+                                 sit in the same cell and automatically end up exactly the same rendered
+                                 size as PreviewImage - both scroll and zoom together with no extra
+                                 plumbing, unlike ReticuleOverlay's own deliberately-fixed-viewport
+                                 positioning further down. -->
+                            <Grid>
+                                <!-- HighQuality, not NearestNeighbor: PreviewBitmap is deliberately downsampled
+                                     (see FramePreview's class doc comment) and then magnified back up, so a
+                                     smooth scale looks right where NearestNeighbor would look blocky. -->
+                                <Image x:Name="PreviewImage" Source="{Binding PreviewBitmap}" Stretch="Fill"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+
+                                <!-- Spectral-line label overlay - see CaptureView.xaml.cs's
+                                     UpdateSpectralLabelOverlay. Explicitly bound to PreviewImage's own
+                                     Width/Height/alignment - relying on "same Grid cell, so it'll end up
+                                     the same size automatically" turned out not to hold in practice
+                                     (confirmed against a real loaded test image: with PreviewImage
+                                     centred and smaller than the ScrollViewer's viewport - e.g. Auto zoom
+                                     on a smaller source image - the Canvas ended up sized/positioned
+                                     against the wider Grid cell instead, so labels landed nowhere near
+                                     the actual image content). Binding directly removes the ambiguity
+                                     regardless of the exact Grid/ScrollViewer layout behaviour. Mapping a
+                                     label's CaptureViewModel.SpectralLineLabel.PreviewBitmapY onto an
+                                     actual Canvas.Top only needs this Canvas's own ActualHeight vs.
+                                     PreviewBitmap.PixelHeight - see MapPreviewBitmapYToControlY. -->
+                                <Canvas x:Name="SpectralLabelOverlay" IsHitTestVisible="False" ClipToBounds="True"
+                                        Width="{Binding ElementName=PreviewImage, Path=Width}"
+                                        Height="{Binding ElementName=PreviewImage, Path=Height}"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        SizeChanged="SpectralLabelOverlay_SizeChanged"/>
+                            </Grid>
                         </ScrollViewer>
+                    </Border>
+
+                    <!-- Colour gradient band: a fixed reference strip docked to the preview's left edge -
+                         deliberately NOT inside the scrolled/zoomed Grid above (same "fixed against the
+                         viewport" positioning as ReticuleOverlay below), since it's an at-a-glance
+                         reference to what part of the spectrum is currently in view, not something meant
+                         to track actual image content pixel-for-pixel. GradientStops are relative (0-1)
+                         offsets (see CaptureViewModel.BuildSpectralGradientStops), so the brush scales to
+                         whatever height this Border actually renders at with no extra plumbing needed. -->
+                    <Border Width="18" HorizontalAlignment="Left" Margin="4"
+                            Visibility="{Binding ShowSpectralColorBand, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            BorderBrush="#FF3F3F3F" BorderThickness="1"
+                            ToolTip="Colour of the currently visible part of the spectrum, top to bottom.">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1" GradientStops="{Binding SpectralGradientStops}"/>
+                        </Border.Background>
                     </Border>
 
                     <!-- Reticule overlay: a sibling of (drawn on top of, not inside) PreviewScrollViewer,

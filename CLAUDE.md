@@ -1327,6 +1327,269 @@ height-fraction rejection, and `ComputeCroppedHeight`'s own clamping at both end
 YET VALIDATED against a real full-frame capture - built and unit-tested against synthetic SER data
 only, same caveat every recent Processing addition above carries at this point.
 
+Also real: a first slice of Phase 4's still-outstanding **live line-identification overlay** -
+`SolScan.Processing.Spectrum`'s `SpectralProfileExtractor`/`SpectralLineIdentifier`, identifying which
+of the 12 named `SpectralRay` lines an observed profile is centred on. Prompted by wanting to develop
+and validate that overlay against the user's own real full-frame `.ser` captures (the same files the
+Crop SER utility above exists for) rather than live hardware - which led first to investigating
+astro4j's `DeepLineIdentifier`/`SpectralWindowIdentifier` as a porting source, then, at the user's own
+request ("nice not to just plagiarise Cedric's code"), to designing an original, deliberately leaner
+algorithm instead of a faithful port. Planned via `EnterPlanMode` given the size (new Core/Processing
+types, a new bundled reference dataset with its own licensing, a new console project). `DeepLineIdentifier`
+and `SpectralLineIdentifier` share the same basic idea - matched-filter correlation against a reference
+solar atlas, confidence-gated - because that idea is standard spectroscopy technique (radial-velocity
+cross-correlation spectroscopy, arc-lamp wavelength calibration), not really astro4j's own invention;
+SolScan's own version is leaner because its scope is narrower (only 12 named lines matter, not an
+arbitrary point in 3900-6800Å), so it skips `DeepLineIdentifier`'s own "curate the deepest N% of the
+atlas as candidate hypotheses" step (every named line is just tested directly) and its six fixed
+instrumental-broadening hypotheses (deferred - a single data-driven blur estimate is enough for v1);
+telluric correction is deferred the same way. See `SpectralLineIdentifier`'s own doc comment for the
+full reasoning.
+
+`SolScan.Core.Processing.SpectralDispersion` (Å-per-pixel from a `SpectrographProfile`'s own optics)
+is new too, and independently re-derived from the diffraction grating equation rather than ported from
+astro4j's `SpectrumAnalyzer.computeSpectralDispersion` - standard grating-spectrometer physics
+published well beyond astro4j itself (e.g. in Christian Buil's own Sol'Ex documentation), so re-deriving
+it costs little and keeps the "original design, not a port" line real for this piece too. Cross-checked
+(not copied) against astro4j's own published formula by working the algebra through for order 1 - the
+two agree exactly, the expected result for two independent derivations of the same physics. Guards
+against wavelength/instrument combinations with no real diffraction solution (`asin`'s domain), rather
+than silently returning `NaN`. This is also the dispersion calculation the still-outstanding exposure
+calculator needs (CLAUDE.md's own astro4j/`ExposureCalculator` note already flagged these as one
+calculation to share) - landed here first, reusable once that calculator's own turn comes.
+
+`SpectralProfileExtractor` turns the same `float[,]` `FrameAverager` already produces and the
+`QuadraticPolynomial` `SpectralLineCurvatureDetector` already fits (both real, already validated
+against a real capture, reused as-is) into a 1D intensity profile indexed by pixel-shift from the
+fitted line's own centre - new, original code, a cousin of `DiskReconstructor`'s own row-extraction
+but built for a correlation profile, not image reconstruction (no 5-tap anti-aliasing - see its own
+test's note on why a plain 2-tap linear interpolation has real, expected quantization error against a
+narrow synthetic test dip, without that mattering for real spectral profiles). `SpectralLineIdentifier`
+correlates that profile against a small bundled reference dataset - one `ReferenceWindow` per named
+line (±8Å around its catalog wavelength, at 0.01Å resolution, matching astro4j's own atlas resolution -
+a reasonable choice since real SHG dispersion, tens of mÅ/pixel, resolves several reference samples per
+observed pixel) - via a plain normalized (Pearson) cross-correlation with a small ±3px lag search to
+absorb curvature-fit slop, requiring the winner to clear both an absolute score threshold and a margin
+over the runner-up before being reported (both starting values - `MinScoreThreshold`/
+`MinMarginOverRunnerUp` - not yet tuned against real data). "No confident match" is a valid, expected
+answer, not a failure mode.
+
+The bundled reference dataset (`SolScan.Processing/Spectrum/Resources/reference-windows.bin`, ~38KB -
+a small derived excerpt, not the 14MB source atlas) is itself real, not a placeholder: extracted from
+the user's own local BASS2000 `atlasvi.dat` checkout (`C:\Source\Repos\JPhilC\astro4j\jsolex-core\src\bass2000\atlasvi.dat`)
+by a new, independently-written reader (`SolScan.Tools/AtlasExtractor.cs`) for BASS2000's own published
+raw layout - understood by reading astro4j's own converter once, then confirmed directly against the
+real file's actual bytes (8 header lines; each data line's first token is an integer Å wavelength
+incrementing by exactly 1 per line, last token a fixed 2000-character digit blob = 500 four-digit
+intensity samples spaced 0.002Å apart) rather than trusted from the Java source alone - "how to read a
+public file's own fixed layout" isn't the algorithmic design worth keeping independent, unlike the
+identification algorithm itself. `NOTICE` gained a new top-level "Third-party reference data" section
+for this (CC-BY-SA-NC, attribution, non-commercial) - a real licensing wrinkle worth being explicit
+about, mirrored into a new `Resources/README.md` (same per-resource provenance-documentation precedent
+as `SolScan.External`'s own vendor READMEs) - and lost its stale claim that `DeepLineIdentifier` itself
+is still on the astro4j-porting roadmap, since this work deliberately isn't that.
+
+`SolScan.Tools` is a new project - the first standalone console tool in this solution, confirmed
+genuinely novel (no prior dev-utility precedent existed anywhere in the repo before this). Two
+commands, neither shipped to end users (not referenced by `SolScan.Setup`/`SolScan.Bundle`):
+`extract-atlas` (above, a one-off/reproducible regenerate-the-bundled-resource command) and `annotate`
+(`dotnet run --project SolScan.Tools -- annotate <full-frame.ser> [--expected <RayLabel>]`) - averages
+a real recording (`SerReader`/`FrameAverager`, already real), extracts a profile, runs
+`SpectralLineIdentifier`, and prints the winning line plus every candidate's score to the console, for
+validating the identifier against the user's own real captures (reading equipment info from the file's
+`.equipment.json` sidecar via the existing `ICaptureMetadataStore` where present, `--pixel-size`/
+`--binning` as manual overrides otherwise) - text output only for v1, no graphical overlay, matching
+the "leanest thing that validates the pipeline first" approach the whole feature takes.
+
+Covered by `SpectralDispersionTests` (a hand-worked H-alpha/Sol'Ex example, positivity across every
+named ray, linear scaling with pixel size/binning, and a real "no valid diffraction solution" guard
+case), `SpectralProfileExtractorTests` (a known Gaussian dip recovered at the right shift, a curved
+line correctly tracked rather than assuming a fixed row, out-of-frame shifts reported as no-value
+rather than clamped, and the extractor's own input validation), and `SpectralLineIdentifierTests` (two
+deliberately distinctive synthetic candidate shapes correctly disambiguated with a real confidence
+margin - single symmetric Gaussians were tried first and found to correlate too well against each other
+regardless of width, a genuine finding about the algorithm's own limits with under-distinctive test
+shapes, not just a test-construction detail - a flat/noisy profile correctly reported as no confident
+match, and, most importantly, a real regression test matching a profile sampled from the *actual*
+bundled H-alpha window against the real embedded resource end-to-end). **Now validated against two of
+the user's own real full-frame captures** via `annotate` (both real ASI678MM recordings, full
+3840x2160 sensor frames): the first, an isolated H-alpha line, scored 0.901 vs. a 0.753 runner-up
+(margin 0.148) - a clean win that nonetheless missed the original `MinMarginOverRunnerUp` (0.15) by
+0.002, so that constant was lowered to 0.10 (`MinScoreThreshold`, 0.6, was untouched - nothing in
+either file implicated it). The second file's best guess (Sodium D1, score only 0.449 - nowhere near
+either threshold) turned out, once the user overlaid JSol'Ex's own Spectrum Browser on the paused live
+video to check, to be centred in the gap between the Na D1/D2 doublet, not a single isolated line -
+correctly reported as no confident match either way, and a genuine, now-documented limitation (see
+`SpectralLineIdentifier`'s own doc comment update): each candidate is scored assuming it's the *only*
+line near the profile's centre, so two real lines within the same ±8Å reference window dilute each
+other's own correlation. `SpectralLineIdentifier.cs`'s `MinMarginOverRunnerUp` doc comment records this
+whole finding in full. Still only two real data points behind the current threshold values - worth
+more real-file validation before treating them as settled.
+
+Also real: the actual **live Capture-view spectral overlay** - line labels hovering over the 12 named
+lines currently visible in the live preview, rolling in/out as the grating is turned, plus a coloured
+gradient band on the preview's left edge - the live piece the offline identification core above was
+always meant to feed into. Planned via `EnterPlanMode`; one design question - what to show when the
+identifier can't confidently lock onto a single line - was put to the user directly rather than assumed:
+confirmed to show the current best guess dimmed (not hidden), sharpening to full opacity on a confident
+lock, since a novice searching for a line needs help most exactly while still searching, and a dimmed
+possibly-wrong guess is more useful than nothing.
+
+`SolScan.Core.Processing.SpectralColor` is new - `SpectralRay.ToRgb`/`ToSimpleRgb`'s wavelength-band
+approximation, generalised from one ray's own fixed wavelength into a reusable `ToRgb(double)`/
+`ToSimpleRgb(double)` pair callable at any wavelength (`SpectralRay`'s own two methods now just
+delegate to it - behaviour-identical, confirmed via a new `SpectralColorTests` case asserting byte-for-
+byte equality across all 12 named rays) - what the gradient band samples continuously across the
+visible range, since the 12 named rays alone aren't enough coverage for a continuous strip.
+`SolScan.Core.Camera.FramePreview` gained a public `ComputeDownsampleScale(frameWidth, frameHeight,
+maxDimension)`, extracted from its own previously-private `ComputeDownsampleGrid` (which now calls it
+internally rather than duplicating the math) - the first missing link in mapping a spectral line's raw-
+frame row onto anything the live preview UI can use.
+
+`SolScan.Processing.Spectrum.SpectralOverlayAnalyzer` (new, static) is the live single-frame
+orchestrator - the live-preview counterpart to `SolScan.Tools`' own `annotate` command, chaining the
+same already-real pieces (`SpectralLineCurvatureDetector` → `SpectralProfileExtractor` →
+`SpectralLineIdentifier`) against **one frame at a time** rather than a whole file's own
+`FrameAverager`-cleaned average, since live use can't wait for a whole recording - noisier than every
+prior validation's data, a real, explicitly acknowledged trade-off. Takes the winning (best-guess, not
+necessarily confident) candidate as the anchor at pixel-shift 0, computes dispersion at its own
+wavelength, then projects every other one of the 12 named rays onto a pixel-shift via
+`(ray.WavelengthAngstroms - anchor.WavelengthAngstroms) / dispersion`, keeping only the ones that land
+within the frame's own sampled range - returning each visible line's position both as a pixel-shift and
+already resolved to a raw-frame row (`VisibleSpectralLine.RowInFrame`, via the fitted curvature
+polynomial evaluated at the frame's own horizontal centre - one representative row per line, not one
+per column, since a live overlay places one label per line). Pure, no WPF dependency - covered by
+`SpectralOverlayAnalyzerTests` against a synthetic single frame (packed into a real `CameraFrame`'s
+byte layout, exercising `FrameConversion.ToFloatArray` too, not just the pieces downstream of it).
+
+`CaptureViewModel` gained a live-resolved `SpectrographProfile?` field (`_connectedInstrument`,
+resolved via a new shared `ResolveSpectrographProfile` helper - refactored out of `WriteCaptureMetadata`,
+which now calls it too rather than duplicating the same `AppSettings.SelectedEquipmentSetupId` →
+`IEquipmentLibrary` lookup chain) - previously this lookup only ever ran once, at recording start, never
+kept live for the preview loop to use. Inside `ProcessPreviewFrame` (the same already-throttled,
+already-offloaded-to-the-thread-pool step `FocusAnalyzer.MeasureEdgeSteepness` already established as
+the precedent for non-trivial full-resolution per-frame analysis - see the collimator-focus-aid entry
+above), the spectral overlay runs on its *own*, slower cadence (`SpectralOverlayUpdateInterval`, ~400ms -
+a person turning a grating by hand doesn't need 20fps responsiveness, and this is real work given the
+real 3840x2160 frame size confirmed on the user's own hardware) rather than every throttled preview tick,
+gated by a plain (not `Interlocked`) `_lastSpectralOverlayUtc` field - safe without extra locking since
+`_previewProcessingInFlight`'s existing single-flight guarantee already ensures at most one
+`ProcessPreviewFrame` call is ever running at once. Two new persisted toggles,
+`ShowSpectralLineLabels`/`ShowSpectralColorBand`, follow the exact same `AppSettings` field →
+`[ObservableProperty]` + constructor load → `partial void OnXChanged` → `PersistAppSetting` → bound
+control shape `ShowCrosshairReticule` already established - both default **on** (unlike every Reticule
+toggle, which defaults off) since the target audience - someone still learning to find a line - benefits
+from seeing this without first discovering a settings toggle. `BuildSpectralLineLabels`/
+`BuildSpectralGradientStops` (new private helpers) run on the same background thread as the rest of
+`ProcessPreviewFrame`'s work; the gradient stops are built as a real WPF `GradientStopCollection` there
+too, but explicitly `.Freeze()`d before being handed back to the UI thread, since an unfrozen
+`Freezable` is thread-affine to whichever thread created it and would otherwise throw once the UI
+thread (which didn't create it) tried to use it.
+
+`CaptureView.xaml` gained a `Canvas` (`SpectralLabelOverlay`) for the line labels - but unlike
+`ReticuleOverlay` (deliberately fixed against the viewport, ignoring zoom/pan), this one sits *inside*
+the same `ScrollViewer` as `PreviewImage`, as a sibling in a shared `Grid` cell, so it automatically
+renders at the exact same size and scrolls/zooms together with the actual image content with no extra
+plumbing - a label only needs `SpectralLabelOverlay.ActualHeight / PreviewBitmap.PixelHeight` (computed
+in `CaptureView.xaml.cs`'s new `MapPreviewBitmapYToControlY`) to convert its already-downsampled
+`SpectralLineLabel.PreviewBitmapY` into an actual on-screen row. The colour gradient band, by contrast,
+*is* fixed against the viewport like the Reticule (a narrow `Border` docked to the left edge, outside
+the scrolled `Grid`) - it's a reference strip, not something meant to track image content pixel-for-
+pixel - filled by a `LinearGradientBrush` whose `GradientStops` binds directly to
+`CaptureViewModel.SpectralGradientStops`; since those stops use relative (0-1) offsets, the brush scales
+to whatever height the `Border` renders at with no extra code needed. Labels themselves are persistent
+`TextBlock`s keyed by `SpectralRay` (`CaptureView.xaml.cs`'s new `_spectralLabelElements` dictionary),
+kept across updates rather than recreated, so a position/opacity change can be animated
+(`DoubleAnimation` on `Canvas.Top`/`Opacity` - **this app's first use of WPF animation**, confirmed no
+existing `Storyboard`/`DoubleAnimation` precedent anywhere before this) instead of flickering; a label no
+longer in the current visible set fades out and is removed only once the fade completes, giving the
+"roll in/out" effect asked for. `IsConfident` (whether a line is the identifier's own
+`IdentifiedRay`, not just its best guess) drives full-opacity vs. a dimmed 0.45, matching the confirmed
+UX decision above. Positioned along the overlay's right edge (`Canvas.Right`) with a fixed upward offset
+so the label hovers above its target row rather than centring on it, per the feature's own "hovering
+above" framing - no dashed connector line back to the exact row (unlike JSol'Ex's own Spectrum Browser,
+which the user's own screenshot showed using one) - a real, deliberate v1 simplification, not an
+oversight; worth adding later if a plain label position turns out not to be clear enough on its own.
+
+Also real: a **"Load Test Image…" dev feature** (Capture view's new "Spectral Overlay" drawer section) -
+loads a PNG/TIFF file and feeds it through the exact same pipeline a live camera frame would go through
+(`ProcessPreviewFrame`: histogram, contrast stretch, focus aid, and the spectral overlay itself), so the
+overlay can be tried and tuned with zero hardware connected - requested directly once the user started
+trying the overlay live and ran into exactly the kind of coordinate/positioning bugs below that are far
+faster to iterate on against a static file than a live camera feed. `SolScan.App.Services.TestImageLoader`
+does the actual loading (WPF's `PngBitmapDecoder`/`TiffBitmapDecoder` → `FormatConvertedBitmap` to
+Gray16 - same approach `ProcessViewModel`'s own PNG preview loader already uses, generalised to an
+arbitrary source file/format rather than only SolScan's own previously-saved output). Surfaced a real
+gap while wiring it in: the spectral overlay previously only worked once a real camera was connected
+(needed its own resolved `CameraProfile.PixelSizeMicrons`), which a loaded test image has no equivalent
+of. Fixed properly rather than special-cased: `_connectedInstrument` (the resolved SHG) is now resolved
+in the constructor too, not just at camera connect - it was only ever an Equipment Setup concept, never
+actually dependent on a camera being connected, so tying it to camera-connect was an unnecessary
+shortcut from when the live overlay first landed - and a new `AppSettings.SpectralOverlayFallbackPixelSizeMicrons`
+(default 2.0µm, editable, persisted, same 4-step pattern as every other Capture toggle) is used whenever
+no connected camera's own pixel size is known, the normal case for a test image but also a graceful
+degrade if a connected camera's SDK never reports one.
+
+**Two real coordinate-mapping bugs were found and fixed** using this new feature, both confirmed against
+the user's own real loaded test images before and after:
+1. `SpectralLabelOverlay` (the label `Canvas`) was assumed to automatically end up exactly the same size
+   as `PreviewImage` since they shared one `Grid` cell - true in general, but not once `PreviewImage` is
+   centred and *smaller* than the ScrollViewer's viewport (e.g. Auto zoom on a smaller source image, the
+   user's own real case), where the Canvas ended up sized/positioned against the wider `Grid` cell
+   instead of the actual displayed image bounds. Fixed by explicitly binding `SpectralLabelOverlay`'s
+   `Width`/`Height`/alignment to `PreviewImage`'s own, removing the assumption entirely.
+2. A genuine layout-timing race: setting `PreviewImage.Width`/`Height` (in `UpdateImageSize`) only
+   *schedules* a WPF layout pass, it doesn't run one synchronously - so `UpdateSpectralLabelOverlay`,
+   which can run immediately afterward in the same property-changed cascade (a new `PreviewBitmap`
+   triggers both), was reading `SpectralLabelOverlay.ActualHeight` before that pending layout had
+   actually happened, using the *previous* frame's size. Fixed with an explicit `SpectralLabelOverlay.UpdateLayout()`
+   call before reading `ActualHeight`, forcing the pending pass to resolve first.
+
+A new `CaptureViewModel.SpectralOverlayDiagnosticsText` (shown in the same drawer section, monospace) was
+what actually diagnosed both of these - real numbers (best-guess ray/score/confidence, the curvature-
+detected centre row, dispersion, visible-line count) each time the overlay runs, same "check real
+numbers instead of guessing from a screenshot" approach that worked for tuning `SpectralLineIdentifier`'s
+own thresholds earlier. It's what showed the identifier *was* correctly re-analysing each loaded image
+(different best-guess ray, different score, different centre row per file - ruling out a "stuck on stale
+data" theory) rather than a genuine bug, and what explained an otherwise-confusing observation (the same
+four named lines - Helium D3/Iron Fe I/Sodium D2/Sodium D1 - kept appearing as "visible" regardless of
+which one won as anchor): confirmed by hand-checking the catalog, those four real lines sit within ~20Å
+of each other, comfortably inside the wide (±51Å) search window the user's own test images' dispersion/
+frame-height happened to produce - correct behaviour, not a bug, once the actual numbers were checked
+rather than assumed. `Math.Max(0, ...)` also now clamps a label's target `Canvas.Top` to never go
+negative - a line detected close to the frame's own top edge has no room above it to hover into anyway,
+and `ClipToBounds="True"` would otherwise just cut the label off, which looks identical to "pinned to the
+top" from the earlier bugs even once those were fixed.
+
+**Definitively verified**, not just plausible: a purpose-built clean test image (a single smooth Gaussian
+dip, no curvature, at a precisely known row - 300 of 1200 - generated via the same reliable WPF
+`PngBitmapEncoder`/`Gray16` path this project already established over `System.Drawing`'s own unreliable
+16-bit save for exactly this reason) came back with `centreRow=300.0/1200` - an *exact* match - and the
+label visibly sitting right on the line in the running app. The user's own earlier grid-pattern test
+images (multiple lines, no clean single dip) were the wrong tool for this specific check, not evidence of
+a remaining bug - confirmed by process of elimination once a properly-controlled test image ruled the
+coordinate math in.
+
+Also settled directly with the user: the colour gradient band's near-solid appearance on any single real
+capture window is **correct, physically expected behaviour, not a bug** - real SHG dispersion means any
+realistic window only spans a few Å to a few tens of Å, and common lines like H-alpha sit deep inside a
+~135nm-wide band of `SpectralColor`'s wavelength-to-colour approximation where it returns a genuinely
+constant colour (that function approximates "which broad region of the visible spectrum", not fine
+sub-nm variation). Asked directly whether to keep it true-to-life or exaggerate/stretch the mapping into
+an artistic (not physically accurate) always-visible gradient instead - the user chose to keep it
+true-to-life, so no change was made; a near-solid band is the expected, correct result for most real
+capture windows, not something to "fix".
+
+Still genuinely outstanding: real camera/telescope hardware validation - everything above is confirmed
+against loaded still images (synthetic and real-ish TIFF/PNG test files), not a live streaming camera.
+Two real, explicitly acknowledged gaps going into that first live-hardware try: single-frame curvature
+detection is noisier than every prior validation's `FrameAverager`-cleaned data (live use can't average
+across a whole recording the way offline validation could), and the ~400ms overlay cadence / 250ms label
+animation duration / 0.45 dimmed-opacity are all starting values, not measured/tuned ones - expect real-
+hardware behaviour to drive further changes here the same way it already has for every other live-
+hardware feature in this project (the collimator-focus-aid's own four-revision history is the clearest
+precedent for this).
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
@@ -1540,20 +1803,23 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
      disk edges mean better collimator alignment) - **done**, see the "Also real" note above
      (`FocusAnalyzer`/CaptureView.xaml's "Focus Aid" panel)
    - a live line-identification overlay for the wide view, so labeled Fraunhofer lines scroll into
-     place as the diffraction grating is rotated. Design basis is now astro4j's own
-     `SpectralWindowIdentifier`/`WavelengthSolution`/`TelluricTransmission` (see the astro4j entry
-     above) - a purpose-built live/narrow-window identifier astro4j shipped after this bullet was
-     first written, superseding the original plan of assembling `SpectrumBrowser`'s rendering with
-     `DeepLineIdentifier`'s confidence-gated correlation by hand; still needs its own reference
-     solar-flux-plus-telluric atlas and dispersion calibration for the Sol'ex + ASI678MM combination,
-     not Sunscan's atlas/constants, and a choice between porting those astro4j classes natively or
-     driving JSolex's own new `/api/spectrum/identify` server endpoint instead (see that entry for the
-     trade-off - deliberately not decided yet). Once this exists, it should
-     also be able to *drive* `SpectrumParams.Ray` (Phase 6, the Process view's Process Parameters panel) rather than
-     that staying a manual-only pick - whichever labeled line sits nearest the ROI's vertical centre
-     is the one actually being studied, so the overlay could set it automatically instead of asking
-     the user to also tell SolScan what it just showed them - not yet wired, noted for when the
-     overlay itself is built
+     place as the diffraction grating is rotated - **done**, see the "Also real" entries above
+     (offline identification core, then the live Capture-view overlay itself: labels + colour
+     gradient band). The astro4j-native-port-vs-drive-JSolex's-server trade-off this bullet used to
+     carry as undecided settled in favour of a native implementation - needs to work fully offline,
+     ruling out any runtime dependency on a separate JSolex process - and, differently than first
+     expected, as a deliberately independent, leaner design rather than a port of astro4j's own
+     `SpectralWindowIdentifier`/`WavelengthSolution`/`TelluricTransmission` (at the user's own
+     request, "nice not to just plagiarise Cedric's code" - see `SpectralLineIdentifier`'s own doc
+     comment for the full reasoning). Real, deliberately deferred gaps, per `SpectralLineIdentifier`'s
+     own scope: no tracking/confidence-building across successive frames the way astro4j's own
+     `SpectralWindowIdentifier` does (this version re-scores fresh each throttled tick), no telluric
+     correction, no multiple instrumental-broadening hypotheses - add only if real validation shows
+     they're actually needed. `SpectrumParams.Ray` still isn't auto-driven by the overlay (Phase 6,
+     the Process view's Process Parameters panel) - whichever labeled line sits nearest the ROI's
+     vertical centre is the one actually being studied, so the overlay could set it automatically
+     instead of asking the user to also tell SolScan what it just showed them - not yet wired, still a
+     real future wiring change
 5. **Automated acquisition** — background capture pipeline (`System.Threading.Channels`), auto-detect
    the disk entering/centred on/leaving the slit from the live preview (port `focus_analyzer.py`'s
    edge-detection technique), tie into step 3's slew-ahead-and-drift logic as one "Capture" action

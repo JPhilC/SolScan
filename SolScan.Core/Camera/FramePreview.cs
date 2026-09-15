@@ -246,9 +246,19 @@ public static class FramePreview
     /// and entirely adequate for a live preview/histogram that isn't the recorded data.</summary>
     private static (int Scale, int Width, int Height) ComputeDownsampleGrid(CameraFrame frame, int maxDimension)
     {
-        var longestSide = Math.Max(frame.Width, frame.Height);
-        var scale = Math.Max(1, (int)Math.Ceiling(longestSide / (double)maxDimension));
+        var scale = ComputeDownsampleScale(frame.Width, frame.Height, maxDimension);
         return (scale, Math.Max(1, frame.Width / scale), Math.Max(1, frame.Height / scale));
+    }
+
+    /// <summary>The stride <see cref="ComputeDownsampleGrid"/> uses, exposed on its own so a caller
+    /// that already has a raw-frame pixel position (e.g. a spectral line's own row, from
+    /// <c>SolScan.Processing.Spectrum</c>) can convert it into the same downsampled preview-bitmap
+    /// coordinate space <see cref="Stretch"/>'s own output uses, without duplicating this math or
+    /// needing the full <see cref="CameraFrame"/> this class's other methods take.</summary>
+    public static int ComputeDownsampleScale(int frameWidth, int frameHeight, int maxDimension)
+    {
+        var longestSide = Math.Max(frameWidth, frameHeight);
+        return Math.Max(1, (int)Math.Ceiling(longestSide / (double)maxDimension));
     }
 
     /// <summary>

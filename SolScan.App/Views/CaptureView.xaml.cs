@@ -2,8 +2,10 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using SolScan.App.ViewModels;
+using SolScan.Core.Processing;
 
 namespace SolScan.App.Views;
 
@@ -15,7 +17,16 @@ namespace SolScan.App.Views;
 /// </summary>
 public partial class CaptureView : UserControl
 {
+    private static readonly TimeSpan SpectralLabelAnimationDuration = TimeSpan.FromMilliseconds(250);
+
     private CaptureViewModel? _viewModel;
+
+    /// <summary>One persistent <see cref="TextBlock"/> per currently-shown named line, keyed by
+    /// <see cref="SpectralRay"/> - kept across updates (not recreated every throttled tick) so
+    /// <see cref="UpdateSpectralLabelOverlay"/> can animate an existing label to its new position
+    /// instead of a flicker of remove-then-add, and so a label leaving the visible set can fade out
+    /// in place ("roll ... out of view", per the feature request) rather than vanishing instantly.</summary>
+    private readonly Dictionary<SpectralRay, TextBlock> _spectralLabelElements = [];
 
     public CaptureView()
     {
@@ -25,6 +36,8 @@ public partial class CaptureView : UserControl
     }
 
     private void ReticuleOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateReticuleOverlay();
+
+    private void SpectralLabelOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateSpectralLabelOverlay();
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -42,6 +55,7 @@ public partial class CaptureView : UserControl
 
         UpdateImageSize();
         UpdateReticuleOverlay();
+        UpdateSpectralLabelOverlay();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -61,6 +75,14 @@ public partial class CaptureView : UserControl
             or nameof(CaptureViewModel.ReticuleInsetPixels))
         {
             UpdateReticuleOverlay();
+        }
+
+        // SpectralLineLabels only changes reference on the overlay's own throttled cadence
+        // (SpectralOverlayUpdateInterval, not every preview frame) - see CaptureViewModel.
+        // ProcessPreviewFrame's own comment - so this isn't a ~20fps cost either.
+        if (e.PropertyName is nameof(CaptureViewModel.SpectralLineLabels) or nameof(CaptureViewModel.ShowSpectralLineLabels))
+        {
+            UpdateSpectralLabelOverlay();
         }
     }
 
@@ -171,6 +193,124 @@ public partial class CaptureView : UserControl
             ReticuleOverlay.Children.Add(CreatePivotedVerticalLine(width - inset, height, -_viewModel.ReticuleAngleDegrees));
         }
     }
+
+    /// <summary>
+    /// Rebuilds <see cref="CaptureViewModel.SpectralLineLabels"/> onto <c>SpectralLabelOverlay</c> -
+    /// unlike <see cref="UpdateReticuleOverlay"/>, existing <see cref="TextBlock"/>s are kept and
+    /// animated to their new position/opacity (see <see cref="_spectralLabelElements"/>'s own doc
+    /// comment) rather than cleared and rebuilt every time, since this runs on every throttled
+    /// spectral-overlay update (a few times a second - see CaptureViewModel.ProcessPreviewFrame) and
+    /// the whole point is a smooth "roll" as a line's position changes or it leaves the visible set,
+    /// not a flicker. This app's first use of <see cref="DoubleAnimation"/> - confirmed no existing
+    /// precedent elsewhere (see CLAUDE.md) - a plain slide+fade needs nothing beyond WPF's own
+    /// built-in animation support.
+    /// </summary>
+    private void UpdateSpectralLabelOverlay()
+    {
+        if (_viewModel is not { ShowSpectralLineLabels: true, PreviewBitmap: { } bitmap })
+        {
+            FadeOutAllSpectralLabels();
+            return;
+        }
+
+        // This can run right after UpdateImageSize() sets PreviewImage's (and, via the binding in
+        // CaptureView.xaml, SpectralLabelOverlay's own) Width/Height to a new value - e.g. a
+        // differently-sized PreviewBitmap just arrived in the same OnViewModelPropertyChanged pass
+        // that also updates SpectralLineLabels. Setting a layout-affecting property only *schedules* a
+        // layout pass; it doesn't run one synchronously, so ActualHeight read immediately afterwards
+        // can still reflect the *previous* size - confirmed the hard way against a real loaded test
+        // image, where labels landed using a stale (usually larger, since Auto zoom on a smaller image
+        // shrinks it) ActualHeight and so didn't line up with the actual image content at all.
+        // UpdateLayout() forces that pending pass to complete right now, so ActualHeight below is
+        // always current regardless of what just changed.
+        SpectralLabelOverlay.UpdateLayout();
+
+        if (SpectralLabelOverlay.ActualHeight <= 0)
+        {
+            FadeOutAllSpectralLabels();
+            return;
+        }
+
+        var scale = SpectralLabelOverlay.ActualHeight / bitmap.PixelHeight;
+        var currentRays = new HashSet<SpectralRay>();
+
+        foreach (var label in _viewModel.SpectralLineLabels)
+        {
+            currentRays.Add(label.Ray);
+            // "Hovering above" the line per the feature request, not centred on it - offset upward by
+            // one label's own rough height so the line's row itself stays visible just below the text.
+            // Clamped to stay fully on screen (never negative) - a line detected close to the frame's
+            // own top edge has no room above it to hover into anyway, and ClipToBounds="True" on this
+            // Canvas would otherwise just cut the label off, which looks identical to it being pinned
+            // to the top - confirmed against a real loaded test image where every visible label read as
+            // stuck to the top edge.
+            var targetTop = Math.Max(0, MapPreviewBitmapYToControlY(label.PreviewBitmapY, scale) - SpectralLabelHoverOffset);
+            var targetOpacity = label.IsConfident ? 1.0 : 0.45;
+
+            if (_spectralLabelElements.TryGetValue(label.Ray, out var existing))
+            {
+                existing.BeginAnimation(Canvas.TopProperty, new DoubleAnimation(targetTop, SpectralLabelAnimationDuration));
+                existing.BeginAnimation(OpacityProperty, new DoubleAnimation(targetOpacity, SpectralLabelAnimationDuration));
+            }
+            else
+            {
+                var element = CreateSpectralLabelElement(label.Ray);
+                Canvas.SetTop(element, targetTop);
+                Canvas.SetRight(element, 8);
+                element.Opacity = 0; // starts invisible, then fades to targetOpacity below - the "roll in" half of the effect
+                SpectralLabelOverlay.Children.Add(element);
+                _spectralLabelElements[label.Ray] = element;
+                element.BeginAnimation(OpacityProperty, new DoubleAnimation(targetOpacity, SpectralLabelAnimationDuration));
+            }
+        }
+
+        // Anything currently shown that isn't in this update's visible set any more has "rolled out
+        // of view" (or the identifier's own best guess moved on) - fade it out, then remove it once
+        // the animation completes rather than vanishing it instantly.
+        foreach (var (ray, element) in _spectralLabelElements.Where(kv => !currentRays.Contains(kv.Key)).ToList())
+        {
+            FadeOutAndRemoveSpectralLabel(ray, element);
+        }
+    }
+
+    private void FadeOutAllSpectralLabels()
+    {
+        foreach (var (ray, element) in _spectralLabelElements.ToList())
+        {
+            FadeOutAndRemoveSpectralLabel(ray, element);
+        }
+    }
+
+    private void FadeOutAndRemoveSpectralLabel(SpectralRay ray, TextBlock element)
+    {
+        _spectralLabelElements.Remove(ray);
+        var animation = new DoubleAnimation(0, SpectralLabelAnimationDuration);
+        animation.Completed += (_, _) => SpectralLabelOverlay.Children.Remove(element);
+        element.BeginAnimation(OpacityProperty, animation);
+    }
+
+    /// <summary>Converts a label's already-downsampled-to-preview-bitmap-space Y (see
+    /// <see cref="SpectralLineLabel"/>'s own doc comment) into an actual on-screen row within
+    /// <c>SpectralLabelOverlay</c> - the one remaining step, needing this Canvas's own live
+    /// <paramref name="controlToBitmapScale"/> (<c>ActualHeight / PreviewBitmap.PixelHeight</c>),
+    /// which only the View can know (mirrors <see cref="UpdateImageSize"/>'s own zoom-scale math -
+    /// PreviewImage and SpectralLabelOverlay always render at the identical size, see CaptureView.xaml).</summary>
+    private static double MapPreviewBitmapYToControlY(double previewBitmapY, double controlToBitmapScale) =>
+        previewBitmapY * controlToBitmapScale;
+
+    /// <summary>Rough on-screen height of one label (font + padding) - see its use in
+    /// <see cref="UpdateSpectralLabelOverlay"/> for why this offsets the label upward from its target
+    /// row rather than being used for anything pixel-exact.</summary>
+    private const double SpectralLabelHoverOffset = 16;
+
+    private static TextBlock CreateSpectralLabelElement(SpectralRay ray) => new()
+    {
+        Text = ray.Label,
+        Foreground = Brushes.White,
+        Background = new SolidColorBrush(Color.FromArgb(160, 0, 0, 0)),
+        Padding = new Thickness(4, 1, 4, 1),
+        FontSize = 11,
+    };
 
     private static Line CreateReticuleLine(double x1, double y1, double x2, double y2) => new()
     {

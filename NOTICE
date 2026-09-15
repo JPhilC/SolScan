@@ -11,9 +11,13 @@ license referenced here.
 astro4j / JSol'Ex
 ================================================================================
 
-Portions of SolScan's spectral-line identification, exposure calculation, and SHG reconstruction
-logic are translated and adapted from the astro4j project (JSol'Ex, JSol'Ex CLI, jsolex-core),
-by Cedric Champeau ("melix") and contributors.
+Portions of SolScan's spectral-line data model, exposure calculation, and SHG reconstruction logic
+are translated and adapted from the astro4j project (JSol'Ex, JSol'Ex CLI, jsolex-core), by Cedric
+Champeau ("melix") and contributors. (SolScan's own spectral-line *identification* algorithm -
+SolScan.Processing.Spectrum.SpectralLineIdentifier - is a deliberately independent design, not a
+port of astro4j's DeepLineIdentifier/SpectralWindowIdentifier - see that type's own doc comment for
+why, and the "Third-party reference data" section below for the one thing it does still draw on:
+the same public solar-flux atlas astro4j also uses.)
     https://github.com/melix/astro4j
 
 Licensed under the Apache License, Version 2.0. A copy of the License is available at:
@@ -25,7 +29,6 @@ source file, pointing back to the original.
 
 Specifically adapted, at time of writing (see CLAUDE.md for the full, current list; not yet
 implemented, still on the roadmap):
-  - DeepLineIdentifier (spectral line identification via reference-atlas correlation)
   - SpectralLineCatalog (interesting-lines.txt secondary-line lookup)
   - SpectrumBrowser (dispersion-aware reference-spectrum rendering)
   - ExposureCalculator (recommended exposure/fps from instrument optics and solar ephemeris)
@@ -127,6 +130,26 @@ back to the original Java source, per CLAUDE.md):
     read by doCall - and AnalysisUtils.estimateBackground (the plain unweighted off-disk mean
     BackgroundRemoval.blindBackgroundNeutralization2 uses once an ellipse is already known) is newly
     ported alongside it as SolScan.Processing.Shg.ImageStatistics.EstimateBackground
+
+================================================================================
+Third-party reference data: BASS2000 solar flux atlas
+================================================================================
+
+SolScan.Processing.Spectrum.SpectralLineIdentifier bundles a small (~38KB) derived excerpt of the
+BASS2000 "Photometric Atlas of the Solar Spectrum" - narrow (~16Å) reference windows around each of
+the 12 named SolScan.Core.Processing.SpectralRay lines only, not the full 14MB public atlas. See
+SolScan.Processing/Spectrum/Resources/README.md for the extraction process and full licensing text;
+summary:
+
+    The atlasvi.dat source data is published by BASS2000 under Creative Commons CC-BY-SA-NC 4.0
+    (Attribution-ShareAlike-NonCommercial). https://bass2000.obspm.fr/solar_spect.php
+    Original work: Delbouille L., Neven L., Roland G. (1972), "PHOTOMETRIC ATLAS OF THE SOLAR
+    SPECTRUM FROM λ 3000 TO λ 10000".
+
+This is the same public atlas astro4j's own DeepLineIdentifier/SpectrumBrowser draw on (see the
+astro4j section above) - SolScan reads the raw published file directly with its own independently-
+written extraction tool (SolScan.Tools' extract-atlas command), not astro4j's copy of it or its
+converter code.
 
 ================================================================================
 RASTA

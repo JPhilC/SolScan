@@ -8,12 +8,16 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Win32;
+using SolScan.App.Services;
 using SolScan.App.Views;
 using SolScan.Core.Astronomy;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
 using SolScan.Core.Equipment;
+using SolScan.Core.Processing;
 using SolScan.Core.Telescope;
+using SolScan.Processing.Spectrum;
 
 namespace SolScan.App.ViewModels;
 
@@ -30,6 +34,14 @@ public partial class CaptureViewModel : ObservableObject
 {
     private static readonly TimeSpan PreviewRedrawInterval = TimeSpan.FromMilliseconds(50); // ~20fps cap
     private static readonly TimeSpan FrameRateUpdateInterval = TimeSpan.FromSeconds(1);
+
+    // Live spectral-line overlay (see ProcessPreviewFrame) - deliberately slower than the preview
+    // redraw itself: a person turning a grating by hand doesn't need 20fps responsiveness, and the
+    // analysis (a real curvature fit + 12-candidate correlation over the frame's own full resolution -
+    // 3840x2160 on real ASI678MM hardware) is real work worth not repeating on every single throttled
+    // preview tick. NOT YET VALIDATED against real hardware timing - a starting value, not a measured one.
+    private static readonly TimeSpan SpectralOverlayUpdateInterval = TimeSpan.FromMilliseconds(400);
+    private DateTime _lastSpectralOverlayUtc = DateTime.MinValue;
 
     // "Find Sun" fine-tune (see FindSunAsync) - a simple brightness hill-climb, not the full
     // spiral-search-then-hill-climb algorithm CLAUDE.md's "Visual fine-centering" describes: the
@@ -81,6 +93,18 @@ public partial class CaptureViewModel : ObservableObject
     /// <see cref="_connectedCamera"/> - see the camera auto-add block in <see cref="ToggleLiveViewAsync"/>.
     /// Snapshotted into a recording's CaptureMetadata by <see cref="StartRecording"/>.</summary>
     private CameraProfile? _connectedCameraProfile;
+
+    /// <summary>The SHG currently picked on Prepare's Equipment Setup, resolved once in the constructor
+    /// and again at every camera connect (see <see cref="ResolveSpectrographProfile"/>) rather than
+    /// re-read from <see cref="_appSettingsStore"/> on every throttled preview tick - feeds the live
+    /// spectral overlay (<see cref="SolScan.Processing.Spectrum.SpectralOverlayAnalyzer"/> in
+    /// <see cref="ProcessPreviewFrame"/>). Deliberately independent of the camera connection - it's
+    /// purely an Equipment Setup concept, so unlike <see cref="_connectedCameraProfile"/> it's never
+    /// cleared on disconnect, and stays available for <see cref="LoadTestImage"/> even when no
+    /// camera has ever connected this session. Same "doesn't auto-refresh mid-session if Options
+    /// changes it" limitation as <c>PrepareViewModel.AvailableEquipmentSetups</c> already accepts -
+    /// null if nothing's picked.</summary>
+    private SpectrographProfile? _connectedInstrument;
 
     private ISerWriter? _activeWriter;
     private bool _writerNeedsOpening;
@@ -291,6 +315,53 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private double reticuleInsetPixels = 60;
 
+    /// <summary>Live overlay labelling the 12 named <see cref="SpectralRay"/> lines currently visible
+    /// in the preview - see <see cref="SpectralLineLabels"/>/<see cref="ProcessPreviewFrame"/>. On by
+    /// default, unlike the Reticule overlays above - see <see cref="AppSettings.ShowSpectralLineLabels"/>'s
+    /// own doc comment for why.</summary>
+    [ObservableProperty]
+    private bool showSpectralLineLabels = true;
+
+    /// <summary>Coloured gradient band on the preview's left edge showing what part of the visible
+    /// spectrum the current view spans - see <see cref="SpectralGradientStops"/>. Same on-by-default
+    /// rationale as <see cref="ShowSpectralLineLabels"/>.</summary>
+    [ObservableProperty]
+    private bool showSpectralColorBand = true;
+
+    /// <summary>Every named line currently visible in the preview, already positioned in preview-
+    /// bitmap pixel space - see <see cref="SpectralLineLabel"/>'s own doc comment for the remaining
+    /// bitmap-space-to-control-space step CaptureView.xaml.cs still does. Updated from
+    /// <see cref="ProcessPreviewFrame"/>'s own throttled spectral-overlay step, not every preview
+    /// frame - see that method's own comment.</summary>
+    [ObservableProperty]
+    private ObservableCollection<SpectralLineLabel> spectralLineLabels = [];
+
+    /// <summary>The colour band's own gradient stops, sampled across the currently visible wavelength
+    /// range via <see cref="SpectralColor.ToRgb"/> - null until the first successful spectral-overlay
+    /// pass (see <see cref="ProcessPreviewFrame"/>), e.g. before any instrument/camera is resolved or
+    /// while nothing could be identified/scored at all.</summary>
+    [ObservableProperty]
+    private GradientStopCollection? spectralGradientStops;
+
+    [ObservableProperty]
+    private bool isSpectralOverlayExpanded = true;
+
+    /// <summary>Pixel size the spectral overlay falls back to when no connected camera's own
+    /// <see cref="CameraProfile.PixelSizeMicrons"/> is known - see <see cref="AppSettings.SpectralOverlayFallbackPixelSizeMicrons"/>'s
+    /// own doc comment. Editable directly (a plain <c>TextBox</c>, not read from hardware) since a
+    /// loaded test image isn't tied to any real camera the way live values elsewhere on this view are.</summary>
+    [ObservableProperty]
+    private double spectralOverlayFallbackPixelSizeMicrons = 2.0;
+
+    /// <summary>Raw numbers behind the current overlay - best-guess ray/score/confidence, the
+    /// curvature-detected centre row, dispersion, and how many named lines came out visible - shown in
+    /// the "Spectral Overlay" Expander so an unexpected label position/colour can be checked against
+    /// real values instead of guessed at from what's on screen (same reasoning as <c>SolScan.Tools</c>'
+    /// own <c>annotate</c> console output). Updated on the same throttled cadence as the overlay
+    /// itself; null until the first successful pass.</summary>
+    [ObservableProperty]
+    private string? spectralOverlayDiagnosticsText;
+
     [ObservableProperty]
     private WriteableBitmap? previewBitmap;
 
@@ -436,6 +507,16 @@ public partial class CaptureViewModel : ObservableObject
         showRotationReticule = savedAppSettings.ShowRotationReticule;
         reticuleAngleDegrees = savedAppSettings.ReticuleAngleDegrees;
         reticuleInsetPixels = savedAppSettings.ReticuleInsetPixels;
+        showSpectralLineLabels = savedAppSettings.ShowSpectralLineLabels;
+        showSpectralColorBand = savedAppSettings.ShowSpectralColorBand;
+        isSpectralOverlayExpanded = savedAppSettings.SpectralOverlayExpanded;
+        spectralOverlayFallbackPixelSizeMicrons = savedAppSettings.SpectralOverlayFallbackPixelSizeMicrons;
+
+        // Resolved here too, not just at camera connect (see _connectedInstrument's own doc comment) -
+        // the SHG doesn't actually depend on a camera being connected at all, and the live spectral
+        // overlay needs it available even when testing with a loaded still image (LoadTestImage)
+        // with no camera connected.
+        _connectedInstrument = ResolveSpectrographProfile();
 
         RefreshCameras();
     }
@@ -761,6 +842,7 @@ public partial class CaptureViewModel : ObservableObject
             _connectedCamera = SelectedCamera;
             IsConnected = true;
             _connectedCameraProfile = ResolveCameraProfile(SelectedCamera);
+            _connectedInstrument = ResolveSpectrographProfile();
 
             // SupportedBinning is camera-specific, so the dropdown is (re)populated on every
             // connect regardless of whether saved settings exist. Adds anything newly-supported
@@ -874,6 +956,11 @@ public partial class CaptureViewModel : ObservableObject
         IsConnected = false;
         _connectedCamera = null;
         _connectedCameraProfile = null;
+        // _connectedInstrument deliberately NOT cleared here - the SHG selection has nothing to do
+        // with the camera connection (see its own doc comment), so it stays resolved for
+        // LoadTestImage to keep using even with no camera ever connected this session.
+        SpectralLineLabels = [];
+        SpectralGradientStops = null;
         StatusText = "Camera disconnected.";
     }
 
@@ -906,6 +993,60 @@ public partial class CaptureViewModel : ObservableObject
         }
 
         return existing;
+    }
+
+    /// <summary>Not live/not recording - loading a test image while a real camera is actively
+    /// streaming would just have the next real frame overwrite it almost immediately (confusing, not
+    /// dangerous), and loading one mid-recording makes no sense at all (it would never reach the
+    /// actual .ser file - live frames are written synchronously in OnFrameCaptured, not from here).</summary>
+    private bool CanLoadTestImage => !IsLive && !IsRecording;
+
+    /// <summary>
+    /// Loads a PNG/TIFF file (see <see cref="TestImageLoader"/>) and feeds it through the exact same
+    /// pipeline a live frame would go through (<see cref="ProcessPreviewFrame"/>: histogram, contrast
+    /// stretch, focus aid, and - the actual point of this feature - the spectral line-label/colour-
+    /// band overlay), so that overlay can be tried and tuned without a camera or telescope connected
+    /// at all. A dev/test feature, not part of the normal capture workflow - see
+    /// <see cref="_connectedInstrument"/>/<see cref="SpectralOverlayFallbackPixelSizeMicrons"/> for
+    /// what it uses in place of a live camera's own resolved instrument/pixel size.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanLoadTestImage))]
+    private void LoadTestImage()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a test image to load into the preview",
+            Filter = "Image files (*.png;*.tif;*.tiff)|*.png;*.tif;*.tiff|All files (*.*)|*.*",
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        CameraFrame frame;
+        try
+        {
+            frame = TestImageLoader.Load(dialog.FileName);
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            StatusText = $"Failed to load '{dialog.FileName}': {ex.Message}";
+            return;
+        }
+
+        // A deliberate one-shot test action should show its result immediately, not wait out
+        // whatever's left of the normal ~400ms spectral-overlay throttle window.
+        _lastSpectralOverlayUtc = DateTime.MinValue;
+
+        if (Interlocked.CompareExchange(ref _previewProcessingInFlight, 1, 0) != 0)
+        {
+            StatusText = "Still processing the previous preview frame - try again in a moment.";
+            return;
+        }
+
+        StatusText = $"Test image loaded: {Path.GetFileName(dialog.FileName)}";
+        Task.Run(() => ProcessPreviewFrame(frame, camera: null));
     }
 
     [RelayCommand(CanExecute = nameof(CanStartRecording))]
@@ -965,21 +1106,37 @@ public partial class CaptureViewModel : ObservableObject
         var selectedSetupId = _appSettingsStore.Load().SelectedEquipmentSetupId;
         var setup = selectedSetupId is { } id ? _equipmentLibrary.LoadSetups().FirstOrDefault(s => s.Id == id) : null;
 
-        SpectrographProfile? spectrograph = null;
-        TelescopeProfile? telescope = null;
-        if (setup is not null)
-        {
-            spectrograph = _equipmentLibrary.LoadSpectrographs().FirstOrDefault(s => s.Id == setup.SpectrographProfileId);
-            telescope = _equipmentLibrary.LoadTelescopes().FirstOrDefault(t => t.Id == setup.TelescopeProfileId);
-        }
+        TelescopeProfile? telescope = setup is not null
+            ? _equipmentLibrary.LoadTelescopes().FirstOrDefault(t => t.Id == setup.TelescopeProfileId)
+            : null;
 
         _captureMetadataStore.Write(serFilePath, new CaptureMetadata(
-            spectrograph,
+            ResolveSpectrographProfile(setup),
             telescope,
             _connectedCameraProfile,
             DateTime.UtcNow,
             _connectedCamera is not null ? BuildCurrentCameraSettings() : null,
             BuildMountPointingSnapshot()));
+    }
+
+    /// <summary>The SHG currently picked as part of Prepare's Equipment Setup, or null if none/nothing's
+    /// picked - shared by <see cref="WriteCaptureMetadata"/> (a fresh lookup each recording) and
+    /// <see cref="_connectedInstrument"/> (resolved once per camera connect, for the live spectral
+    /// overlay - see <see cref="ProcessPreviewFrame"/>). <paramref name="setup"/> is optional purely so
+    /// <see cref="WriteCaptureMetadata"/>, which already looked one up for its own Telescope field,
+    /// doesn't do the same <see cref="IAppSettingsStore.Load"/>/<see cref="IEquipmentLibrary.LoadSetups"/>
+    /// work twice.</summary>
+    private SpectrographProfile? ResolveSpectrographProfile(EquipmentSetup? setup = null)
+    {
+        if (setup is null)
+        {
+            var selectedSetupId = _appSettingsStore.Load().SelectedEquipmentSetupId;
+            setup = selectedSetupId is { } id ? _equipmentLibrary.LoadSetups().FirstOrDefault(s => s.Id == id) : null;
+        }
+
+        return setup is not null
+            ? _equipmentLibrary.LoadSpectrographs().FirstOrDefault(s => s.Id == setup.SpectrographProfileId)
+            : null;
     }
 
     /// <summary>The mount's RA/Dec and site location right now, or null if it isn't connected - see
@@ -1017,7 +1174,11 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnIsConnectedChanged(bool value) => DisconnectCommand.NotifyCanExecuteChanged();
 
-    partial void OnIsLiveChanged(bool value) => StartRecordingCommand.NotifyCanExecuteChanged();
+    partial void OnIsLiveChanged(bool value)
+    {
+        StartRecordingCommand.NotifyCanExecuteChanged();
+        LoadTestImageCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnIsRecordingChanged(bool value)
     {
@@ -1026,6 +1187,7 @@ public partial class CaptureViewModel : ObservableObject
         StartRecordingCommand.NotifyCanExecuteChanged();
         StopRecordingCommand.NotifyCanExecuteChanged();
         FindSunCommand.NotifyCanExecuteChanged();
+        LoadTestImageCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsFindingSunChanged(bool value)
@@ -1208,6 +1370,18 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnReticuleInsetPixelsChanged(double value) =>
         PersistAppSetting(s => s with { ReticuleInsetPixels = value });
+
+    partial void OnShowSpectralLineLabelsChanged(bool value) =>
+        PersistAppSetting(s => s with { ShowSpectralLineLabels = value });
+
+    partial void OnShowSpectralColorBandChanged(bool value) =>
+        PersistAppSetting(s => s with { ShowSpectralColorBand = value });
+
+    partial void OnIsSpectralOverlayExpandedChanged(bool value) =>
+        PersistAppSetting(s => s with { SpectralOverlayExpanded = value });
+
+    partial void OnSpectralOverlayFallbackPixelSizeMicronsChanged(double value) =>
+        PersistAppSetting(s => s with { SpectralOverlayFallbackPixelSizeMicrons = value });
 
     private void PersistAppSetting(Func<AppSettings, AppSettings> update) =>
         _appSettingsStore.Save(update(_appSettingsStore.Load()));
@@ -1545,6 +1719,63 @@ public partial class CaptureViewModel : ObservableObject
             // transition this is trying to measure.
             var focusStats = FocusAnalyzer.MeasureEdgeSteepness(frame);
 
+            // Live spectral-line overlay (labels + colour gradient band - see SolScan.Processing.
+            // Spectrum.SpectralOverlayAnalyzer) - gated on its own slower cadence than the preview
+            // redraw itself (SpectralOverlayUpdateInterval's own doc comment explains why), and only
+            // attempted once a live instrument is actually resolved. Pixel size prefers the connected
+            // camera's own real value, falling back to SpectralOverlayFallbackPixelSizeMicrons when
+            // that's unknown - the normal case for a loaded test image (see LoadTestImage), which
+            // isn't tied to any real camera at all. Reading/writing _lastSpectralOverlayUtc here (a
+            // plain field, not Interlocked) is safe because _previewProcessingInFlight already
+            // guarantees at most one ProcessPreviewFrame call is ever running at a time.
+            List<SpectralLineLabel>? spectralLabels = null;
+            GradientStopCollection? spectralGradientStops = null;
+            string? spectralOverlayDiagnostics = null;
+            var overlayNow = DateTime.UtcNow;
+            if ((ShowSpectralLineLabels || ShowSpectralColorBand)
+                && _connectedInstrument is { } instrument
+                && overlayNow - _lastSpectralOverlayUtc >= SpectralOverlayUpdateInterval)
+            {
+                var pixelSizeMicrons = _connectedCameraProfile?.PixelSizeMicrons ?? SpectralOverlayFallbackPixelSizeMicrons;
+                _lastSpectralOverlayUtc = overlayNow;
+                try
+                {
+                    var maxShiftPixels = Math.Max(1, frame.Height / 2) - 1;
+                    var overlay = SpectralOverlayAnalyzer.Analyze(frame, instrument, pixelSizeMicrons, SelectedBinning, maxShiftPixels);
+                    var downsampleScale = FramePreview.ComputeDownsampleScale(frame.Width, frame.Height, stretchMaxDimension);
+
+                    // Diagnostic-only (shown in the "Spectral Overlay" Expander) - real numbers to check
+                    // against rather than guessing from what's on screen, same reasoning as
+                    // SolScan.Tools annotate's own console output.
+                    var best = overlay.Identification.AllCandidates.Count > 0 ? overlay.Identification.AllCandidates[0] : null;
+                    spectralOverlayDiagnostics = best is null
+                        ? "No candidates scored."
+                        : $"Best: {best.Ray.Label} (score {best.Score:F3}, {(overlay.Identification.IdentifiedRay is not null ? "confident" : "not confident")}) | "
+                            + $"centreRow={overlay.CentreRowInFrame:F1}/{frame.Height} | "
+                            + $"Å/px={overlay.AnchorDispersionAngstromsPerPixel:F4} | "
+                            + $"maxShift={maxShiftPixels}px | visibleLines={overlay.VisibleLines.Count} | "
+                            + $"downsampleScale={downsampleScale}";
+
+                    if (ShowSpectralLineLabels)
+                    {
+                        spectralLabels = BuildSpectralLineLabels(overlay, downsampleScale);
+                    }
+                    if (ShowSpectralColorBand)
+                    {
+                        spectralGradientStops = BuildSpectralGradientStops(overlay, maxShiftPixels);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort - a failed overlay pass (e.g. a genuinely blank/degenerate frame)
+                    // shouldn't break the live preview itself; this throttled tick's overlay is just
+                    // skipped, the previous one stays on screen until the next successful pass. Still
+                    // surfaced in the diagnostics text, though - a silently-skipped pass otherwise looks
+                    // identical to "nothing changed" from the UI, hiding a real failure.
+                    spectralOverlayDiagnostics = $"Overlay pass failed: {ex.Message}";
+                }
+            }
+
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
             // so read it back here (cheap; already off the capture thread) and reflect it on the
             // slider, guarded so OnXChanged doesn't immediately push it right back.
@@ -1573,6 +1804,22 @@ public partial class CaptureViewModel : ObservableObject
                     EdgeWidthText = "No edge detected";
                 }
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
+
+                // Only overwritten on a throttled tick that actually ran the analysis (see above) -
+                // otherwise the previous overlay stays on screen rather than flickering empty between
+                // updates.
+                if (spectralLabels is not null)
+                {
+                    SpectralLineLabels = new ObservableCollection<SpectralLineLabel>(spectralLabels);
+                }
+                if (spectralGradientStops is not null)
+                {
+                    SpectralGradientStops = spectralGradientStops;
+                }
+                if (spectralOverlayDiagnostics is not null)
+                {
+                    SpectralOverlayDiagnosticsText = spectralOverlayDiagnostics;
+                }
 
                 if (isContrastAuto)
                 {
@@ -1607,6 +1854,58 @@ public partial class CaptureViewModel : ObservableObject
         {
             Interlocked.Exchange(ref _previewProcessingInFlight, 0);
         }
+    }
+
+    /// <summary>Converts <see cref="SpectralOverlayAnalyzer"/>'s raw-frame-space
+    /// <c>VisibleSpectralLine.RowInFrame</c> into preview-bitmap pixel space (the same downsampling
+    /// <see cref="FramePreview.Stretch"/> already applied to the frame being rendered this tick) -
+    /// CaptureView.xaml.cs's own <c>MapPreviewBitmapYToControlY</c> does the one remaining step
+    /// (bitmap space → actual on-screen control space, via the live zoom scale). <see cref="SpectralLineLabel.IsConfident"/>
+    /// is true only for <see cref="SpectralLineIdentificationResult.IdentifiedRay"/> itself - every
+    /// other visible line is the layout's own best-guess projection, not a separately confirmed match.</summary>
+    private static List<SpectralLineLabel> BuildSpectralLineLabels(SpectralOverlayResult overlay, int downsampleScale)
+    {
+        var labels = new List<SpectralLineLabel>(overlay.VisibleLines.Count);
+        foreach (var line in overlay.VisibleLines)
+        {
+            var isConfident = overlay.Identification.IdentifiedRay == line.Ray;
+            labels.Add(new SpectralLineLabel(line.Ray, line.RowInFrame / downsampleScale, isConfident));
+        }
+
+        return labels;
+    }
+
+    /// <summary>Samples <see cref="SpectralColor.ToRgb"/> across the frame's own full sampled
+    /// pixel-shift range (top = most negative shift, bottom = most positive - matching a
+    /// <c>LinearGradientBrush</c> with <c>StartPoint="0,0" EndPoint="0,1"</c>) to build the colour
+    /// band's gradient stops. <see cref="GradientStop"/>/<see cref="GradientStopCollection"/> are WPF
+    /// <c>Freezable</c>s - normally thread-affine to whichever thread creates them, so this
+    /// deliberately <see cref="Freezable.Freeze"/>s the result before returning it from this
+    /// background-thread call, making it safe for the UI thread (which didn't create it) to bind to.
+    /// Null when there's nothing to anchor a wavelength range to (see
+    /// <see cref="SpectralOverlayResult.AnchorDispersionAngstromsPerPixel"/>'s own doc comment).</summary>
+    private const int SpectralGradientStopCount = 24;
+
+    private static GradientStopCollection? BuildSpectralGradientStops(SpectralOverlayResult overlay, int maxShiftPixels)
+    {
+        if (overlay.AnchorDispersionAngstromsPerPixel is not { } dispersion || overlay.Identification.AllCandidates.Count == 0)
+        {
+            return null;
+        }
+
+        var anchorWavelength = overlay.Identification.AllCandidates[0].Ray.WavelengthAngstroms;
+        var stops = new GradientStopCollection();
+        for (var i = 0; i < SpectralGradientStopCount; i++)
+        {
+            var offset = i / (double)(SpectralGradientStopCount - 1);
+            var shift = ((2 * offset) - 1) * maxShiftPixels; // offset 0 -> -maxShiftPixels, 1 -> +maxShiftPixels
+            var wavelength = anchorWavelength + (shift * dispersion);
+            var (r, g, b) = SpectralColor.ToRgb(wavelength);
+            stops.Add(new GradientStop(Color.FromRgb(r, g, b), offset));
+        }
+
+        stops.Freeze();
+        return stops;
     }
 
     private void RenderPreview(int width, int height, byte[] pixels)

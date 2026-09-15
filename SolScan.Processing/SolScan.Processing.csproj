@@ -12,4 +12,19 @@
     <ProjectReference Include="..\SolScan.Core\SolScan.Core.csproj" />
   </ItemGroup>
 
+  <!-- A small (tens of KB) excerpt of the public BASS2000 solar flux atlas - narrow reference
+       windows around each of the 12 named SpectralRay lines, not the 14MB atlas itself - see
+       Spectrum/Resources/README.md for provenance/licensing and Spectrum/ReferenceWindowResource.cs
+       for the binary layout. Produced by SolScan.Tools' "extract-atlas" command, never generated at
+       build time here. -->
+  <ItemGroup>
+    <!-- Condition-guarded the same way SolScan.Infrastructure.csproj guards the vendor camera DLLs -
+         a fresh clone before ever running extract-atlas shouldn't hard-fail the whole build; it just
+         means ReferenceWindowResource.LoadEmbedded throws its own clear error at the point something
+         actually tries to use it. -->
+    <EmbeddedResource Include="Spectrum\Resources\reference-windows.bin"
+                       LogicalName="SolScan.Processing.Spectrum.Resources.reference-windows.bin"
+                       Condition="Exists('Spectrum\Resources\reference-windows.bin')" />
+  </ItemGroup>
+
 </Project>
