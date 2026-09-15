@@ -176,16 +176,22 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private double exposureMicroseconds = 10_000;
 
-    /// <summary>0-1 slider position on <see cref="ExposureScale"/>'s log curve - what
-    /// CaptureView.xaml's exposure Slider actually binds to, since exposure needs to span
-    /// 0.032ms-5s and a linear slider can't usefully cover that range (see
-    /// <see cref="ExposureScale"/>'s doc comment). Kept in sync with
-    /// <see cref="ExposureMicroseconds"/> in both directions via <see cref="_syncingExposureLink"/>.</summary>
-    [ObservableProperty]
-    private double exposureSliderPosition = ExposureScale.ToSliderPosition(10_000);
+    /// <summary>ASICap-style Exposure range dropdown options - see <see cref="ExposureScale.Ranges"/>.
+    /// Selects which sub-range <see cref="ExposureDisplayValue"/> and CaptureView.xaml's Exposure
+    /// Slider (bound directly to <see cref="ExposureMicroseconds"/>, with Minimum/Maximum bound to
+    /// this range's own bounds) currently operate over, since exposure spans 0.032ms-5s and no
+    /// single linear control can usefully cover that whole range at once.</summary>
+    public IReadOnlyList<ExposureRangeOption> AvailableExposureRanges { get; } = ExposureScale.Ranges;
 
     [ObservableProperty]
-    private string exposureDisplayText = ExposureScale.Format(10_000);
+    private ExposureRangeOption selectedExposureRange = ExposureScale.Ranges[0]; // must match AvailableExposureRanges[0]
+
+    /// <summary>The Exposure numeric up/down box's own displayed value, in <see
+    /// cref="SelectedExposureRange"/>'s unit (e.g. 8000 when its Unit is "µs", or 2.5 when it's
+    /// "s") - kept in sync with <see cref="ExposureMicroseconds"/> in both directions via <see
+    /// cref="_syncingExposureLink"/>.</summary>
+    [ObservableProperty]
+    private double exposureDisplayValue = 10_000;
 
     [ObservableProperty]
     private bool isExposureAuto;
@@ -1219,34 +1225,92 @@ public partial class CaptureViewModel : ObservableObject
 
     partial void OnExposureMicrosecondsChanged(double value)
     {
+        // Snaps a slider drag (or any other raw write) onto the selected range's own allowed
+        // precision first - whole µs/ms for every range except the seconds one (see
+        // ExposureRangeOption.DecimalPlaces) - by re-invoking the setter with the corrected value
+        // and letting *that* call do the actual work below; this call has nothing left to do once
+        // it's kicked off the corrected one. A tolerance well above floating-point noise but well
+        // below the coarsest real step (1 whole µs) avoids re-triggering on a value that's already
+        // quantized but not bit-for-bit identical to its own round-trip.
+        var quantized = QuantizeToRange(value, SelectedExposureRange);
+        if (Math.Abs(quantized - value) > 0.01)
+        {
+            ExposureMicroseconds = quantized;
+            return;
+        }
+
         if (_connectedCamera is not null && !_syncingFromDevice)
         {
             _connectedCamera.ExposureMicroseconds = value;
         }
 
-        ExposureDisplayText = ExposureScale.Format(value);
-
-        if (!_syncingExposureLink)
+        if (value < SelectedExposureRange.MinMicroseconds || value > SelectedExposureRange.MaxMicroseconds)
         {
-            _syncingExposureLink = true;
-            ExposureSliderPosition = ExposureScale.ToSliderPosition(value);
-            _syncingExposureLink = false;
+            // Auto-readback, a loaded/saved value, or a spinner click at the current range's own
+            // edge can all land outside the dropdown's currently-selected range - re-select
+            // whichever range actually contains it rather than leaving the box/slider stuck
+            // showing a value outside their own bounds.
+            SelectedExposureRange = ExposureScale.FindRange(value);
         }
+
+        // Guarded so the box's own OnExposureDisplayValueChanged doesn't try to write this same
+        // value straight back into ExposureMicroseconds - it's already there.
+        _syncingExposureLink = true;
+        ExposureDisplayValue = value / SelectedExposureRange.UnitMicroseconds;
+        _syncingExposureLink = false;
 
         PersistSettingsIfConnected();
     }
 
-    partial void OnExposureSliderPositionChanged(double value)
+    /// <summary>Rounds <paramref name="microseconds"/> onto <paramref name="range"/>'s own allowed
+    /// precision, expressed in that range's unit (see <see cref="ExposureRangeOption.DecimalPlaces"/>) -
+    /// e.g. the nearest whole µs for "32µs ~ 10ms", the nearest whole ms for either "ms" range, or
+    /// the nearest 0.001s for "1s ~ 5s". Applied to <see cref="ExposureMicroseconds"/> itself, not
+    /// just how it's displayed, so a slider drag can't leave the camera set to some arbitrary
+    /// fractional-µs exposure the box could never have been used to enter.</summary>
+    private static double QuantizeToRange(double microseconds, ExposureRangeOption range) =>
+        Math.Round(microseconds / range.UnitMicroseconds, range.DecimalPlaces, MidpointRounding.AwayFromZero) * range.UnitMicroseconds;
+
+    /// <summary>The numeric up/down box's own edits/spinner clicks flow back into <see
+    /// cref="ExposureMicroseconds"/> here, converted out of <see cref="SelectedExposureRange"/>'s
+    /// unit and clamped to that range's own bounds - <see cref="OnExposureMicrosecondsChanged"/>
+    /// then quantizes/reflects the result back onto this same box.</summary>
+    partial void OnExposureDisplayValueChanged(double value)
     {
         if (_syncingExposureLink)
         {
             return;
         }
 
+        ExposureMicroseconds = Math.Clamp(
+            value * SelectedExposureRange.UnitMicroseconds,
+            SelectedExposureRange.MinMicroseconds,
+            SelectedExposureRange.MaxMicroseconds);
+    }
+
+    /// <summary>Picking a different dropdown range re-anchors both the numeric box and the slider
+    /// (whose Minimum/Maximum are bound to this range) around whatever <see
+    /// cref="ExposureMicroseconds"/> already is, clamped/quantized into the newly-selected range
+    /// rather than jumping to some other value. The explicit <see cref="ExposureDisplayValue"/>
+    /// refresh at the end is needed even when the clamp above is a no-op (already-in-range value,
+    /// no cascade from <see cref="OnExposureMicrosecondsChanged"/> to do it instead) - e.g. switching
+    /// ranges without the value itself needing to move still changes which unit it's shown in.</summary>
+    partial void OnSelectedExposureRangeChanged(ExposureRangeOption value)
+    {
+        ExposureMicroseconds = Math.Clamp(ExposureMicroseconds, value.MinMicroseconds, value.MaxMicroseconds);
+
         _syncingExposureLink = true;
-        ExposureMicroseconds = ExposureScale.FromSliderPosition(value);
+        ExposureDisplayValue = ExposureMicroseconds / value.UnitMicroseconds;
         _syncingExposureLink = false;
     }
+
+    [RelayCommand]
+    private void IncrementExposure() =>
+        ExposureMicroseconds = Math.Min(ExposureMicroseconds + SelectedExposureRange.StepMicroseconds, SelectedExposureRange.MaxMicroseconds);
+
+    [RelayCommand]
+    private void DecrementExposure() =>
+        ExposureMicroseconds = Math.Max(ExposureMicroseconds - SelectedExposureRange.StepMicroseconds, SelectedExposureRange.MinMicroseconds);
 
     partial void OnIsExposureAutoChanged(bool value)
     {

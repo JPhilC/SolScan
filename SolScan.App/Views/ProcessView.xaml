@@ -51,13 +51,13 @@
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
                         <StackPanel Margin="12">
-                            <Expander Header="Process Parameters" IsExpanded="{Binding IsProcessParametersExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Process Parameters" IsExpanded="{Binding IsProcessParametersExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                                 <processing:ProcessParametersView DataContext="{Binding ProcessParameters}"/>
                             </Expander>
-                            <Expander Header="Image Enhancement" IsExpanded="{Binding IsImageEnhancementExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Enhancement" IsExpanded="{Binding IsImageEnhancementExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                                 <processing:ImageEnhancementView DataContext="{Binding ImageEnhancement}"/>
                             </Expander>
-                            <Expander Header="Image Selection" IsExpanded="{Binding IsImageSelectionExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Selection" IsExpanded="{Binding IsImageSelectionExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                                 <processing:ImageSelectionView DataContext="{Binding ImageSelection}"/>
                             </Expander>
                         </StackPanel>

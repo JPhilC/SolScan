@@ -37,4 +37,76 @@
             </Setter.Value>
         </Setter>
     </Style>
+
+    <!-- MaterialDesignTheme.Light.xaml's own implicit Expander style (merged above) indents the
+         header's text a chevron-glyph's width in from the left, while the body content below it
+         starts flush at the edge - a mismatch baked into that control template (and into the default
+         WPF/Aero one it replaces), not something a Margin/Padding tweak from outside can fix, since
+         the indent comes from a column reserved for the expand arrow inside the header's own template.
+         Reported directly by the user as looking wrong once several Expanders sat stacked in
+         CaptureView.xaml/ProcessView.xaml's drawer panels. This replaces the whole header chrome with
+         a flat one that starts at the same left edge as the body: bold text plus a bottom rule (using
+         the same MaterialDesignDivider brush the drawer header/DrawerHost border already use) mark it
+         as a header instead of the indent, and the expand/collapse chevron moves to the row's right
+         edge (▸/▾) rather than displacing the text on the left. Shared here (not duplicated per-view)
+         since both views' Expanders have the same problem - same "factor out on second use" precedent
+         as this whole file. -->
+    <Style x:Key="FlatExpanderHeaderToggleStyle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Padding" Value="0,6"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}"
+                            BorderBrush="{StaticResource MaterialDesignDivider}"
+                            BorderThickness="0,0,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="Chevron" Grid.Column="1" Text="&#9656;" FontSize="11"
+                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{StaticResource MaterialDesignBody}"/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chevron" Property="Text" Value="&#9662;"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{StaticResource MaterialDesignSelection}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="FlatExpanderStyle" TargetType="Expander">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Expander">
+                    <DockPanel>
+                        <ToggleButton DockPanel.Dock="Top"
+                                      Style="{StaticResource FlatExpanderHeaderToggleStyle}"
+                                      FontWeight="Bold"
+                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                      Content="{TemplateBinding Header}"
+                                      ContentTemplate="{TemplateBinding HeaderTemplate}"/>
+                        <ContentPresenter x:Name="ExpandSite" DockPanel.Dock="Top" Focusable="False"
+                                          Margin="0,8,0,0" Visibility="Collapsed"/>
+                    </DockPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="True">
+                            <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

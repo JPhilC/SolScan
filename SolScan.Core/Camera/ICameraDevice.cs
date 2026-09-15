@@ -59,9 +59,10 @@ public interface ICameraDevice
     /// currently calibrated to; a different sensor's real range may not match.</summary>
     double Gain { get; set; }
 
-    /// <summary>Exposure time in microseconds. SolScan.App's slider maps this on a log scale (see
-    /// <see cref="ExposureScale"/>) over the ASI678MM's non-"long exposure mode" range - LX mode
-    /// (exposures beyond ~5s) isn't supported, and isn't needed for SHG drift-scan capture anyway.</summary>
+    /// <summary>Exposure time in microseconds. SolScan.App's Exposure control maps this over a
+    /// dropdown-selected sub-range (see <see cref="ExposureScale"/>) spanning the ASI678MM's whole
+    /// non-"long exposure mode" range - LX mode (exposures beyond ~5s) isn't supported, and isn't
+    /// needed for SHG drift-scan capture anyway.</summary>
     double ExposureMicroseconds { get; set; }
 
     /// <summary>

@@ -5,45 +5,46 @@ namespace SolScan.Tests;
 public class ExposureScaleTests
 {
     [Fact]
-    public void ToSliderPosition_MapsRangeEndsToZeroAndOne()
+    public void Ranges_SpanTheWholeDomainWithNoGaps()
     {
-        Assert.Equal(0, ExposureScale.ToSliderPosition(ExposureScale.MinMicroseconds));
-        Assert.Equal(1, ExposureScale.ToSliderPosition(ExposureScale.MaxMicroseconds));
-    }
+        Assert.Equal(ExposureScale.MinMicroseconds, ExposureScale.Ranges[0].MinMicroseconds);
+        Assert.Equal(ExposureScale.MaxMicroseconds, ExposureScale.Ranges[^1].MaxMicroseconds);
 
-    [Fact]
-    public void FromSliderPosition_MapsZeroAndOneToRangeEnds()
-    {
-        // Relative tolerance rather than xUnit's decimal-place precision - Math.Exp(Math.Log(x))
-        // round-trips to within a tiny relative error, which is a much larger *absolute* gap at
-        // MaxMicroseconds' scale (millions of microseconds) than at MinMicroseconds' (tens).
-        AssertClose(ExposureScale.MinMicroseconds, ExposureScale.FromSliderPosition(0));
-        AssertClose(ExposureScale.MaxMicroseconds, ExposureScale.FromSliderPosition(1));
-    }
-
-    [Fact]
-    public void SliderPosition_RoundTripsThroughMidRange()
-    {
-        const double exposureMicroseconds = 10_000;
-
-        var position = ExposureScale.ToSliderPosition(exposureMicroseconds);
-        var roundTripped = ExposureScale.FromSliderPosition(position);
-
-        Assert.InRange(position, 0, 1);
-        AssertClose(exposureMicroseconds, roundTripped);
+        for (var i = 1; i < ExposureScale.Ranges.Count; i++)
+        {
+            Assert.True(
+                ExposureScale.Ranges[i].MinMicroseconds <= ExposureScale.Ranges[i - 1].MaxMicroseconds,
+                $"Range {i} ({ExposureScale.Ranges[i].Label}) leaves a gap after range {i - 1} ({ExposureScale.Ranges[i - 1].Label}).");
+        }
     }
 
     [Theory]
-    [InlineData(500, "500 µs")]
-    [InlineData(1_500, "1.5 ms")]
-    [InlineData(2_500_000, "2.500 s")]
-    public void Format_PicksTheMostReadableUnit(double microseconds, string expected)
+    [InlineData(32, "32µs ~ 10ms")]
+    [InlineData(8_000, "32µs ~ 10ms")]
+    [InlineData(10_000, "32µs ~ 10ms")] // shared boundary - the earlier (lower) range wins
+    [InlineData(10_001, "1ms ~ 100ms")]
+    [InlineData(500_000, "100ms ~ 1000ms")]
+    [InlineData(5_000_000, "1s ~ 5s")]
+    public void FindRange_PicksTheRangeContainingTheValue(double microseconds, string expectedLabel)
     {
-        Assert.Equal(expected, ExposureScale.Format(microseconds));
+        Assert.Equal(expectedLabel, ExposureScale.FindRange(microseconds).Label);
     }
 
-    private static void AssertClose(double expected, double actual, double relativeTolerance = 1e-6) =>
-        Assert.True(
-            Math.Abs(actual - expected) <= Math.Abs(expected) * relativeTolerance,
-            $"Expected {actual} to be within {relativeTolerance:P} of {expected}.");
+    [Fact]
+    public void FindRange_ClampsValuesOutsideTheWholeDomainToTheNearestEnd()
+    {
+        Assert.Equal(ExposureScale.Ranges[0], ExposureScale.FindRange(0));
+        Assert.Equal(ExposureScale.Ranges[^1], ExposureScale.FindRange(10_000_000));
+    }
+
+    [Fact]
+    public void OnlyTheLastRangeAllowsFractionalValues()
+    {
+        for (var i = 0; i < ExposureScale.Ranges.Count - 1; i++)
+        {
+            Assert.Equal(0, ExposureScale.Ranges[i].DecimalPlaces);
+        }
+
+        Assert.True(ExposureScale.Ranges[^1].DecimalPlaces > 0);
+    }
 }
