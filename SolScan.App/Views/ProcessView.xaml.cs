@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Navigation;
 using SolScan.App.ViewModels;
 
 namespace SolScan.App.Views;
@@ -97,5 +99,17 @@ public partial class ProcessView : UserControl
             OptionsPanelColumn.Width = new GridLength(0);
         }
         _updatingPanelColumnFromViewModel = false;
+    }
+
+    /// <summary>WPF's <c>Hyperlink</c> doesn't launch anything on its own - the JSol'Ex link in the
+    /// "Processing Results" panel (see ProcessView.xaml) needs this to actually open the system's
+    /// default browser. <c>UseShellExecute = true</c> is required here (unlike launching SolScan's own
+    /// processes elsewhere): starting a URI - as opposed to an executable - relies on the shell to
+    /// resolve it to the registered default browser, which .NET's own default (<c>false</c>, a direct
+    /// CreateProcess call) can't do.</summary>
+    private void OnJSolExLinkRequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        e.Handled = true;
     }
 }

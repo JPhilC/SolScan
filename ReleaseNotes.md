@@ -7,6 +7,21 @@ contains. One section per version, newest first. The version number matches `<Ve
 here (and bump `Directory.Build.props`) before tagging a release, since the release workflow reads
 its GitHub Release description straight from this file.
 
+## v0.2.1
+
+A quick follow-up to v0.2.0 for two things meant to be included in it.
+
+### Features
+
+- The Process view's "Processing Results" panel now points to
+  [JSol'Ex](https://melix.github.io/astro4j/latest/en/jsolex.html) for anyone wanting more advanced
+  processing or additional output options than SolScan currently offers.
+
+### Other
+
+- Acknowledged Ken Harrison (Merlin66) in the README for providing real SHG capture data used for
+  testing and benchmarking the processing pipeline.
+
 ## v0.2.0
 
 Capture and Process both gained substantial new features, and the SHG reconstruction pipeline is

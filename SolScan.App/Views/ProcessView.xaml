@@ -177,6 +177,12 @@
                                        Margin="0,4,0,0"
                                        Opacity="0.8"
                                        TextWrapping="Wrap" />
+                            <!-- Static - not tied to any per-run result, so it stays visible whether
+                                 or not a file has been processed yet this session. -->
+                            <TextBlock Margin="0,12,0,0" Opacity="0.8" TextWrapping="Wrap">
+                                For more advanced processing and additional output options, consider using
+                                <Hyperlink NavigateUri="https://melix.github.io/astro4j/latest/en/jsolex.html" RequestNavigate="OnJSolExLinkRequestNavigate">JSol'Ex</Hyperlink>.
+                            </TextBlock>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>

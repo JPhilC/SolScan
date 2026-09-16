@@ -91,6 +91,11 @@ JSolex (Apache-2.0) — AGPL-3.0 is the one license compatible with combining al
 portions) is additionally available under Apache-2.0 — see
 [ADDITIONAL-PERMISSIONS.md](ADDITIONAL-PERMISSIONS.md).
 
+## Acknowledgments
+
+Thanks to Ken Harrison (Merlin66) for providing real SHG capture data used for testing and
+benchmarking the processing pipeline.
+
 ## Author
 
 Phil Crompton
