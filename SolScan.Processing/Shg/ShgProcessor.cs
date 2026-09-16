@@ -95,6 +95,12 @@ public sealed class ShgProcessor : IShgProcessor
                 cancellationToken.ThrowIfCancellationRequested();
                 progress?.Report("Detecting spectral line...");
                 polynomial = new SpectralLineCurvatureDetector().Detect(average);
+                // Reported here, as soon as it's known, rather than only surfaced via the returned
+                // ShgProcessingResult once the whole run finishes - a caller narrating progress in real
+                // time (e.g. ProcessViewModel's own per-run log) can then log it at the point it was
+                // actually discovered, matching JSol'Ex's own log ordering rather than batching every
+                // detected fact at the very end.
+                progress?.Report($"Distortion polynomial: a={polynomial.Value.A:E6}, b={polynomial.Value.B:E6}, c={polynomial.Value.C:E6}");
 
                 if (spectrumParams.DetectionMode != LineDetectionMode.Manual && identificationEquipment is not null)
                 {
@@ -111,92 +117,126 @@ public sealed class ShgProcessor : IShgProcessor
                     lineIdentification = identifier.Identify(lineProfile);
                     if (lineIdentification.IdentifiedRay is { } identifiedRay)
                     {
+                        progress?.Report($"Spectral line identified: {identifiedRay.Label} (score {lineIdentification.BestScore:F3}) - used for this run.");
                         spectrumParams = spectrumParams with { Ray = identifiedRay };
+                    }
+                    else
+                    {
+                        var bestGuess = lineIdentification.AllCandidates.Count > 0 ? lineIdentification.AllCandidates[0] : null;
+                        progress?.Report(bestGuess is not null
+                            ? $"Best guess: {bestGuess.Ray.Label} (score {bestGuess.Score:F3}, not confident) - kept the configured line ({spectrumParams.Ray.Label}) instead."
+                            : "No spectral line candidates could be scored - kept the configured line.");
                     }
                 }
             }
 
-            if (wantsRaw || wantsReconstruction || needsGeometryCorrection)
+            // Every distinct pixel shift actually needed (the "raw" shift, and/or the continuum shift)
+            // is reconstructed together in one sequential pass over the file below, rather than each
+            // shift re-opening and re-reading the whole file from scratch - see DiskReconstructor.
+            // ReconstructMultiple's own doc comment for why that's a real, measured cost worth avoiding.
+            var needsRawReconstruction = wantsRaw || wantsReconstruction || needsGeometryCorrection;
+            if (needsRawReconstruction || wantsContinuum)
             {
                 using var reader = _serReaderFactory();
                 reader.Open(serFilePath);
-                progress?.Report("Reconstructing Raw...");
-                var raw = new DiskReconstructor().Reconstruct(reader, polynomial.Value, spectrumParams.PixelShift, progress, cancellationToken);
                 var nativeBitDepth = reader.Header.PixelDepth;
 
-                if (wantsRaw || wantsReconstruction)
+                var shifts = new List<double>();
+                if (needsRawReconstruction)
                 {
-                    var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, nativeBitDepth);
-                    if (wantsRaw)
-                    {
-                        images.Add(rawImage);
-                    }
-
-                    if (wantsReconstruction)
-                    {
-                        // JSolex's "Reconstruction" is a progressive *live-display* variant of the same
-                        // reconstruction, not a separately computed image - SolScan has no live progress
-                        // view yet to make that distinction meaningful, so it's saved as the same data.
-                        images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
-                    }
+                    shifts.Add(spectrumParams.PixelShift);
                 }
 
-                if (needsGeometryCorrection)
+                if (wantsContinuum)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    progress?.Report("Fitting disk ellipse and correcting geometry...");
-                    var maxPixelValue = (1 << nativeBitDepth) - 1;
-                    geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
-                    // From here on, use the effective SpectrumParams (spectrumParams), not the
-                    // originally-configured processParams.SpectrumParams - see this class's own doc
-                    // comment for why the two can differ.
-                    var effectiveProcessParams = processParams with { SpectrumParams = spectrumParams };
-                    if (wantsGeometryCorrected)
-                    {
-                        images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
-                    }
+                    shifts.Add(spectrumParams.ContinuumShift);
+                }
 
-                    if (wantsVirtualEclipse)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        progress?.Report("Generating virtual eclipse...");
-                        var scaled = ScaleToContainerRange(geometryResult.Value.Pixels, maxPixelValue);
-                        var eclipse = Coronagraph.Produce(scaled, geometryResult.Value.CorrectedEllipse);
-                        images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.VirtualEclipse, eclipse));
-                    }
+                progress?.Report(needsRawReconstruction && wantsContinuum
+                    ? "Reconstructing Raw and Continuum..."
+                    : needsRawReconstruction ? "Reconstructing Raw..." : "Reconstructing Continuum...");
+                var reconstructed = new DiskReconstructor().ReconstructMultiple(reader, polynomial.Value, shifts, progress, cancellationToken);
+                var nextShiftIndex = 0;
 
-                    if (needsContrastEnhancement)
+                if (needsRawReconstruction)
+                {
+                    var raw = reconstructed[nextShiftIndex++];
+
+                    if (wantsRaw || wantsReconstruction)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
-                        var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, effectiveProcessParams, maxPixelValue);
-                        if (wantsGeometryCorrectedProcessed)
+                        var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, nativeBitDepth);
+                        if (wantsRaw)
                         {
-                            images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                            images.Add(rawImage);
                         }
 
-                        if (wantsColorized)
+                        if (wantsReconstruction)
+                        {
+                            // JSolex's "Reconstruction" is a progressive *live-display* variant of the
+                            // same reconstruction, not a separately computed image - SolScan has no live
+                            // progress view yet to make that distinction meaningful, so it's saved as
+                            // the same data.
+                            images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
+                        }
+                    }
+
+                    if (needsGeometryCorrection)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report("Fitting disk ellipse and correcting geometry...");
+                        var maxPixelValue = (1 << nativeBitDepth) - 1;
+                        geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
+                        // Reported as soon as it's known - see the distortion-polynomial progress
+                        // report above for why (real-time narration, not just the final result).
+                        progress?.Report($"Disk tilt: {geometryResult.Value.TiltDegrees:F2}°, X/Y ratio: {geometryResult.Value.XyRatio:F3}.");
+                        // From here on, use the effective SpectrumParams (spectrumParams), not the
+                        // originally-configured processParams.SpectrumParams - see this class's own doc
+                        // comment for why the two can differ.
+                        var effectiveProcessParams = processParams with { SpectrumParams = spectrumParams };
+                        if (wantsGeometryCorrected)
+                        {
+                            images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
+                        }
+
+                        if (wantsVirtualEclipse)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
-                            progress?.Report("Colorizing...");
-                            var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
-                            var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, spectrumParams.Ray);
-                            if (colorized is not null)
+                            progress?.Report("Generating virtual eclipse...");
+                            var scaled = ScaleToContainerRange(geometryResult.Value.Pixels, maxPixelValue);
+                            var eclipse = Coronagraph.Produce(scaled, geometryResult.Value.CorrectedEllipse);
+                            images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.VirtualEclipse, eclipse));
+                        }
+
+                        if (needsContrastEnhancement)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
+                            var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, effectiveProcessParams, maxPixelValue);
+                            if (wantsGeometryCorrectedProcessed)
                             {
-                                colorImages.Add(colorized);
+                                images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                            }
+
+                            if (wantsColorized)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                progress?.Report("Colorizing...");
+                                var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
+                                var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, spectrumParams.Ray);
+                                if (colorized is not null)
+                                {
+                                    colorImages.Add(colorized);
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if (wantsContinuum)
-            {
-                using var reader = _serReaderFactory();
-                reader.Open(serFilePath);
-                progress?.Report("Reconstructing Continuum...");
-                var continuum = new DiskReconstructor().Reconstruct(reader, polynomial.Value, spectrumParams.ContinuumShift, progress, cancellationToken);
-                images.Add(BuildProcessedImage(GeneratedImageKind.Continuum, continuum, reader.Header.PixelDepth));
+                if (wantsContinuum)
+                {
+                    var continuum = reconstructed[nextShiftIndex++];
+                    images.Add(BuildProcessedImage(GeneratedImageKind.Continuum, continuum, nativeBitDepth));
+                }
             }
         }
 

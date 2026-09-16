@@ -100,6 +100,56 @@ public class SerReaderTests
     }
 
     [Fact]
+    public void ReadFrame_CalledConcurrentlyFromMultipleThreads_ReturnsCorrectUncorruptedDataForEachIndex()
+    {
+        // The one genuinely new behaviour this class's own RandomAccess.Read rewrite introduces -
+        // ReadFrame no longer touches any shared mutable position field, so it should be safe to call
+        // from many threads at once against a single open SerReader instance (what FrameAverager/
+        // DiskReconstructor now both rely on for their own parallel loops). Each frame is filled with a
+        // distinct byte value, so any cross-thread corruption (e.g. one call's read landing at another
+        // call's offset) would show up as a wrong/mixed byte value for some frame.
+        const int width = 8;
+        const int height = 6;
+        const int bitDepth = 8;
+        const int frameCount = 64;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            using (var writer = new SerWriter())
+            {
+                writer.Open(path, width, height, bitDepth);
+                for (var i = 0; i < frameCount; i++)
+                {
+                    var data = new byte[width * height];
+                    Array.Fill(data, (byte)i);
+                    writer.WriteFrame(new CameraFrame(data, width, height, bitDepth, DateTime.UtcNow));
+                }
+
+                writer.Close();
+            }
+
+            using var reader = new SerReader();
+            reader.Open(path);
+
+            // Read every frame several times over, interleaved across threads, so a race would have
+            // many chances to show up rather than relying on a single lucky/unlucky ordering.
+            const int passes = 20;
+            Parallel.For(0, frameCount * passes, n =>
+            {
+                var index = n % frameCount;
+                var frame = reader.ReadFrame(index, includeTimestamp: false);
+                Assert.Equal(width * height, frame.Data.Length);
+                Assert.All(frame.Data, b => Assert.Equal((byte)index, b));
+            });
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Open_FileTooShortForHeader_Throws()
     {
         var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");

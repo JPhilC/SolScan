@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -8,6 +9,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using SolScan.App.Services;
 using SolScan.App.ViewModels.Processing;
 using SolScan.App.Views;
 using SolScan.Core.Camera;
@@ -464,15 +466,37 @@ public partial class ProcessViewModel : ObservableObject
         }
 
         _processingCts = new CancellationTokenSource();
+        // Opened inside the try block, not before it - a failure to create the log (e.g. a permissions
+        // issue on the output folder) is reported as an ordinary processing failure by the existing
+        // catch block below, the same as any other file IO failure in this method, rather than crashing
+        // this command outright before Process ever got a chance to run.
+        ProcessingLog? log = null;
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             IsProcessing = true;
+            log = ProcessingLog.OpenNext(SelectedFilePath);
+            LogFileHeader(log, SelectedFilePath);
 
             // Built from the live child view models, not reloaded from disk - see this class's own
             // doc comment for why (the debounce timer may not have flushed a very recent edit yet).
             var processParams = BuildCurrentProcessParams();
             FlushPendingProcessParams(processParams);
-            var progress = new Progress<string>(SetStatus);
+            // ShgProcessor now reports the distortion polynomial, spectral-line identification, and
+            // geometry tilt/ratio via this same progress channel, right when each becomes known - see
+            // its own doc comments - so this method no longer needs to re-derive and log them a second
+            // time, post-hoc, off the final result (see the git history for the version that did).
+            // "Reconstructing... N/M" is deliberately excluded from the persistent log (but still shown
+            // on the status bar) - JSol'Ex's own log has no equivalent per-frame-batch spam, and dozens
+            // of near-identical lines add noise without adding information a reader could act on.
+            var progress = new Progress<string>(message =>
+            {
+                SetStatus(message);
+                if (!message.StartsWith("Reconstructing... ", StringComparison.Ordinal))
+                {
+                    log?.Info(message);
+                }
+            });
 
             // No point re-guessing from the (typically far more tightly cropped) recorded file itself
             // when the live overlay already confidently identified the line at capture time and
@@ -517,21 +541,50 @@ public partial class ProcessViewModel : ObservableObject
             var outputFolder = ProcessingLocations.GetOutputFolder(SelectedFilePath);
             SetStatus(BuildResultSummary(result, outputFolder, ProcessParameters.SelectedRay));
             UpdateResultInfoPanel(result, outputFolder);
+
+            var imageCount = result.Images.Count + (result.ColorImages?.Count ?? 0);
+            log?.Info($"Wrote {imageCount} image(s) under {outputFolder}.");
+            log?.Info("Processing done.");
         }
         catch (OperationCanceledException)
         {
             SetStatus("Processing cancelled.");
+            log?.Info("Processing cancelled.");
         }
         catch (Exception ex)
         {
             SetStatus($"Processing failed: {ex.Message}");
+            log?.Error($"Processing failed: {ex.Message}");
         }
         finally
         {
+            log?.Info($"Finished in {stopwatch.Elapsed.TotalSeconds:F2}s.");
+            log?.Dispose();
             IsProcessing = false;
             _processingCts?.Dispose();
             _processingCts = null;
         }
+    }
+
+    /// <summary>Writes the log's opening lines - output directory, source filename, recording date, and
+    /// the SER header's own basic facts - matching JSol'Ex's own opening lines as closely as SolScan's
+    /// simpler header-reading actually supports (no Carrington rotation/B0/L0/P solar-ephemeris line -
+    /// SolScan doesn't compute those). A fresh, cheap (178-byte) header read, rather than reusing
+    /// whatever <see cref="LoadSelectedFile"/> last read - keeps this method self-contained and correct
+    /// even if the file changed on disk since it was picked.</summary>
+    private void LogFileHeader(ProcessingLog log, string serFilePath)
+    {
+        log.Info($"Output directory set to {ProcessingLocations.GetOutputFolder(serFilePath)}");
+        log.Info($"File {Path.GetFileName(serFilePath)}");
+
+        using var reader = _serReaderFactory();
+        reader.Open(serFilePath);
+        var header = reader.Header;
+        var bytesPerPixel = header.PixelDepth <= 8 ? 1 : 2;
+        log.Info($"Date {header.DateTimeUtc:yyyy-MM-ddTHH:mm:ss.ffffff}");
+        log.Info($"SER file contains {header.FrameCount} frames");
+        log.Info($"Color mode : MONO ({bytesPerPixel} bytes per pixel, depth = {header.PixelDepth} bits)");
+        log.Info($"Width: {header.Width}, height: {header.Height}");
     }
 
     [RelayCommand(CanExecute = nameof(IsProcessing))]

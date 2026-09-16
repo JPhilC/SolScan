@@ -24,4 +24,11 @@ public static class ProcessingLocations
     /// for which <see cref="GeneratedImageKind"/> maps to which <see cref="DirectoryKind"/>.</summary>
     public static string GetImagesFolder(string serFilePath, DirectoryKind directoryKind) =>
         Path.Combine(GetOutputFolder(serFilePath), directoryKind.ToString().ToLowerInvariant());
+
+    /// <summary>Where a per-run processing log (<c>SolScan.App.Services.ProcessingLog</c>) is written
+    /// for a given <c>.ser</c> capture - a peer of <see cref="GetImagesFolder"/>'s own "raw"/"processed"
+    /// subfolders, named "log" - matching JSol'Ex's own log placement, even though "log" isn't itself a
+    /// <see cref="DirectoryKind"/> (SolScan generates no image kind that lives there).</summary>
+    public static string GetLogsFolder(string serFilePath) =>
+        Path.Combine(GetOutputFolder(serFilePath), "log");
 }

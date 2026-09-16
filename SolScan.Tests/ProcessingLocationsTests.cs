@@ -38,6 +38,18 @@ public class ProcessingLocationsTests
             imagesFolder);
     }
 
+    [Fact]
+    public void GetLogsFolder_IsALogSubfolderOfTheOutputFolder()
+    {
+        var serFilePath = Path.Combine("C:", "Raw", "SolScan", "20250831", "SolScan_20250831_161427.ser");
+
+        var logsFolder = ProcessingLocations.GetLogsFolder(serFilePath);
+
+        Assert.Equal(
+            Path.Combine("C:", "Raw", "SolScan", "20250831", "SolScan_20250831_161427", "log"),
+            logsFolder);
+    }
+
     [Theory]
     [InlineData(GeneratedImageKind.Raw, DirectoryKind.Raw)]
     [InlineData(GeneratedImageKind.Reconstruction, DirectoryKind.Raw)]

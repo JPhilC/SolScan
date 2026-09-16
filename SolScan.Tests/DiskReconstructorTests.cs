@@ -85,6 +85,79 @@ public class DiskReconstructorTests
         }
     }
 
+    [Fact]
+    public void ReconstructMultiple_DistinctShifts_ProducesIndependentCorrectValuesInOnePass()
+    {
+        // Same ramp fixture as the single-shift tests above (source[y,x] = y), read only once here -
+        // this is the regression check that merging Raw/Continuum into one sequential pass (see
+        // ShgProcessor's own doc comment) didn't mix up which output belongs to which requested shift.
+        const int width = 4;
+        const int height = 20;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteRampFrames(path, width, height, frameCount: 1);
+
+            using var reader = new SerReader();
+            reader.Open(path);
+
+            var polynomial = new QuadraticPolynomial(0, 0, 10); // constant row 10, well within [0,20)
+            var outputs = new DiskReconstructor().ReconstructMultiple(reader, polynomial, [0, 3, -2]);
+
+            Assert.Equal(3, outputs.Count);
+            for (var x = 0; x < width; x++)
+            {
+                // A linear ramp's symmetric Gaussian blend around any row is exactly that row's value.
+                Assert.Equal(10.0, outputs[0][0, x], precision: 3);
+                Assert.Equal(13.0, outputs[1][0, x], precision: 3);
+                Assert.Equal(8.0, outputs[2][0, x], precision: 3);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ReconstructMultiple_SingleShift_MatchesReconstruct()
+    {
+        // Reconstruct now delegates to ReconstructMultiple internally - this confirms that delegation
+        // is behaviour-preserving, on top of Reconstruct's own two existing tests above continuing to
+        // pass unchanged.
+        const int width = 3;
+        const int height = 12;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteRampFrames(path, width, height, frameCount: 2);
+
+            using var reader = new SerReader();
+            reader.Open(path);
+            var polynomial = new QuadraticPolynomial(0, 0, 6);
+
+            var viaSingle = new DiskReconstructor().Reconstruct(reader, polynomial, pixelShift: 1.5);
+
+            reader.Close();
+            reader.Open(path);
+            var viaMultiple = new DiskReconstructor().ReconstructMultiple(reader, polynomial, [1.5])[0];
+
+            for (var f = 0; f < 2; f++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    Assert.Equal(viaSingle[f, x], viaMultiple[f, x], precision: 6);
+                }
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     /// <summary>Writes <paramref name="frameCount"/> identical frames where every pixel's value
     /// equals its own row index (source[y,x] = y) - a simple, linear, easy-to-hand-verify pattern.</summary>
     private static void WriteRampFrames(string path, int width, int height, int frameCount)

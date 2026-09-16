@@ -47,7 +47,15 @@ public interface ISerReader : IDisposable
     /// file's per-frame trailer when present; falls back to <see cref="DateTime.MinValue"/> for a file
     /// too short to carry one (real-world files not written by <see cref="ISerWriter"/> - e.g. some
     /// Sunscan captures - may omit it entirely).</summary>
-    CameraFrame ReadFrame(int index);
+    /// <param name="includeTimestamp">False skips reading the per-frame trailer entirely (always
+    /// returning <see cref="DateTime.MinValue"/> instead) - worth passing for a caller that reads every
+    /// frame in a hot loop and never looks at <c>TimestampUtc</c> anyway (<see cref="SolScan.Processing.Shg.FrameAverager"/>/
+    /// <see cref="SolScan.Processing.Shg.DiskReconstructor"/>): the trailer sits at the far end of the
+    /// file, past every frame's own pixel data, so reading it every call means every single frame read
+    /// jumps the file position there and back rather than advancing straight through the file - real,
+    /// measured cost on a real multi-GB capture, not a theoretical one. Defaults true, preserving the
+    /// original behaviour for every other caller.</param>
+    CameraFrame ReadFrame(int index, bool includeTimestamp = true);
 
     void Close();
 }

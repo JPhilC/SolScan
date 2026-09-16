@@ -1778,6 +1778,184 @@ it: recordings made before this fix existed, or a StudiedRay that was never conf
 harmless, occasionally useful, but no longer the primary mechanism this feature relies on for new
 captures going forward.
 
+Also real: **two processing-performance fixes**, prompted by the user comparing SolScan's own
+processing time against JSol'Ex processing the exact same Calcium K file (2914 frames, 4656x130,
+8-bit) with the same options - JSol'Ex's own log reported 29.86s total, "Reconstruction performance:
+1062.6 MB/s". Investigated by reading `FrameAverager`/`DiskReconstructor`/`SerReader` directly rather
+than guessing, which turned up two concrete, unforced inefficiencies (a third, parallelizing the
+per-frame work the way JSol'Ex's own batched/multi-core reconstruction clearly does, was deliberately
+deferred - see the "Placeholder" note below - since it needs real architectural care, not a quick fix):
+
+1. **Every single frame read seeked to the far end of the file and back.** `SerReader.ReadFrame`
+   unconditionally read the per-frame timestamp trailer (stored *after* every frame's own pixel data,
+   at the very end of the file) even though neither `FrameAverager` nor `DiskReconstructor` - both
+   hot, whole-file-scanning loops - ever look at a frame's `TimestampUtc` at all (confirmed by reading
+   `FrameConversion.ToFloatArray`/`MeanOf`, which only ever touch `Data`/`Width`/`Height`/`BitDepth`).
+   So every frame read jumped the file position from "wherever this frame's pixel data is" to "the
+   very end of the file" and back, defeating any chance of sequential I/O across the whole
+   reconstruction pipeline - a real, measured-pattern cost, not a theoretical one. Fixed with a new
+   `ISerReader.ReadFrame(int index, bool includeTimestamp = true)` overload (default preserves the
+   original behaviour for every other caller, e.g. `SerCropper`, which genuinely needs real
+   timestamps) - `FrameAverager`'s two loops and `DiskReconstructor`'s single loop now all pass
+   `includeTimestamp: false`.
+2. **Every separately-requested reconstruction image re-read the entire file from scratch.** A
+   Raw + Continuum request (exactly what the user's own comparison used) opened the file, read every
+   frame for Raw, then opened it *again* and read every frame a second time for Continuum - literally
+   doubling this stage's I/O for a 2-image request, tripling for a hypothetical 3rd shift, and so on.
+   JSol'Ex's own log ("Processing batch 1", one throughput figure for the whole reconstruction) implies
+   it derives every requested pixel-shift image from one shared pass over loaded frames, not a
+   separate pass per shift. Fixed by generalizing `DiskReconstructor.Reconstruct` (single pixel shift,
+   kept as-is, existing callers/tests unchanged) with a new `ReconstructMultiple` (takes a list of
+   pixel shifts, decodes each frame exactly once, and computes every requested shift's own 5-tap blend
+   from that one decoded frame per iteration) - `Reconstruct` now just calls `ReconstructMultiple` with
+   a one-element list, so it's a genuine generalization, not a parallel code path that could drift.
+   `ShgProcessor.Process` now opens one reader for both the "raw" pixel shift (needed for
+   Raw/Reconstruction/geometry correction) and the continuum shift (if requested) and reconstructs
+   both - or however many are actually needed - in that single pass, instead of the old two
+   separately-opened-and-read blocks.
+
+Covered by two new `DiskReconstructorTests` cases: `ReconstructMultiple` given several distinct shifts
+against a linear-ramp fixture returns independently correct values for each one (the regression check
+that merging Raw/Continuum into one pass didn't mix up which output belongs to which requested shift -
+exactly the kind of subtle bug this refactor could otherwise introduce silently), and
+`ReconstructMultiple` with a single shift produces byte-identical output to `Reconstruct` (proving the
+delegation is behaviour-preserving, on top of `Reconstruct`'s own two pre-existing tests continuing to
+pass unchanged). NOT YET benchmarked against a real file to measure the actual wall-clock improvement -
+both fixes are real, verified-correct reductions in I/O, but no before/after timing was captured
+against the user's own Calcium K file or any other real capture.
+
+Also real (planned via `EnterPlanMode`, same session): **parallelizing the per-frame work across CPU
+cores** - `FrameAverager`'s two loops and `DiskReconstructor.ReconstructMultiple`'s reconstruction loop,
+the way JSol'Ex's own "Reconstruction performance: 1062.6 MB/s" implied its batched, multi-core pipeline
+does. The blocker this was originally deferred for - a single `ISerReader` instance couldn't safely be
+read from multiple threads at once, since `SerReader`'s old `FileStream`/`BinaryReader` pair shared one
+mutable position field - is what got fixed, at the user's own explicit request when asked to choose
+between a lower-risk workaround (a separate reader instance per worker thread) and "doing it properly":
+`SerReader` was rewritten to read via `RandomAccess.Read` against one shared `SafeFileHandle` instead -
+every call carries its own explicit file offset, touching no shared mutable state at all, so `ReadFrame`
+is now genuinely thread-safe on a single already-open instance. This turned out to be the *smaller*
+change, not the bigger one: because no per-caller reader-management changed, `FrameAverager`/
+`DiskReconstructor`/`ShgProcessor` needed **no signature or call-site changes whatsoever** - only their
+inner `for` loops became `Parallel.For`, each still working against the exact same single `ISerReader`
+`ShgProcessor` already opens and passes in today.
+
+`SerReader.Open` now reads the 178-byte header in one `RandomAccess.Read` call and parses fields with
+`System.Buffers.Binary.BinaryPrimitives.ReadInt32/Int64LittleEndian` in place of `BinaryReader.
+ReadInt32/ReadInt64` - a byte-identical replacement, not a behaviour change, since `BinaryReader` always
+reads little-endian regardless of host platform anyway. The file's length is queried once via
+`RandomAccess.GetLength` and cached (removing a per-frame-timestamp-trailer-call syscall the old
+`_stream.Length` check made every time) rather than re-queried on every `TryReadFrameTimestampUtc` call.
+A new `ReadExactly` helper loops until a `RandomAccess.Read` call's requested buffer is fully filled
+(defensive - a positional read is permitted to return fewer bytes than requested, even though a single
+call reading well within a local file's own bounds essentially always returns the full amount in
+practice). Every existing error path (too-short-file throws `InvalidDataException`, bad index throws
+`ArgumentOutOfRangeException`, calling before `Open` throws `InvalidOperationException`, a missing
+trailer falls back to `DateTime.MinValue`) is unchanged - confirmed by all three pre-existing
+`SerReaderTests` cases passing without modification, which is what actually proves the rewrite is
+byte-identical in behaviour rather than "probably fine." A new fourth `SerReaderTests` case - the one
+genuinely new behaviour being introduced - calls `ReadFrame` concurrently from many threads (20 passes
+over 64 distinctly-byte-filled frames via `Parallel.For`) against one already-open reader and asserts
+every call still returns the correct, uncorrupted data for its own index; the full suite was also run
+four times in a row with no flakiness, since a race condition bug wouldn't necessarily reproduce on
+every single run.
+
+`DiskReconstructor.ReconstructMultiple`'s frame loop is now a `Parallel.For(0, frameCount, ...)` -
+safe because every iteration only ever reads its own `frameIndex` and writes only to
+`outputs[s][frameIndex, x]` for each requested shift `s`, so no two iterations ever touch the same
+memory and no locking is needed for the reconstruction work itself (`QuadraticPolynomial.Evaluate` was
+confirmed to be a pure call on an immutable `readonly record struct`, safe to call concurrently too).
+Progress reporting switched from `frameIndex % 100` to an `Interlocked.Increment`-based completed
+counter, since frames now finish out of order. `FrameAverager`'s two passes both use the
+`Parallel.For<TLocal>` thread-local-reduction overload (`localInit`/`body`/`localFinally`) rather than
+per-iteration locking - pass 1's thread-local `double` max and pass 2's thread-local
+`double[height,width]` partial-sum array are each only merged into the shared result once per *thread*
+in `localFinally`, not once per *frame*, so parallelizing added no per-frame lock contention. Per the
+user's own explicit choice, `FrameAverager`'s two-pass *algorithm* itself (exact max-brightness, then
+accumulate) was deliberately left unchanged - JSol'Ex's own cheaper sampled-max approach remains a
+separate, still-deferred idea, not folded into this work, since it would change results, not just speed.
+Cancellation flows through `ParallelOptions.CancellationToken` in all three loops; since the loop bodies
+also call `cancellationToken.ThrowIfCancellationRequested()` with that same token, `Parallel.For`
+rethrows a bare (unwrapped) `OperationCanceledException` on cancellation, so existing
+`catch (OperationCanceledException)` call sites (`ProcessViewModel.ProcessAsync`) needed no changes.
+
+All 161 tests pass (the pre-existing `FrameAveragerTests`/`DiskReconstructorTests`/`ShgProcessorTests`
+cases use tolerant `precision:` assertions on simple constant/ramp fixtures, not exact bit-level checks,
+so the different accumulation order from parallelization doesn't trip them). NOT YET benchmarked against
+a real file to measure the actual wall-clock improvement, same caveat as the two I/O fixes above - worth
+timing against the user's own real Calcium K file to see how close SolScan now gets to JSol'Ex's 29.86s,
+though matching it exactly was never the bar (JSol'Ex is a mature, long-optimized pipeline; meaningful
+improvement is the goal, not parity).
+
+Also real: a **per-run processing log**, requested directly by the user after seeing JSol'Ex's own
+`.log` output for the same Calcium K file and asking for something along the same lines. `ProcessingLocations`
+gained `GetLogsFolder` (a peer of the existing `GetImagesFolder`'s "raw"/"processed" subfolders, named
+"log" - not itself a `DirectoryKind`, since no `GeneratedImageKind` lives there) and a new
+`SolScan.App.Services.ProcessingLog` writes JSol'Ex-style timestamped lines (`HH:mm:ss.fff [LEVEL]
+message`) to a numbered file there - `<NNNN>_<basename>.log`, sequence starting at `0000` and
+incrementing one past whatever's already there each time the same file is re-processed (not
+"count of files present", so a manually deleted log in the middle of the sequence doesn't get its
+number reused - confirmed with a throwaway scratch script exercising three successive runs against the
+same file before landing this in the real codebase). Deliberately not a Core-interface/Infrastructure-
+implementation pair the way `ICaptureMetadataStore`/etc. are - a single sequential text-file writer
+with no swappable implementation or hardware dependency anywhere, so that ceremony would be pure
+abstraction with nothing to abstract over; it writes files directly the same way `ProcessViewModel`'s
+own pre-existing `SavePng`/`SaveColorPng` already do.
+
+`ProcessViewModel.ProcessAsync` opens the log (inside the `try` block, not before it - a failure to
+create it, e.g. a permissions issue, is reported as an ordinary processing failure by the existing
+catch block rather than crashing the command outright) and writes: the output directory, source
+filename, recording date, and a fresh, cheap SER header read (frame count, colour mode/bit depth,
+width/height - JSol'Ex's own Carrington rotation/B0/L0/P solar-ephemeris line has no SolScan equivalent,
+so it's simply absent rather than faked); every `IProgress<string>` message `ShgProcessor` reports
+(minus "Reconstructing... N/M" - see the follow-up below), via a progress wrapper that also logs each
+message it forwards to the status bar; a final image count/output folder line, "Processing done", and
+"Finished in Ns" (a `Stopwatch` wrapping the whole run). JSol'Ex's own per-batch memory-pressure/
+throughput lines and parallactic-angle/diameter figures have no SolScan equivalent either (no per-stage
+instrumentation to report throughput honestly, and no angular-diameter calculation at all) and are
+likewise just absent - the log's content is scoped to what SolScan's own pipeline genuinely computes,
+not padded to look like a complete match. Covered by a new `ProcessingLocationsTests` case for
+`GetLogsFolder`'s own path convention; `ProcessingLog` itself (in `SolScan.App`, which `SolScan.Tests`
+doesn't reference) has no automated test, matching this codebase's existing precedent of not
+unit-testing the WPF view-model/service layer directly (`CaptureViewModel`, `SavePng`, `TestImageLoader`
+are all in the same position).
+
+**Follow-up, the same session, once the user shared a real side-by-side JSol'Ex log for the same file**:
+two real fixes, plus a genuinely useful reframing of the earlier "speeding up processing" findings.
+
+The log's own ordering didn't match JSol'Ex's: the distortion polynomial, spectral-line identification
+outcome, and geometry tilt/XY ratio were all originally logged only at the very end (read off the final
+`ShgProcessingResult`, after the whole pipeline - including reconstruction, geometry correction, and
+contrast enhancement/colorization - had already finished), whereas JSol'Ex logs each fact right when
+it's discovered. Fixed by moving these into `ShgProcessor.Process` itself as three new `progress.Report(...)`
+calls, right where each value becomes known - immediately after `SpectralLineCurvatureDetector.Detect`
+(the polynomial), immediately after `SpectralLineIdentifier.Identify` (confident-match or best-guess
+wording, self-contained rather than reusing `ProcessViewModel`'s own panel-formatting helpers, since
+`ShgProcessor` already has every value the message needs), and immediately after
+`DiskGeometryCorrector.Correct` (tilt/XY ratio). `ProcessViewModel.ProcessAsync`'s own post-hoc
+formatting/logging of the same three facts was removed as redundant (the "Processing Results" panel's
+own `FormatLineIdentification`/`FormatDetectedGeometry` calls are untouched - a different, independently
+-worded rendering for a different UI surface, not the log). A new `Date {header.DateTimeUtc:...}` line
+was added to `LogFileHeader` (JSol'Ex's own line was there; SolScan's first cut had simply missed it).
+`"Reconstructing... N/M"` is now excluded from the persistent log (filtered in the progress wrapper,
+matched by string prefix - still shown live on the status bar) - JSol'Ex's own log has no equivalent
+per-frame-batch spam, and roughly 30 near-identical lines per run added noise without adding anything a
+reader could act on.
+
+The real log comparison also reframed the previous "speeding up processing" session's own findings.
+Breaking down both logs stage-by-stage: SolScan's geometry-correction step (21.40s) is actually in the
+same ballpark as JSol'Ex's own equivalent work (ellipse detection 12.14s + geometry resample 8.05s ≈
+20.15s) - not a new regression, just genuinely expensive work for a 2832x2832 output both apps pay for.
+The real, still-open gap is in the stage already touched this session: SolScan's averaging+reconstruction
+took 13.0s moving ~1.76GB (twice, for the two averaging passes) at roughly 200-490MB/s, versus JSol'Ex's
+own reconstruction alone hitting 1220MB/s - accounting for nearly the entire ~11.27s difference in total
+run time (41.34s vs. 30.07s). So the `RandomAccess.Read`/`Parallel.For` work was a real improvement (no
+more double-seeks, no more redundant re-reads) but doesn't come close to the throughput JSol'Ex achieves
+for the same I/O-bound work - worth a controlled back-to-back re-run to rule out cold-vs-warm OS page
+cache as a confound before concluding further, and worth reconsidering the still-deferred sampled-max
+single-pass `FrameAverager` algorithm (currently reads the whole file twice) as the next real lever,
+rather than assuming more parallelism alone will close the gap. Not yet investigated further this
+session - a real, separate follow-up.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
