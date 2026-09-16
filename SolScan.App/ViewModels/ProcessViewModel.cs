@@ -12,6 +12,7 @@ using SolScan.App.ViewModels.Processing;
 using SolScan.App.Views;
 using SolScan.Core.Camera;
 using SolScan.Core.Capture;
+using SolScan.Core.Equipment;
 using SolScan.Core.Processing;
 using SolScan.Processing.Shg;
 
@@ -69,6 +70,13 @@ public partial class ProcessViewModel : ObservableObject
     private CancellationTokenSource? _processingCts;
     private SerCropWindow? _serCropWindow;
 
+    /// <summary>The currently-selected file's equipment sidecar, if any - read once in
+    /// <see cref="LoadSelectedFile"/>, kept around so <see cref="ProcessAsync"/> can build a
+    /// <see cref="LineIdentificationEquipment"/> from it without re-reading the sidecar. Null both
+    /// before any file is picked and when the selected file has no sidecar at all - see
+    /// <see cref="BuildIdentificationEquipment"/> for the fallback that applies either way.</summary>
+    private CaptureMetadata? _loadedMetadata;
+
     // Debounces the auto-save triggered by ProcessParameters/ImageEnhancement/ImageSelection's own
     // PropertyChanged events - see this class's own doc comment for why.
     private DispatcherTimer? _persistProcessParamsDebounceTimer;
@@ -120,10 +128,14 @@ public partial class ProcessViewModel : ObservableObject
     private string detectedGeometryText = NoGeometryDetectedYetText;
 
     [ObservableProperty]
+    private string identifiedLineText = NoLineIdentifiedYetText;
+
+    [ObservableProperty]
     private string resultImagesText = NoImagesYetText;
 
     private const string NoLineDetectedYetText = "No spectral line curve detected yet.";
     private const string NoGeometryDetectedYetText = "No geometry correction detected yet.";
+    private const string NoLineIdentifiedYetText = "No automatic line identification run yet.";
     private const string NoImagesYetText = "Run Process to generate output images.";
 
     /// <summary>Whatever `.png` files are actually sitting in the current file's `raw`/`processed`
@@ -322,6 +334,22 @@ public partial class ProcessViewModel : ObservableObject
         ImageEnhancement.ToClahe2Params(),
         ImageEnhancement.ToAutoStretchParams());
 
+    /// <summary>Builds the optics <see cref="IShgProcessor.ProcessAsync"/> needs to auto-identify the
+    /// studied line - the real equipment from <see cref="_loadedMetadata"/>'s sidecar wherever it's
+    /// known, falling back field-by-field otherwise. Never null: even a file with no sidecar at all
+    /// (the exact case this feature is for - see this class's own doc comment) still gets a reasonable
+    /// guess, the same "Sol'Ex-standard SHG, 2µm-pixel-size-ballpark camera, no binning" fallback
+    /// <c>SolScan.Tools</c>' own <c>annotate</c> command already established - <see cref="ShgProcessor"/>
+    /// itself decides whether to actually use this based on <see cref="LineDetectionMode"/>, so supplying
+    /// it unconditionally here costs nothing when the mode is Manual.</summary>
+    private LineIdentificationEquipment BuildIdentificationEquipment()
+    {
+        var instrument = _loadedMetadata?.Spectrograph ?? SpectrographProfile.CreateSolEx();
+        var pixelSizeMicrons = _loadedMetadata?.Camera?.PixelSizeMicrons ?? _appSettingsStore.Load().SpectralOverlayFallbackPixelSizeMicrons;
+        var binning = _loadedMetadata?.CameraSettingsUsed?.Binning ?? 1;
+        return new LineIdentificationEquipment(instrument, pixelSizeMicrons, binning);
+    }
+
     private bool CanBrowse() => !IsProcessing;
 
     [RelayCommand(CanExecute = nameof(CanBrowse))]
@@ -380,7 +408,9 @@ public partial class ProcessViewModel : ObservableObject
         // the three properties' own doc comment for why there's no way to recover them from disk.
         DetectedLineText = NoLineDetectedYetText;
         DetectedGeometryText = NoGeometryDetectedYetText;
+        IdentifiedLineText = NoLineIdentifiedYetText;
         ResultImagesText = NoImagesYetText;
+        _loadedMetadata = null;
 
         try
         {
@@ -391,6 +421,7 @@ public partial class ProcessViewModel : ObservableObject
                 + $"{header.FrameCount} frame(s), recorded {header.DateTimeUtc:yyyy-MM-dd HH:mm:ss} UTC";
 
             var metadata = _metadataStore.TryRead(SelectedFilePath);
+            _loadedMetadata = metadata;
             EquipmentInfoText = metadata is null
                 ? "No equipment metadata found alongside this file."
                 : $"SHG: {metadata.Spectrograph?.Label ?? "(none)"} · "
@@ -398,10 +429,23 @@ public partial class ProcessViewModel : ObservableObject
                     + $"Camera: {metadata.Camera?.Label ?? "(none)"}";
             CaptureDetailsText = BuildCaptureDetailsText(metadata);
 
+            // The live Capture-view overlay's own confident identification (if the recording carries
+            // one - see CaptureMetadata.StudiedRay's own doc comment) is far more trustworthy than
+            // anything BuildIdentificationEquipment's offline guess could do against an already-cropped
+            // file, so prefill the picker directly from it rather than making the user (or a much
+            // weaker offline identifier - see ProcessAsync's own doc comment) find it again.
+            if (metadata?.StudiedRay is { } studiedRay)
+            {
+                ProcessParameters.SelectedRay = studiedRay;
+                SetStatus($"Loaded. Studied line ({studiedRay.Label}) known from capture - click Process to run reconstruction.");
+            }
+            else
+            {
+                SetStatus("Loaded. Click Process to run spectral-line detection and reconstruction.");
+            }
+
             OutputFolderText = $"Output folder: {ProcessingLocations.GetOutputFolder(SelectedFilePath)}";
             RefreshProcessedImages(SelectedFilePath);
-
-            SetStatus("Loaded. Click Process to run spectral-line detection and reconstruction.");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -429,7 +473,14 @@ public partial class ProcessViewModel : ObservableObject
             var processParams = BuildCurrentProcessParams();
             FlushPendingProcessParams(processParams);
             var progress = new Progress<string>(SetStatus);
-            var result = await _shgProcessor.ProcessAsync(SelectedFilePath, processParams, progress, _processingCts.Token);
+
+            // No point re-guessing from the (typically far more tightly cropped) recorded file itself
+            // when the live overlay already confidently identified the line at capture time and
+            // LoadSelectedFile already prefilled SelectedRay from it - see this class's own doc
+            // comment and CaptureMetadata.StudiedRay's own for why that source is trusted over this
+            // one. Only attempt the offline identifier when the file carries no such answer.
+            var identificationEquipment = _loadedMetadata?.StudiedRay is null ? BuildIdentificationEquipment() : null;
+            var result = await _shgProcessor.ProcessAsync(SelectedFilePath, processParams, identificationEquipment, progress, _processingCts.Token);
 
             // Each kind goes in its own raw/processed subfolder, matching real JSolex's own layout -
             // see GeneratedImageKindExtensions.GetDirectoryKind.
@@ -464,7 +515,7 @@ public partial class ProcessViewModel : ObservableObject
             RefreshProcessedImages(SelectedFilePath, preferColorized: result.ColorImages is { Count: > 0 });
 
             var outputFolder = ProcessingLocations.GetOutputFolder(SelectedFilePath);
-            SetStatus(BuildResultSummary(result, outputFolder));
+            SetStatus(BuildResultSummary(result, outputFolder, ProcessParameters.SelectedRay));
             UpdateResultInfoPanel(result, outputFolder);
         }
         catch (OperationCanceledException)
@@ -673,7 +724,25 @@ public partial class ProcessViewModel : ObservableObject
             ? $"Disk tilt: {tiltDegrees:F2}°, X/Y ratio: {xyRatio:F3}."
             : null;
 
-    private static string BuildResultSummary(ShgProcessingResult result, string outputFolder)
+    /// <summary>Automatic spectral-line identification's own outcome - a third info-panel fragment
+    /// alongside <see cref="FormatDetectedLine"/>/<see cref="FormatDetectedGeometry"/>, though not one
+    /// of astro4j's own two (SolScan-specific, since JSolex has no equivalent live/offline identifier -
+    /// see <see cref="SolScan.Processing.Spectrum.SpectralLineIdentifier"/>'s own doc comment). Null
+    /// when identification wasn't attempted at all (Manual detection mode). <paramref name="configuredRay"/>
+    /// is only used for the "not confident" message, to name what was actually used instead.</summary>
+    private static string? FormatLineIdentification(ShgProcessingResult result, SpectralRay configuredRay)
+    {
+        if (result.IdentifiedRay is not { } ray)
+        {
+            return null;
+        }
+
+        return result.IdentificationConfident
+            ? $"Auto-identified line: {ray.Label} (score {result.IdentificationScore:F2}) - used for this run."
+            : $"Best guess: {ray.Label} (score {result.IdentificationScore:F2}, not confident) - kept the configured line ({configuredRay.Label}) instead.";
+    }
+
+    private static string BuildResultSummary(ShgProcessingResult result, string outputFolder, SpectralRay configuredRay)
     {
         var summary = $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders).";
         if (FormatDetectedLine(result) is { } line)
@@ -684,6 +753,11 @@ public partial class ProcessViewModel : ObservableObject
         if (FormatDetectedGeometry(result) is { } geometry)
         {
             summary += $" {geometry}";
+        }
+
+        if (FormatLineIdentification(result, configuredRay) is { } identification)
+        {
+            summary += $" {identification}";
         }
 
         if (result.SkippedKinds.Count > 0)
@@ -704,6 +778,7 @@ public partial class ProcessViewModel : ObservableObject
     {
         DetectedLineText = FormatDetectedLine(result) ?? NoLineDetectedYetText;
         DetectedGeometryText = FormatDetectedGeometry(result) ?? NoGeometryDetectedYetText;
+        IdentifiedLineText = FormatLineIdentification(result, ProcessParameters.SelectedRay) ?? NoLineIdentifiedYetText;
         ResultImagesText = result.SkippedKinds.Count > 0
             ? $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders). "
                 + $"Not yet implemented: {string.Join(", ", result.SkippedKinds)}."

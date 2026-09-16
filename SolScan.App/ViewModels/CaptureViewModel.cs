@@ -43,6 +43,25 @@ public partial class CaptureViewModel : ObservableObject
     private static readonly TimeSpan SpectralOverlayUpdateInterval = TimeSpan.FromMilliseconds(400);
     private DateTime _lastSpectralOverlayUtc = DateTime.MinValue;
 
+    /// <summary>The most recently *confident* live spectral-line identification (see
+    /// <see cref="SpectralOverlayAnalyzer"/>/<see cref="SpectralLineIdentifier"/>) - null until the
+    /// overlay first confidently locks onto a line, and reset whenever live view (re)starts (see
+    /// <see cref="ToggleLiveViewAsync"/>), same "not meaningful carried over from a previous session"
+    /// reasoning as <see cref="_bestEdgeWidthPixels"/>. Read by <see cref="WriteCaptureMetadata"/> to
+    /// populate <see cref="CaptureMetadata.StudiedRay"/> - the point of this field existing at all is
+    /// closing the "no metadata for the scan" gap at its source (a full-frame, tightly-cropped
+    /// recording has nowhere near enough spectral context to identify its own line after the fact -
+    /// see this session's own investigation), rather than trying to recover it from an already-cropped
+    /// file later. Written only from the background preview-processing thread (<see cref="ProcessPreviewFrame"/>),
+    /// same single-writer-via-<see cref="_previewProcessingInFlight"/> threading rationale as
+    /// <see cref="_lastSpectralOverlayUtc"/> - a plain field is safe here for the same reason.
+    /// Deliberately never cleared just because a later tick turns unconfident - it's "the last line
+    /// the overlay was sure about", which stays a reasonable answer through a few noisy/ambiguous
+    /// frames. Can go stale if the user changes lines and starts recording before a fresh confident
+    /// read arrives - a known, accepted gap (a slightly-stale line is still more useful than always
+    /// writing null).</summary>
+    private SpectralRay? _lastConfidentSpectralRay;
+
     // "Find Sun" fine-tune (see FindSunAsync) - a simple brightness hill-climb, not the full
     // spiral-search-then-hill-climb algorithm CLAUDE.md's "Visual fine-centering" describes: the
     // ephemeris slew should already land the Sun somewhere in frame, so there's no need for a
@@ -976,6 +995,7 @@ public partial class CaptureViewModel : ObservableObject
         _frameArrivalCount = 0;
         _lastFrameRateUpdateUtc = DateTime.UtcNow;
         ResetBestEdgeWidth(); // a "best" carried over from a previous live-view session isn't meaningful for this one
+        _lastConfidentSpectralRay = null; // same reasoning - a confident line from a previous session/line isn't meaningful for this one
         SelectedCamera.FrameCaptured += OnFrameCaptured;
         await SelectedCamera.StartStreamingAsync();
         IsLive = true;
@@ -1162,7 +1182,10 @@ public partial class CaptureViewModel : ObservableObject
     /// was snapshotted from have since changed. Any field can end up null (e.g. no Equipment Setup
     /// ever picked, or the mount wasn't connected) - written anyway, rather than skipped, so a
     /// recording still gets a metadata file either way. <see cref="CaptureMetadata.StudiedRay"/> is
-    /// always null for now - see that field's own doc comment for why.
+    /// <see cref="_lastConfidentSpectralRay"/> - the live overlay's own last confident identification,
+    /// if any - rather than always null: see that field's own doc comment for why this, not offline
+    /// identification against the (typically far more tightly cropped) recorded file itself, is where
+    /// this gap actually gets closed.
     /// </summary>
     private void WriteCaptureMetadata(string serFilePath)
     {
@@ -1179,7 +1202,8 @@ public partial class CaptureViewModel : ObservableObject
             _connectedCameraProfile,
             DateTime.UtcNow,
             _connectedCamera is not null ? BuildCurrentCameraSettings() : null,
-            BuildMountPointingSnapshot()));
+            BuildMountPointingSnapshot(),
+            _lastConfidentSpectralRay));
     }
 
     /// <summary>The SHG currently picked as part of Prepare's Equipment Setup, or null if none/nothing's
@@ -1920,6 +1944,15 @@ public partial class CaptureViewModel : ObservableObject
                     var maxShiftPixels = Math.Max(1, frame.Height / 2) - 1;
                     var overlay = SpectralOverlayAnalyzer.Analyze(frame, instrument, pixelSizeMicrons, SelectedBinning, maxShiftPixels);
                     var downsampleScale = FramePreview.ComputeDownsampleScale(frame.Width, frame.Height, stretchMaxDimension);
+
+                    // See _lastConfidentSpectralRay's own doc comment - this is what actually closes
+                    // the "no metadata for the scan" gap, by capturing a confident live identification
+                    // (made against the wide, uncropped preview, where there's real spectral context)
+                    // before a recording ever gets cropped down to just the studied line.
+                    if (overlay.Identification.IdentifiedRay is { } confidentRay)
+                    {
+                        _lastConfidentSpectralRay = confidentRay;
+                    }
 
                     // Diagnostic-only (shown in the "Spectral Overlay" Expander) - real numbers to check
                     // against rather than guessing from what's on screen, same reasoning as

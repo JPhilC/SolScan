@@ -1,12 +1,16 @@
 using SolScan.Core.Camera;
+using SolScan.Core.Equipment;
 using SolScan.Core.Processing;
 using SolScan.Infrastructure.Capture;
 using SolScan.Processing.Shg;
+using SolScan.Processing.Spectrum;
 
 namespace SolScan.Tests;
 
 public class ShgProcessorTests
 {
+    private static readonly SpectrographProfile Instrument = SpectrographProfile.CreateSolEx();
+    private const double PixelSizeMicrons = 2.0;
     [Fact]
     public async Task ProcessAsync_ProducesRequestedImages()
     {
@@ -82,6 +86,137 @@ public class ShgProcessorTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AutoDetectionMode_NoEquipmentSupplied_SkipsIdentificationGracefully()
+    {
+        // Regression guard: ProcessParams.CreateDefault()'s own DetectionMode is Auto, not Manual - a
+        // caller (or existing test) that omits identificationEquipment entirely must keep getting
+        // exactly the pre-existing behaviour (no identification attempted, no exception), since
+        // there's nothing to compute dispersion against without it.
+        const int width = 20;
+        const int height = 15;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticFile(path, width, height, frameCount: 5, lineRow: 7, background: 1000, depth: 800, sigma: 1.5);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var processParams = ProcessParams.CreateDefault() with { RequestedImages = new RequestedImages([GeneratedImageKind.Raw]) };
+
+            var result = await processor.ProcessAsync(path, processParams);
+
+            Assert.Single(result.Images);
+            Assert.Null(result.IdentifiedRay);
+            Assert.Null(result.IdentificationScore);
+            Assert.False(result.IdentificationConfident);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ManualDetectionMode_NeverAttemptsIdentificationEvenWithEquipmentSupplied()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            // A profile sampled from the real bundled H-alpha window - identification would confidently
+            // recognise this as H-alpha if it ran at all (see the Auto-mode test below), so Manual
+            // reporting no identification proves it genuinely wasn't attempted, not just that it failed.
+            WriteSyntheticFileFromBundledLine(path, SpectralRay.HAlpha, width: 10, frameCount: 3);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var defaults = ProcessParams.CreateDefault();
+            var processParams = defaults with
+            {
+                RequestedImages = new RequestedImages([GeneratedImageKind.Raw]),
+                SpectrumParams = defaults.SpectrumParams with { Ray = SpectralRay.CalciumK, DetectionMode = LineDetectionMode.Manual },
+            };
+
+            var result = await processor.ProcessAsync(path, processParams, new LineIdentificationEquipment(Instrument, PixelSizeMicrons));
+
+            Assert.Null(result.IdentifiedRay);
+            Assert.Null(result.IdentificationScore);
+            Assert.False(result.IdentificationConfident);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AutoDetectionMode_WithEquipmentSupplied_IdentifiesConfidentLineAndOverridesConfiguredRay()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticFileFromBundledLine(path, SpectralRay.HAlpha, width: 10, frameCount: 3);
+
+            var processor = new ShgProcessor(() => new SerReader());
+            var defaults = ProcessParams.CreateDefault();
+            var processParams = defaults with
+            {
+                RequestedImages = new RequestedImages([GeneratedImageKind.Raw]),
+                // Deliberately wrong, to prove a confident identification overrides it rather than
+                // merely agreeing with whatever happened to already be configured.
+                SpectrumParams = defaults.SpectrumParams with { Ray = SpectralRay.CalciumK, DetectionMode = LineDetectionMode.Auto },
+            };
+
+            var result = await processor.ProcessAsync(path, processParams, new LineIdentificationEquipment(Instrument, PixelSizeMicrons));
+
+            Assert.Equal(SpectralRay.HAlpha, result.IdentifiedRay);
+            Assert.True(result.IdentificationConfident);
+            Assert.True(result.IdentificationScore > 0.9, $"Expected a strong match, got {result.IdentificationScore}.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>Builds a synthetic SER file whose per-row intensity (identical across every column and
+    /// frame - no curvature, no disk shape, matching <see cref="WriteSyntheticFile"/>'s own convention)
+    /// is sampled from the real bundled reference window for <paramref name="ray"/> - a genuine
+    /// solar-atlas-shaped profile <see cref="SpectralLineIdentifier"/> should confidently recognise,
+    /// not an idealized Gaussian (same rationale as <c>SpectralLineIdentifierTests</c>' own
+    /// real-bundled-window regression test).</summary>
+    private static void WriteSyntheticFileFromBundledLine(string path, SpectralRay ray, int width, int frameCount)
+    {
+        var window = ReferenceWindowResource.LoadEmbedded().Single(w => Math.Abs(w.CenterWavelengthAngstroms - ray.WavelengthAngstroms) < 0.01);
+        var dispersion = SpectralDispersion.ComputeAngstromsPerPixel(Instrument, ray.WavelengthAngstroms, PixelSizeMicrons);
+        var maxShiftPixels = (int)(window.StepAngstroms * (window.Intensities.Count - 1) / 2.0 / dispersion) - 5;
+        var height = (2 * maxShiftPixels) + 1;
+
+        using var writer = new SerWriter();
+        writer.Open(path, width, height, 16);
+        for (var f = 0; f < frameCount; f++)
+        {
+            var data = new byte[width * height * 2];
+            for (var y = 0; y < height; y++)
+            {
+                var shift = y - maxShiftPixels;
+                var wavelength = window.CenterWavelengthAngstroms + (shift * dispersion);
+                var value = (ushort)Math.Clamp(window.IntensityAt(wavelength) ?? 0, 0, 65535);
+                for (var x = 0; x < width; x++)
+                {
+                    var index = ((y * width) + x) * 2;
+                    data[index] = (byte)(value & 0xFF);
+                    data[index + 1] = (byte)((value >> 8) & 0xFF);
+                }
+            }
+
+            writer.WriteFrame(new CameraFrame(data, width, height, 16, DateTime.UtcNow));
+        }
+
+        writer.Close();
     }
 
     private static void WriteSyntheticFile(string path, int width, int height, int frameCount, int lineRow, double background, double depth, double sigma)

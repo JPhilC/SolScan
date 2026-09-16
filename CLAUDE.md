@@ -1654,6 +1654,130 @@ misinterpreting `UpdatePanelDockState`'s own programmatic resizes as a drag. NOT
 the running app - confirmed to build clean and pass the existing test suite only; the pin/dock/resize/
 persist-across-restart behavior itself hasn't been exercised by the user yet.
 
+Also real: **offline automatic spectral-line identification on the Process view**, wiring up
+`LineDetectionMode` (previously a real but entirely unconsumed parameter - see the in-app-tooltips
+entry above, which said so plainly at the time) for the first time. Prompted directly by the user, now
+that real capture files exist, running into having to hand-pick both Line and Detection Mode on every
+file even when there's no `.equipment.json` sidecar to say what was actually studied. Reuses the exact
+identification core the live Capture-view overlay and `SolScan.Tools`' own `annotate` command already
+validate against real captures (`SpectralLineCurvatureDetector` → `SpectralProfileExtractor` →
+`SpectralLineIdentifier`) rather than building anything new - the only genuinely new code is the
+wiring: `IShgProcessor.ProcessAsync` gained an optional `LineIdentificationEquipment?
+identificationEquipment` parameter (the SHG/pixel-size/binning needed to compute dispersion), and
+`ShgProcessor.Process` now runs identification right where it already computes the averaged frame and
+curvature-fit polynomial for the curvature-detection step - reusing both rather than re-averaging the
+file a second time, since that averaging pass is the expensive part of the whole pipeline (~11 seconds
+on the user's own real Sunscan capture, per the reconstruction entry above). `Auto`/`FreeSearch` now
+run identification whenever `identificationEquipment` is supplied; `Manual` never does, matching its
+own doc comment exactly, and no `identificationEquipment` at all skips identification regardless of
+mode (there's nothing to compute dispersion against without it) - the same additive-default-parameter
+shape means every pre-existing `ProcessAsync` call site/test needed no changes at all. A confident
+identification overrides `SpectrumParams.Ray` for that run only (the calcium-routing check in
+`ApplyContrastEnhancement` and the colorization tint/curve choice - reconstruction itself is unaffected
+either way, since the curvature fit locks onto whichever line is most prominent regardless of what it
+turns out to be named); an unconfident one falls back to whichever Line was configured, same as before
+this feature existed. `FreeSearch` is not yet actually distinguished from `Auto` - a true whole-spectrum
+search would need a much larger reference atlas than the 12 narrow, named-line windows
+`SpectralLineIdentifier` bundles, so it's a documented simplification, not an oversight, matching that
+enum's own updated doc comment. `ShgProcessingResult` gained `IdentifiedRay`/`IdentificationScore`/
+`IdentificationConfident` so a caller can report the outcome either way - not just when it won.
+
+`ProcessViewModel.BuildIdentificationEquipment` is where "no metadata for the scan" is actually
+handled: it reads the already-loaded file's `.equipment.json` sidecar (kept around in a new
+`_loadedMetadata` field once `LoadSelectedFile` reads it, rather than re-reading the sidecar a second
+time) and falls back field-by-field when any part of it is missing - a Sol'Ex-standard SHG
+(`SpectrographProfile.CreateSolEx()`), the existing `AppSettings.SpectralOverlayFallbackPixelSizeMicrons`
+(2.0µm default - already the same fallback `SolScan.Tools`' own `annotate` command uses, so this reuses
+that one shared, user-editable setting rather than introducing a second one that could disagree with
+it), and no binning - so identification still runs, with a documented, possibly-less-accurate
+assumption, for a `.ser` file that never had a sidecar at all (a file recorded outside SolScan, or from
+before equipment metadata was written), rather than being silently skipped. Always builds and supplies
+this (never null) regardless of `DetectionMode` - `ShgProcessor` itself is what decides whether to
+actually use it, so there's no cost to supplying it when Manual is selected. A third "Processing
+Results" panel field, `IdentifiedLineText` (next to the existing `DetectedLineText`/`DetectedGeometryText`
+- a third fragment, though not one of astro4j's own two-part info view, since JSolex has no equivalent
+identifier), reports the outcome after a run: which line was identified and its score when confident,
+or the best guess plus which configured line was kept instead when it wasn't - reusing
+`ProcessParametersViewModel.SelectedRay` to name that fallback rather than re-deriving it. The
+`ProcessParametersView.xaml` tooltips for Line/Detection Mode were rewritten to describe the real
+behaviour, replacing wording that (accurately, at the time) said Detection Mode did nothing.
+
+Covered by three new `ShgProcessorTests` cases: Auto mode with no `identificationEquipment` supplied
+skips identification and still produces images (the regression guard for `ProcessParams.CreateDefault()`'s
+own `DetectionMode` already defaulting to `Auto`, so every pre-existing test needed to keep working
+unchanged); Manual mode never attempts identification even when equipment *is* supplied, against a
+file built from the real bundled H-alpha reference window (so a confident match would happen if it were
+attempted - proving the skip is real, not just a coincidental non-match); and Auto mode against that
+same file confidently identifies H-alpha and overrides a deliberately-wrong configured Ray
+(`CalciumK`), reusing the same "sample the real bundled window to build a genuinely solar-atlas-shaped
+test profile" technique `SpectralLineIdentifierTests`' own regression test already established. NOT YET
+VALIDATED against a real capture beyond the user's own two `annotate`-tool runs the identification core
+itself was already checked against (see that entry above) - this session's own work is new plumbing
+around already-validated math, not a change to the identification algorithm itself.
+
+**Follow-up, the same session, once the user actually tried it against a real good-quality scan**: the
+offline auto-detect above turned out to be a near-dead end for realistic files, confirmed empirically
+rather than just theorized. A real full-frame-but-tightly-cropped capture (4656x130 - width the spatial
+axis, only 130 rows of dispersion-axis height, deliberately minimal per this file's own "ROI height"
+guidance elsewhere in this document) ran through `annotate` and came back "No confident match (best
+guess: Sodium (D1), score 0.477)" - safe (correctly declined, `MinScoreThreshold` is 0.6), but the
+user's actually-expected line, Calcium K, ranked 5th out of 12 at 0.393. Not a threshold-tuning problem:
+a ±3-4Å crop simply doesn't carry enough of a line's distinguishing shape (companion dips, wing
+asymmetry) to tell it apart from several others by correlation alone - `SpectralLineIdentifierTests`'
+own pre-existing comment about plain symmetric shapes correlating too well against each other had
+already flagged the mechanism, this is just the first real-file confirmation of it actually happening.
+
+The user then found the same file's own JSolex processing log carried a *seemingly* confident answer -
+"Detected spectral line Sodium (D2)" - after first reporting "Free search: the profile is too short to
+identify a line". Investigated directly against the local `astro4j` checkout (`DeepLineIdentifier.java`/
+`SolexVideoProcessor.java`/`SpectrumAnalyzer.java`) rather than assumed: astro4j's "Free search"
+(`DeepLineIdentifier`, matching lines across the *whole* 3900-6800Å atlas) has the exact same
+`MIN_PROFILE_ANGSTROMS = 3` gate SolScan's own finding just confirmed empirically, and declined for
+the same reason. What actually produced "Sodium (D2)" was a *second*, different fallback method,
+`SolexVideoProcessor.autoDetectSpectralLine` → `SpectrumAnalyzer.findBestMatch` - restricted to the
+user's own configured/known lines (the same idea as SolScan's 12 named rays), but using a different
+distance metric (z-score-normalized "area between curves" plus a variation-coefficient term, not
+Pearson correlation with a lag search) and, critically, **no confidence gate at all** - it always
+returns a best-scoring candidate, falling back to "whichever known line is closest to H-alpha" if
+nothing scores well, and its own log line never reports a score because there is no threshold to
+report against. So JSolex didn't solve the underlying information-limit problem here - it just always
+commits to a guess for this fallback path rather than ever admitting uncertainty, which is a real,
+legitimate but different design choice from SolScan's own "no confident match is a valid, expected
+answer" stance used everywhere else in this codebase (and Na D1 vs. D2 specifically is exactly the kind
+of doublet-gap confusion `SpectralLineIdentifier.MinMarginOverRunnerUp`'s own doc comment already
+documents from an earlier real-file case - JSolex's differently-computed answer isn't independently
+validated to be *correct*, just differently confident about being unconfident).
+
+Put to the user directly as two design questions rather than assumed: whether SolScan should also
+always-guess like JSolex's fallback does (rejected - "keep declining when unconfident", matching this
+codebase's existing philosophy everywhere else), and then what to do given that decision confirms
+offline auto-detect will rarely fire on real, well-cropped files (chosen: fix the root cause instead of
+either backing the feature out or leaving it as a rarely-useful no-op).
+
+**The actual fix**: close the "no metadata for the scan" gap at its source rather than trying to
+recover it after the fact from an already-cropped file. `CaptureMetadata.StudiedRay` (previously always
+null - "not yet populated by anything") is now genuinely populated: a new `CaptureViewModel.
+_lastConfidentSpectralRay` field is updated, from the background preview-processing thread, whenever
+the *live* overlay (`SpectralOverlayAnalyzer`, already running against the wide, uncropped preview
+where there's real spectral context - not the eventual cropped recording) reaches a confident
+identification (`overlay.Identification.IdentifiedRay is not null`) - deliberately never cleared just
+because a later tick turns unconfident again (a few noisy frames shouldn't erase a good answer), but
+reset to null whenever live view (re)starts (`ToggleLiveViewAsync`, same "not meaningful carried over
+from a previous session" reasoning as `_bestEdgeWidthPixels`/`ResetBestEdgeWidth`). `WriteCaptureMetadata`
+now reads it into `StudiedRay` instead of a hardcoded null. This can go stale if the user changes lines
+and starts recording before a fresh confident read arrives - a known, accepted gap, still strictly
+better than always writing null.
+
+On the Process side, `ProcessViewModel.LoadSelectedFile` now prefills `ProcessParametersViewModel.
+SelectedRay` directly from `metadata.StudiedRay` when a file's sidecar carries one, and `ProcessAsync`
+skips building `LineIdentificationEquipment` entirely for that file (`_loadedMetadata?.StudiedRay is
+null ? BuildIdentificationEquipment() : null`) - there's no reason to let the much weaker offline
+guesser second-guess an already-known-good, live-confirmed answer. Offline auto-detection
+(`LineDetectionMode.Auto`/`FreeSearch`) remains exactly as landed above for the files that still need
+it: recordings made before this fix existed, or a StudiedRay that was never confidently reached live -
+harmless, occasionally useful, but no longer the primary mechanism this feature relies on for new
+captures going forward.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
@@ -1932,7 +2056,13 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
    two-part info view (detected line + geometry tilt/xyRatio) is real too - see the "Processing Results
    panel" entry further down for the full writeup; `ShgProcessingResult.DetectedLinePolynomial`/
    `DetectedTiltDegrees`/`DetectedXyRatio` are no longer only ever shown as a one-line status-text
-   summary.
+   summary. Eighth slice (also real): automatic spectral-line identification, finally wiring up
+   `LineDetectionMode` (previously a real but unconsumed parameter) - see the "offline automatic
+   spectral-line identification on the Process view" entry above for the full writeup. Note this isn't
+   the `DeepLineIdentifier`-driven line identification the previous paragraph just declared out of
+   scope for v1 - that was about a *loaded* JSolex-catalogue feature set; this is SolScan's own
+   already-real, already-validated identification core (built for the live Capture-view overlay, per
+   Phase 4's own line below) finally reused for the offline per-file case too.
 7. **Automatic processing** — once a real `IShgProcessor` exists, kick it off automatically on its own
    background thread as soon as a capture finishes recording (rather than the current manual file
    picker), so a new capture can start immediately without waiting on the previous one's processing to

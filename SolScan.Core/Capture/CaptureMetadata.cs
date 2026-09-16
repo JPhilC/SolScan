@@ -17,10 +17,14 @@ namespace SolScan.Core.Capture;
 /// connected when recording started - written anyway, rather than skipped, so a recording still gets
 /// a metadata file either way.
 /// </summary>
-/// <param name="StudiedRay">Which spectral line was being studied - not yet populated by anything
-/// (always null today). Once Capture's live line-identification overlay exists (CLAUDE.md Phase 4)
-/// this should be set from whichever labeled line sits nearest the ROI's vertical centre, rather than
-/// only ever being set by hand in Options > Process Parameters as it is today.</param>
+/// <param name="StudiedRay">Which spectral line was being studied - the live Capture-view overlay's
+/// own last *confident* identification at the moment recording started (see
+/// <c>CaptureViewModel._lastConfidentSpectralRay</c>), or null if the overlay was never confident (or
+/// never ran - e.g. no instrument resolved) during this session. Deliberately sourced from the live,
+/// wide-preview overlay rather than attempted after the fact against the recorded (often far more
+/// tightly cropped) file itself - a crop tight enough for efficient recording routinely doesn't carry
+/// enough surrounding spectral context to identify its own line reliably; the live overlay doesn't
+/// have that problem, since it always sees the wider frame.</param>
 public sealed record CaptureMetadata(
     SpectrographProfile? Spectrograph,
     TelescopeProfile? Telescope,

@@ -82,7 +82,10 @@ namespace SolScan.Core.Capture;
 /// normal case being a loaded test image (see SolScan.App.Services.TestImageLoader), which isn't tied
 /// to any real camera at all, but also a graceful degrade if a connected camera's own SDK never
 /// reported a pixel size. Defaults to 2.0µm, the same ASI678MM ballpark <c>SolScan.Tools</c>' own
-/// <c>annotate</c> command falls back to.</param>
+/// <c>annotate</c> command falls back to. Reused for the exact same reason by the Process view's
+/// offline automatic line identification (<c>ProcessViewModel.BuildIdentificationEquipment</c>) when
+/// the selected .ser file's own equipment sidecar has no known camera pixel size either - one shared
+/// "assumed pixel size" setting rather than two that could disagree.</param>
 /// <param name="CaptureOptionsPanelPinned">Whether CaptureView.xaml's right-hand panel is "pinned" -
 /// VS-tool-window style - into a real, resizable docked column (shrinking the preview so it's never
 /// covered) rather than shown as md:DrawerHost's default floating overlay. Off by default so a

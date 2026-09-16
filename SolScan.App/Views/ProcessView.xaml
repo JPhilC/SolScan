@@ -170,6 +170,9 @@
                             <TextBlock Text="{Binding DetectedGeometryText}"
                                        Margin="0,4,0,0"
                                        TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding IdentifiedLineText}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap" />
                             <TextBlock Text="{Binding ResultImagesText}"
                                        Margin="0,4,0,0"
                                        Opacity="0.8"

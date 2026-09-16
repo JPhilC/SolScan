@@ -3,13 +3,22 @@ using SolScan.Core.Capture;
 using SolScan.Core.Processing;
 using SolScan.Processing.Color;
 using SolScan.Processing.Math;
+using SolScan.Processing.Spectrum;
 using SolScan.Processing.Stretching;
 
 namespace SolScan.Processing.Shg;
 
 /// <summary>
 /// <see cref="IShgProcessor"/> orchestrating <see cref="FrameAverager"/> →
-/// <see cref="SpectralLineCurvatureDetector"/> → <see cref="DiskReconstructor"/> → (when
+/// <see cref="SpectralLineCurvatureDetector"/> → (when <see cref="SpectrumParams.DetectionMode"/> isn't
+/// <see cref="LineDetectionMode.Manual"/> and a <see cref="LineIdentificationEquipment"/> was supplied)
+/// <see cref="SpectralProfileExtractor"/> → <see cref="SpectralLineIdentifier"/>, reusing the same
+/// average/curvature-fit this step already computed rather than re-averaging the file a second time -
+/// a confident identification overrides <see cref="SpectrumParams.Ray"/> for the rest of this run
+/// (the calcium-routing check below and colorization's tint/curve choice), an unconfident one falls
+/// back to whatever Ray was configured, and neither ever affects reconstruction itself (which line the
+/// curvature fit locks onto is independent of which named line it turns out to be) - then
+/// <see cref="DiskReconstructor"/> → (when
 /// <see cref="GeneratedImageKind.GeometryCorrected"/>, <see cref="GeneratedImageKind.GeometryCorrectedProcessed"/>,
 /// <see cref="GeneratedImageKind.Colorized"/>, or <see cref="GeneratedImageKind.VirtualEclipse"/> is
 /// requested) <see cref="DiskGeometryCorrector"/> → (for VirtualEclipse only) <see cref="Coronagraph"/>,
@@ -36,14 +45,22 @@ public sealed class ShgProcessor : IShgProcessor
     public Task<ShgProcessingResult> ProcessAsync(
         string serFilePath,
         ProcessParams processParams,
+        LineIdentificationEquipment? identificationEquipment = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default) =>
-        Task.Run(() => Process(serFilePath, processParams, progress, cancellationToken), cancellationToken);
+        Task.Run(() => Process(serFilePath, processParams, identificationEquipment, progress, cancellationToken), cancellationToken);
 
-    private ShgProcessingResult Process(string serFilePath, ProcessParams processParams, IProgress<string>? progress, CancellationToken cancellationToken)
+    private ShgProcessingResult Process(string serFilePath, ProcessParams processParams, LineIdentificationEquipment? identificationEquipment, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         var requested = processParams.RequestedImages;
         var skipped = new List<GeneratedImageKind>();
+
+        // The effective SpectrumParams for this run - starts as whatever was configured, and is
+        // overridden below (Ray only) if automatic identification confidently disagrees. See this
+        // class's own doc comment for why identification is skipped entirely when either condition
+        // fails, and ShgProcessingResult's own doc comment for how the outcome is reported back.
+        var spectrumParams = processParams.SpectrumParams;
+        SpectralLineIdentificationResult? lineIdentification = null;
 
         var wantsRaw = requested.IsEnabled(GeneratedImageKind.Raw);
         var wantsReconstruction = requested.IsEnabled(GeneratedImageKind.Reconstruction);
@@ -78,6 +95,25 @@ public sealed class ShgProcessor : IShgProcessor
                 cancellationToken.ThrowIfCancellationRequested();
                 progress?.Report("Detecting spectral line...");
                 polynomial = new SpectralLineCurvatureDetector().Detect(average);
+
+                if (spectrumParams.DetectionMode != LineDetectionMode.Manual && identificationEquipment is not null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report("Identifying spectral line...");
+
+                    // Same "half the frame height, capped" convention as SolScan.Tools' own annotate
+                    // command and the live overlay's SpectralOverlayAnalyzer - as far as there's any
+                    // real data to sample regardless, bounded so an unusually tall full-sensor capture
+                    // doesn't make this scan an unbounded amount of the frame.
+                    var maxShiftPixels = System.Math.Clamp((average.GetLength(0) / 2) - 1, 1, 2000);
+                    var lineProfile = SpectralProfileExtractor.Extract(average, polynomial.Value, maxShiftPixels);
+                    var identifier = new SpectralLineIdentifier(identificationEquipment.Instrument, identificationEquipment.PixelSizeMicrons, identificationEquipment.Binning);
+                    lineIdentification = identifier.Identify(lineProfile);
+                    if (lineIdentification.IdentifiedRay is { } identifiedRay)
+                    {
+                        spectrumParams = spectrumParams with { Ray = identifiedRay };
+                    }
+                }
             }
 
             if (wantsRaw || wantsReconstruction || needsGeometryCorrection)
@@ -85,7 +121,7 @@ public sealed class ShgProcessor : IShgProcessor
                 using var reader = _serReaderFactory();
                 reader.Open(serFilePath);
                 progress?.Report("Reconstructing Raw...");
-                var raw = new DiskReconstructor().Reconstruct(reader, polynomial.Value, processParams.SpectrumParams.PixelShift, progress, cancellationToken);
+                var raw = new DiskReconstructor().Reconstruct(reader, polynomial.Value, spectrumParams.PixelShift, progress, cancellationToken);
                 var nativeBitDepth = reader.Header.PixelDepth;
 
                 if (wantsRaw || wantsReconstruction)
@@ -111,6 +147,10 @@ public sealed class ShgProcessor : IShgProcessor
                     progress?.Report("Fitting disk ellipse and correcting geometry...");
                     var maxPixelValue = (1 << nativeBitDepth) - 1;
                     geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
+                    // From here on, use the effective SpectrumParams (spectrumParams), not the
+                    // originally-configured processParams.SpectrumParams - see this class's own doc
+                    // comment for why the two can differ.
+                    var effectiveProcessParams = processParams with { SpectrumParams = spectrumParams };
                     if (wantsGeometryCorrected)
                     {
                         images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
@@ -129,7 +169,7 @@ public sealed class ShgProcessor : IShgProcessor
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
-                        var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, processParams, maxPixelValue);
+                        var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, effectiveProcessParams, maxPixelValue);
                         if (wantsGeometryCorrectedProcessed)
                         {
                             images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
@@ -140,7 +180,7 @@ public sealed class ShgProcessor : IShgProcessor
                             cancellationToken.ThrowIfCancellationRequested();
                             progress?.Report("Colorizing...");
                             var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
-                            var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, processParams.SpectrumParams.Ray);
+                            var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, spectrumParams.Ray);
                             if (colorized is not null)
                             {
                                 colorImages.Add(colorized);
@@ -155,13 +195,23 @@ public sealed class ShgProcessor : IShgProcessor
                 using var reader = _serReaderFactory();
                 reader.Open(serFilePath);
                 progress?.Report("Reconstructing Continuum...");
-                var continuum = new DiskReconstructor().Reconstruct(reader, polynomial.Value, processParams.SpectrumParams.ContinuumShift, progress, cancellationToken);
+                var continuum = new DiskReconstructor().Reconstruct(reader, polynomial.Value, spectrumParams.ContinuumShift, progress, cancellationToken);
                 images.Add(BuildProcessedImage(GeneratedImageKind.Continuum, continuum, reader.Header.PixelDepth));
             }
         }
 
         progress?.Report("Done.");
-        return new ShgProcessingResult(images, skipped, polynomial, geometryResult?.TiltDegrees, geometryResult?.XyRatio, colorImages);
+        var identificationBestGuess = lineIdentification?.AllCandidates.Count > 0 ? lineIdentification.AllCandidates[0].Ray : null;
+        return new ShgProcessingResult(
+            images,
+            skipped,
+            polynomial,
+            geometryResult?.TiltDegrees,
+            geometryResult?.XyRatio,
+            colorImages,
+            identificationBestGuess,
+            lineIdentification?.BestScore,
+            lineIdentification?.IdentifiedRay is not null);
     }
 
     /// <summary>Produces <see cref="GeneratedImageKind.Colorized"/> from <paramref name="processed"/> -
