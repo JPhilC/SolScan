@@ -168,10 +168,21 @@ public partial class CaptureViewModel : ObservableObject
     [ObservableProperty]
     private bool isFindingSun;
 
-    /// <summary>Raw gain, 0-600 (0.1dB/step) - the ASI678MM's own range, matching what SharpCap
-    /// shows for it (see <see cref="ICameraDevice.Gain"/>).</summary>
+    /// <summary>Raw gain - whole numbers only (see <see cref="OnGainChanged"/>), within
+    /// <see cref="MinGain"/>-<see cref="MaxGain"/> (see <see cref="ICameraDevice.Gain"/>).</summary>
     [ObservableProperty]
     private double gain = 150;
+
+    /// <summary>The connected camera's own actual Gain range (see <see cref="ICameraDevice.MinGain"/>/
+    /// <see cref="ICameraDevice.MaxGain"/>) - defaults to the ASI678MM's own 0-600 range before a
+    /// camera connects, same as <see cref="Gain"/>'s own default matches that range. Updated once,
+    /// right after connecting (see <see cref="ToggleLiveViewAsync"/>) - never changes for the life
+    /// of a connection.</summary>
+    [ObservableProperty]
+    private double minGain;
+
+    [ObservableProperty]
+    private double maxGain = 600;
 
     [ObservableProperty]
     private bool isGainAuto;
@@ -901,6 +912,12 @@ public partial class CaptureViewModel : ObservableObject
             var supportedBinning = SelectedCamera.SupportedBinning;
             AddMissingBinningOptions(supportedBinning);
 
+            // Set before Gain (below) so a saved/default value is already clamped/quantized (see
+            // OnGainChanged) against this camera's own real range, not whatever the previous camera's
+            // range happened to be.
+            MinGain = SelectedCamera.MinGain;
+            MaxGain = SelectedCamera.MaxGain;
+
             // Remembered from a previous session with this same camera *model* (keyed by Name,
             // not Id - see ICameraSettingsStore) - if there's nothing saved yet, fall back to
             // reading the freshly-connected camera's own just-applied defaults instead, same as
@@ -1245,14 +1262,33 @@ public partial class CaptureViewModel : ObservableObject
         SyncMountCommand.NotifyCanExecuteChanged();
     }
 
+    /// <summary>Clamps to <see cref="MinGain"/>-<see cref="MaxGain"/> and rounds to the nearest
+    /// whole number - applied to <see cref="Gain"/> itself (not just how it's displayed), so a Slider
+    /// drag can't leave the camera set to some arbitrary fractional gain the numeric box could never
+    /// have been used to enter. Same "quantize-and-re-invoke" shape as
+    /// <see cref="OnExposureMicrosecondsChanged"/>'s own <c>QuantizeToRange</c> call, just simpler:
+    /// Gain has one plain range, not a dropdown of sub-ranges with their own units.</summary>
     partial void OnGainChanged(double value)
     {
+        var quantized = Math.Round(Math.Clamp(value, MinGain, MaxGain), MidpointRounding.AwayFromZero);
+        if (Math.Abs(quantized - value) > 0.01)
+        {
+            Gain = quantized;
+            return;
+        }
+
         if (_connectedCamera is not null && !_syncingFromDevice)
         {
             _connectedCamera.Gain = value;
         }
         PersistSettingsIfConnected();
     }
+
+    [RelayCommand]
+    private void IncrementGain() => Gain = Math.Min(Gain + 1, MaxGain);
+
+    [RelayCommand]
+    private void DecrementGain() => Gain = Math.Max(Gain - 1, MinGain);
 
     partial void OnIsGainAutoChanged(bool value)
     {

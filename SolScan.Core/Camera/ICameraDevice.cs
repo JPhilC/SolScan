@@ -56,8 +56,19 @@ public interface ICameraDevice
 
     /// <summary>Raw sensor gain. Range/units are vendor- (really sensor-) specific - the ASI678MM
     /// (0-600, 0.1dB/step, matching what SharpCap shows for it) is what SolScan.App's sliders are
-    /// currently calibrated to; a different sensor's real range may not match.</summary>
+    /// currently calibrated to; a different sensor's real range may not match - see
+    /// <see cref="MinGain"/>/<see cref="MaxGain"/> for the connected camera's own actual range.</summary>
     double Gain { get; set; }
+
+    /// <summary>The lowest/highest <see cref="Gain"/> value this specific connected camera actually
+    /// supports - read from the vendor SDK's own reported capability where available (ASI's
+    /// <c>ASIGetControlCaps</c>), rather than assumed. Both fall back to the ASI678MM's own 0-600
+    /// range if nothing's connected yet or the vendor SDK doesn't expose this (see each
+    /// implementation's own remarks) - SolScan.App's Gain slider/numeric box are always driven by
+    /// these rather than a hardcoded constant.</summary>
+    double MinGain { get; }
+
+    double MaxGain { get; }
 
     /// <summary>Exposure time in microseconds. SolScan.App's Exposure control maps this over a
     /// dropdown-selected sub-range (see <see cref="ExposureScale"/>) spanning the ASI678MM's whole

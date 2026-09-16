@@ -49,6 +49,9 @@ public sealed class SimulatedCameraDevice : ICameraDevice
     /// selected.</summary>
     public double Gain { get; set; } = 150;
 
+    public double MinGain { get; } = 0;
+    public double MaxGain { get; } = 600;
+
     public double ExposureMicroseconds { get; set; } = 10_000;
     public int UsbBandwidthPercent { get; set; } = 80;
 

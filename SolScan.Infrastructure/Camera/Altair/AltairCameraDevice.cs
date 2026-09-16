@@ -73,6 +73,15 @@ public sealed class AltairCameraDevice : ICameraDevice
         }
     }
 
+    /// <summary>Not queried from the SDK - the real capability API exists
+    /// (<c>Altaircam_get_ExpoAGainRange</c>) but there's no real Altair hardware in this environment
+    /// to develop/verify a binding for it against - same honesty-over-guessing stance as
+    /// <see cref="SupportedBinning"/>'s own doc comment. A reasonable default matching common Altair
+    /// mono camera capability (same 0-600 ballpark as the ASI678MM). Revisit once real hardware is
+    /// available.</summary>
+    public double MinGain => 0;
+    public double MaxGain => 600;
+
     public double ExposureMicroseconds
     {
         get

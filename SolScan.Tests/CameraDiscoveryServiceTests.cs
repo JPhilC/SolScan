@@ -47,6 +47,8 @@ public class CameraDiscoveryServiceTests
         public bool IsStreaming => false;
         public double? PixelSizeMicrons => null;
         public double Gain { get; set; }
+        public double MinGain { get; } = 0;
+        public double MaxGain { get; } = 600;
         public double ExposureMicroseconds { get; set; }
         public int UsbBandwidthPercent { get; set; }
         public bool IsGainAuto { get; set; }

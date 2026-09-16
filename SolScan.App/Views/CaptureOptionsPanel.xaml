@@ -147,9 +147,10 @@
                             </ComboBox>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="100"/>
                                     <ColumnDefinition Width="16"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBox Grid.Column="0" VerticalContentAlignment="Center"
                                          Text="{Binding ExposureDisplayValue, UpdateSourceTrigger=LostFocus, StringFormat=0.###}">
@@ -196,12 +197,48 @@
                             </Slider.Style>
                         </Slider>
 
-                        <!-- Gain: 0-600 (0.1dB/step), matching the ASI678MM's own range in SharpCap -->
+                        <!-- Gain: numeric up/down (whole numbers only, see CaptureViewModel.OnGainChanged)
+                             within the connected camera's own real range (MinGain/MaxGain - see
+                             ICameraDevice.MinGain's own doc comment) rather than a hardcoded 0-600. -->
+                        <TextBlock Text="Gain" FontWeight="Bold" Margin="0,0,0,4"/>
                         <DockPanel Margin="0,0,0,4">
                             <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsGainAuto}"/>
-                            <TextBlock Text="{Binding Gain, StringFormat='Gain: {0:0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" VerticalContentAlignment="Center"
+                                         Text="{Binding Gain, UpdateSourceTrigger=LostFocus, StringFormat=0}">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Stretch">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <RepeatButton Content="▲" FontSize="7" Padding="0" Height="12"
+                                                  Command="{Binding IncrementGainCommand}"/>
+                                    <RepeatButton Content="▼" FontSize="7" Padding="0" Height="12"
+                                                  Command="{Binding DecrementGainCommand}"/>
+                                </StackPanel>
+                            </Grid>
                         </DockPanel>
-                        <Slider Minimum="0" Maximum="600" Value="{Binding Gain}" Margin="0,0,0,12">
+                        <Slider Minimum="{Binding MinGain}" Maximum="{Binding MaxGain}" Value="{Binding Gain}" Margin="0,0,0,12">
                             <Slider.Style>
                                 <Style TargetType="Slider">
                                     <Style.Triggers>

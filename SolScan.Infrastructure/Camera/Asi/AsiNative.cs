@@ -12,10 +12,10 @@ namespace SolScan.Infrastructure.Camera.Asi;
 /// <see cref="Camera.ICameraDevice"/>'s existing streaming-only scope (see its doc comment) - the
 /// single-exposure family (ASIStartExposure/ASIGetDataAfterExp) is deliberately omitted.
 ///
-/// <see cref="AsiCameraInfo"/>'s field layout is written from the publicly documented header and
-/// not verified against real hardware in this environment - if a real ASI camera's info/frames
-/// come back garbled, check this struct's field order/sizes against the ASICamera2.h shipped in
-/// ZWO's own SDK download first.
+/// <see cref="AsiCameraInfo"/>/<see cref="AsiControlCaps"/>'s field layouts are written from the
+/// publicly documented header and not verified against real hardware in this environment - if a real
+/// ASI camera's info/frames/control ranges come back garbled, check these structs' field order/sizes
+/// against the ASICamera2.h shipped in ZWO's own SDK download first.
 /// </summary>
 internal static class AsiNative
 {
@@ -70,6 +70,33 @@ internal static class AsiNative
         Raw16 = 2,
     }
 
+    /// <summary>Mirrors ZWO's ASI_CONTROL_CAPS struct (ASICamera2.h) - one entry per control the
+    /// camera supports (Gain, Exposure, BandwidthOverload, ...), enumerated via <see cref="GetNumOfControls"/>/
+    /// <see cref="GetControlCaps"/> rather than looked up by control type directly, matching the real
+    /// SDK's own index-based API shape. Only <see cref="MinValue"/>/<see cref="MaxValue"/>/
+    /// <see cref="ControlType"/> are actually read (see <c>AsiCameraDevice.TryGetControlRange</c>) -
+    /// Name/Description/Unused still need their real field widths declared so the struct's total size/
+    /// layout matches the native one, even though nothing here reads them.</summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    internal struct AsiControlCaps
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string Name;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Description;
+
+        public int MaxValue;
+        public int MinValue;
+        public int DefaultValue;
+        public int IsAutoSupported;
+        public int IsWritable;
+        public AsiControlType ControlType;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] Unused;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     internal struct AsiCameraInfo
     {
@@ -122,6 +149,12 @@ internal static class AsiNative
 
     [DllImport(DllName, EntryPoint = "ASIGetControlValue", CallingConvention = CallingConvention.Cdecl)]
     internal static extern AsiErrorCode GetControlValue(int cameraId, AsiControlType controlType, out int value, out int isAuto);
+
+    [DllImport(DllName, EntryPoint = "ASIGetNumOfControls", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern AsiErrorCode GetNumOfControls(int cameraId, out int numOfControls);
+
+    [DllImport(DllName, EntryPoint = "ASIGetControlCaps", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern AsiErrorCode GetControlCaps(int cameraId, int controlIndex, out AsiControlCaps controlCaps);
 
     [DllImport(DllName, EntryPoint = "ASISetROIFormat", CallingConvention = CallingConvention.Cdecl)]
     internal static extern AsiErrorCode SetRoiFormat(int cameraId, int width, int height, int binning, AsiImageType imageType);

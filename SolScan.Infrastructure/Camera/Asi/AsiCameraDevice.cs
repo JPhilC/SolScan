@@ -24,6 +24,11 @@ public sealed class AsiCameraDevice : ICameraDevice
     private int _nativeMaxHeight;
     private double? _pixelSizeMicrons;
 
+    // Fallback range - the ASI678MM's own SharpCap-matching Gain range - used unless/until
+    // TryGetControlRange (called once at connect) finds a real one via ASIGetControlCaps.
+    private double _minGain;
+    private double _maxGain = 600;
+
     private int _width;
     private int _height;
     private int _bytesPerPixel;
@@ -66,6 +71,9 @@ public sealed class AsiCameraDevice : ICameraDevice
         get => GetControl(AsiControlType.Gain);
         set => SetControl(AsiControlType.Gain, value, _gainIsAuto);
     }
+
+    public double MinGain => _minGain;
+    public double MaxGain => _maxGain;
 
     public double ExposureMicroseconds
     {
@@ -150,6 +158,12 @@ public sealed class AsiCameraDevice : ICameraDevice
         _nativeMaxWidth = info.MaxWidth;
         _nativeMaxHeight = info.MaxHeight;
         _pixelSizeMicrons = info.PixelSize;
+
+        if (TryGetControlRange(AsiControlType.Gain, out var minGain, out var maxGain))
+        {
+            _minGain = minGain;
+            _maxGain = maxGain;
+        }
 
         IsConnected = true;
         // First entry in SupportedBinning rather than a hardcoded 1 - matches whatever the camera
@@ -338,6 +352,41 @@ public sealed class AsiCameraDevice : ICameraDevice
             nextBufferIndex = (nextBufferIndex + 1) % CaptureBufferPoolSize;
             FrameCaptured?.Invoke(this, frame);
         }
+    }
+
+    /// <summary>Looks up <paramref name="controlType"/>'s real Min/MaxValue via <c>ASIGetControlCaps</c>
+    /// - the SDK has no "get caps for this specific control" call, only an index-enumerate-and-match
+    /// one (<c>ASIGetNumOfControls</c> + <c>ASIGetControlCaps</c> per index), matching the real ASI
+    /// SDK's own documented shape rather than an invented shortcut. Called once per connect (see
+    /// <see cref="ConnectAsync"/>) - <see cref="MinGain"/>/<see cref="MaxGain"/> keep their existing
+    /// ASI678MM-ballpark fallback values if this returns false (an unexpected SDK error, or the
+    /// control genuinely isn't in this camera's list) rather than the caller having to guess.</summary>
+    private bool TryGetControlRange(AsiControlType controlType, out double min, out double max)
+    {
+        min = 0;
+        max = 0;
+
+        if (GetNumOfControls(_cameraId, out var numOfControls) != AsiErrorCode.Success)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < numOfControls; i++)
+        {
+            if (GetControlCaps(_cameraId, i, out var caps) != AsiErrorCode.Success)
+            {
+                continue;
+            }
+
+            if (caps.ControlType == controlType)
+            {
+                min = caps.MinValue;
+                max = caps.MaxValue;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private double GetControl(AsiControlType controlType)
