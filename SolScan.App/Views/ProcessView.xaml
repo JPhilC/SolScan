@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
              xmlns:processing="clr-namespace:SolScan.App.Views.Processing"
+             xmlns:views="clr-namespace:SolScan.App.Views"
              mc:Ignorable="d">
     <UserControl.Resources>
         <!-- Scoped to this view only, not merged into App.xaml - see Themes/MaterialDesignScoped.xaml's
@@ -21,48 +22,38 @@
         </ResourceDictionary>
     </UserControl.Resources>
     <Grid Margin="24">
+        <Grid.ColumnDefinitions>
+            <!-- Main content (the DrawerHost + everything in it, unchanged) always takes whatever
+                 space isn't claimed by the two columns below. -->
+            <ColumnDefinition Width="*"/>
+            <!-- The resizing splitter's own column - collapses to 0 for free whenever the panel isn't
+                 docked, since Width="Auto" sizes to its GridSplitter's Visibility (bound to
+                 IsProcessOptionsPanelDocked below); no code-behind needed for this column. -->
+            <ColumnDefinition Width="Auto"/>
+            <!-- The docked panel's own column - can't use the same Auto-collapses-with-Visibility
+                 trick as the splitter column, since it must default to a real, resizable pixel width
+                 while docked. ProcessView.xaml.cs's UpdatePanelDockState controls this column's
+                 Width/MinWidth/MaxWidth directly instead (mirrors CaptureView.xaml's own identical
+                 OptionsPanelColumn). -->
+            <ColumnDefinition x:Name="OptionsPanelColumn" Width="0"/>
+        </Grid.ColumnDefinitions>
+
         <!-- md:DrawerHost's right-hand drawer is a full-height overlay, not a permanent Grid column -
-             it slides in on top of (not squeezing) the content below, so the preview/status area
-             underneath always has the view's full width to itself. IsRightDrawerOpen and both hamburger
-             ToggleButtons (one here to open, one inside RightDrawerContent to close) all bind to the
-             same ProcessViewModel.IsProcessOptionsPanelExpanded bool, so however it's toggled, the
-             state - and thus what gets persisted to AppSettings - stays in one place. Mirrors GSServer's
-             own md:DrawerHost usage (e.g. SkyTelescopeV.xaml's VM-bound IsLeftDrawerOpen) with Left
-             swapped for Right throughout, per the user's own request. -->
-        <md:DrawerHost HorizontalAlignment="Stretch" VerticalAlignment="Stretch" BorderThickness="0"
-                       IsRightDrawerOpen="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
+             it slides in on top of (not squeezing) the content below, used only while the panel is
+             open and *not* pinned (see ProcessViewModel.IsProcessDrawerOpen) - pinning it instead
+             docks the exact same ProcessOptionsPanel content into the resizable column on the right
+             (below), which shrinks this main content area so the preview/status area is never
+             covered. A VS-tool-window-style Pin toggle lives in the panel's own header
+             (ProcessOptionsPanel.xaml) for switching between the two - mirrors GSServer's own
+             md:DrawerHost usage (e.g. SkyTelescopeV.xaml's VM-bound IsLeftDrawerOpen) with Left
+             swapped for Right throughout, per the user's own original request. -->
+        <md:DrawerHost Grid.Column="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" BorderThickness="0"
+                       IsRightDrawerOpen="{Binding IsProcessDrawerOpen, Mode=TwoWay}"
                        BorderBrush="{StaticResource MaterialDesignDivider}">
             <md:DrawerHost.RightDrawerContent>
-                <Grid Width="340">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <DockPanel Grid.Row="0" Margin="12,12,12,0">
-                        <ToggleButton DockPanel.Dock="Right"
-                                      Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
-                                      Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
-                                      CommandParameter="{x:Static Dock.Right}"
-                                      IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
-                                      ToolTip="Hide this panel"/>
-                        <TextBlock Text="Process Options" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
-                        <StackPanel Margin="12">
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Process Parameters" IsExpanded="{Binding IsProcessParametersExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <processing:ProcessParametersView DataContext="{Binding ProcessParameters}"/>
-                            </Expander>
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Enhancement" IsExpanded="{Binding IsImageEnhancementExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <processing:ImageEnhancementView DataContext="{Binding ImageEnhancement}"/>
-                            </Expander>
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Selection" IsExpanded="{Binding IsImageSelectionExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <processing:ImageSelectionView DataContext="{Binding ImageSelection}"/>
-                            </Expander>
-                        </StackPanel>
-                    </ScrollViewer>
-                </Grid>
+                <Border Width="340">
+                    <views:ProcessOptionsPanel/>
+                </Border>
             </md:DrawerHost.RightDrawerContent>
 
             <!-- Main content - always full-width since the panel is an overlay drawer rather than a
@@ -209,5 +200,19 @@
                 </Border>
             </Grid>
         </md:DrawerHost>
+
+        <!-- Only visible while pinned+open (IsProcessOptionsPanelDocked) - the Auto column above it
+             collapses to 0 for free once this is Collapsed, no code-behind needed for this column. -->
+        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Cursor="SizeWE"
+                      Background="{StaticResource MaterialDesignDivider}"
+                      Visibility="{Binding IsProcessOptionsPanelDocked, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+
+        <!-- The docked panel itself - same ProcessOptionsPanel content as the floating drawer above,
+             just resized by OptionsPanelColumn (see ProcessView.xaml.cs's UpdatePanelDockState) instead
+             of shown as an overlay. OptionsPanelHost's own SizeChanged reports a user's GridSplitter
+             drag back into ProcessViewModel.ProcessOptionsPanelWidth for persistence. -->
+        <Border Grid.Column="2" x:Name="OptionsPanelHost" Background="{StaticResource MaterialDesignPaper}">
+            <views:ProcessOptionsPanel/>
+        </Border>
     </Grid>
 </UserControl>

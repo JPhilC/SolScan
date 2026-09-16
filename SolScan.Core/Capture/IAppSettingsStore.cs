@@ -83,6 +83,17 @@ namespace SolScan.Core.Capture;
 /// to any real camera at all, but also a graceful degrade if a connected camera's own SDK never
 /// reported a pixel size. Defaults to 2.0µm, the same ASI678MM ballpark <c>SolScan.Tools</c>' own
 /// <c>annotate</c> command falls back to.</param>
+/// <param name="CaptureOptionsPanelPinned">Whether CaptureView.xaml's right-hand panel is "pinned" -
+/// VS-tool-window style - into a real, resizable docked column (shrinking the preview so it's never
+/// covered) rather than shown as md:DrawerHost's default floating overlay. Off by default so a
+/// settings file saved before this existed keeps today's overlay-only behavior unchanged.</param>
+/// <param name="CaptureOptionsPanelWidth">The docked column's width in pixels while pinned (see
+/// <see cref="CaptureOptionsPanelPinned"/>) - remembered across sessions the same way a GridSplitter-
+/// resized column normally isn't. Defaults to 340, matching the drawer's own fixed floating width.</param>
+/// <param name="ProcessOptionsPanelPinned">Same idea as <see cref="CaptureOptionsPanelPinned"/>, for
+/// ProcessView.xaml's own right-hand panel.</param>
+/// <param name="ProcessOptionsPanelWidth">Same idea as <see cref="CaptureOptionsPanelWidth"/>, for
+/// ProcessView.xaml's own right-hand panel.</param>
 public sealed record AppSettings(
     string? CapturesRootFolder,
     string? AlpacaBaseUrl = null,
@@ -109,7 +120,11 @@ public sealed record AppSettings(
     bool ShowSpectralLineLabels = true,
     bool ShowSpectralColorBand = true,
     bool SpectralOverlayExpanded = true,
-    double SpectralOverlayFallbackPixelSizeMicrons = 2.0);
+    double SpectralOverlayFallbackPixelSizeMicrons = 2.0,
+    bool CaptureOptionsPanelPinned = false,
+    double CaptureOptionsPanelWidth = 340,
+    bool ProcessOptionsPanelPinned = false,
+    double ProcessOptionsPanelWidth = 340);
 
 /// <summary>
 /// Persists <see cref="AppSettings"/> - implemented by

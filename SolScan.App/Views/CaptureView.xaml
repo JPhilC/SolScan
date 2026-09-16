@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="clr-namespace:SolScan.App.ViewModels"
              xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
+             xmlns:views="clr-namespace:SolScan.App.Views"
              mc:Ignorable="d">
     <UserControl.Resources>
         <!-- Scoped to this view only, not merged into App.xaml - see Themes/MaterialDesignScoped.xaml's
@@ -20,365 +21,40 @@
         </ResourceDictionary>
     </UserControl.Resources>
     <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <!-- Main content (the DrawerHost + everything in it, unchanged) always takes whatever
+                 space isn't claimed by the two columns below. -->
+            <ColumnDefinition Width="*"/>
+            <!-- The resizing splitter's own column: Width="Auto" sizing to its GridSplitter's
+                 Visibility (bound to IsCaptureOptionsPanelDocked below) means this collapses to 0
+                 for free whenever the panel isn't docked, no code-behind needed. -->
+            <ColumnDefinition Width="Auto"/>
+            <!-- The docked panel's own column - unlike the splitter column above, this can't rely on
+                 the same Auto-collapses-with-Visibility trick, since it must default to a real,
+                 resizable pixel width while docked. CaptureView.xaml.cs's UpdatePanelDockState
+                 controls this column's Width/MinWidth/MaxWidth directly instead (a View-layer
+                 concern, same "code-behind owns layout math WPF doesn't make bindable" precedent as
+                 UpdateImageSize's own doc comment). -->
+            <ColumnDefinition x:Name="OptionsPanelColumn" Width="0"/>
+        </Grid.ColumnDefinitions>
+
         <!-- md:DrawerHost's right-hand drawer is a full-height overlay, not a permanent Grid column -
-             it slides in on top of the content below rather than sharing space with it. Same pattern
-             (and same reasoning) as ProcessView.xaml's own drawer - see that view's doc comment for
-             the full story of why this replaced an earlier GridSplitter-based design. Start/Stop
-             Recording and the frame counts deliberately stay out of the drawer, on the main view
-             itself (the new Grid.Row="4" below), per the user's own request - unlike the six settings
-             Expanders, they need to stay visible/usable whether or not the drawer is open. -->
-        <md:DrawerHost HorizontalAlignment="Stretch" VerticalAlignment="Stretch" BorderThickness="0"
-                       IsRightDrawerOpen="{Binding IsCaptureOptionsPanelExpanded, Mode=TwoWay}"
+             it slides in on top of the content below rather than sharing space with it, used only
+             while the panel is open and *not* pinned (see CaptureViewModel.IsCaptureDrawerOpen) -
+             pinning it instead docks the exact same CaptureOptionsPanel content into the resizable
+             column on the right (below), which shrinks this main content area so the preview is
+             never covered - a VS-tool-window-style Pin toggle lives in the panel's own header
+             (CaptureOptionsPanel.xaml) for switching between the two. Start/Stop Recording and the
+             frame counts deliberately stay out of the drawer/panel entirely, on the main view itself
+             (the new Grid.Row="4" below), per the user's own request - unlike the six settings
+             Expanders, they need to stay visible/usable regardless of any of this. -->
+        <md:DrawerHost Grid.Column="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" BorderThickness="0"
+                       IsRightDrawerOpen="{Binding IsCaptureDrawerOpen, Mode=TwoWay}"
                        BorderBrush="{StaticResource MaterialDesignDivider}">
             <md:DrawerHost.RightDrawerContent>
-                <Grid Width="340">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <DockPanel Grid.Row="0" Margin="12,12,12,0">
-                        <ToggleButton DockPanel.Dock="Right"
-                                      Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
-                                      Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
-                                      CommandParameter="{x:Static Dock.Right}"
-                                      IsChecked="{Binding IsCaptureOptionsPanelExpanded, Mode=TwoWay}"
-                                      ToolTip="Hide this panel"/>
-                        <TextBlock Text="Capture Settings" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
-                    </DockPanel>
-
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
-                        <StackPanel Margin="12">
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Capture Settings" IsExpanded="{Binding IsCaptureSettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <!-- Colour space + binning: reconfigured together, and not safe to change
-                                         mid-recording (see CaptureViewModel.ApplyOutputFormatChange) - disabled
-                                         here too so it's obvious why, rather than a change silently reverting. -->
-                                    <TextBlock Text="Colour Space" FontWeight="Bold"/>
-                                    <ComboBox Margin="0,4,0,12"
-                                              ItemsSource="{Binding AvailableColorSpaces}"
-                                              SelectedItem="{Binding SelectedColorSpace}">
-                                        <ComboBox.Style>
-                                            <Style TargetType="ComboBox">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ComboBox.Style>
-                                    </ComboBox>
-
-                                    <TextBlock Text="Binning" FontWeight="Bold"/>
-                                    <ComboBox Margin="0,4,0,12"
-                                              ItemsSource="{Binding AvailableBinningOptions}"
-                                              SelectedItem="{Binding SelectedBinning}">
-                                        <ComboBox.Style>
-                                            <Style TargetType="ComboBox">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ComboBox.Style>
-                                    </ComboBox>
-
-                                    <!-- Region of interest: width/height only (always centred on the sensor -
-                                         see CaptureViewModel.RoiWidth/RoiHeight) - a real hardware setting
-                                         (reconfigured together with colour space/binning, see
-                                         ApplyOutputFormatChange): the camera itself only reads out and
-                                         transfers this region, which is what actually raises achievable frame
-                                         rate at a smaller ROI (a software-only crop applied after capture
-                                         doesn't - confirmed on real ASI678MM hardware). Locked while
-                                         recording, same as colour space/binning above: a SER file's header
-                                         can't represent a mid-file geometry change. -->
-                                    <TextBlock Text="Region of Interest" FontWeight="Bold"/>
-                                    <StackPanel>
-                                        <StackPanel.Style>
-                                            <Style TargetType="StackPanel">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </StackPanel.Style>
-                                        <Grid Margin="0,4,0,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0">
-                                                <TextBlock Text="Width" FontSize="11" Opacity="0.8"/>
-                                                <TextBox Text="{Binding RoiWidth, UpdateSourceTrigger=LostFocus}"/>
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="2">
-                                                <TextBlock Text="Height" FontSize="11" Opacity="0.8"/>
-                                                <TextBox Text="{Binding RoiHeight, UpdateSourceTrigger=LostFocus}"/>
-                                            </StackPanel>
-                                        </Grid>
-                                        <Button Content="Full Frame" Command="{Binding ResetRoiCommand}" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Expander>
-
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Camera Settings" IsExpanded="{Binding IsCameraSettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <!-- Exposure: ASICap-style control - a range dropdown (see
-                                         ExposureScale.Ranges) picks which 0.032ms-5s sub-range the
-                                         numeric up/down box and slider below it operate over, each
-                                         in that range's own unit; all four are disabled together
-                                         while Auto is on, same as Gain/USB Turbo above/below. -->
-                                    <TextBlock Text="Exposure" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <DockPanel Margin="0,0,0,4">
-                                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsExposureAuto}"/>
-                                        <ComboBox Width="120" DockPanel.Dock="Right" Margin="0,0,8,0"
-                                                  ItemsSource="{Binding AvailableExposureRanges}"
-                                                  SelectedItem="{Binding SelectedExposureRange}"
-                                                  DisplayMemberPath="Label">
-                                            <ComboBox.Style>
-                                                <Style TargetType="ComboBox">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
-                                                            <Setter Property="IsEnabled" Value="False"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </ComboBox.Style>
-                                        </ComboBox>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="16"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox Grid.Column="0" VerticalContentAlignment="Center"
-                                                     Text="{Binding ExposureDisplayValue, UpdateSourceTrigger=LostFocus, StringFormat=0.###}">
-                                                <TextBox.Style>
-                                                    <Style TargetType="TextBox">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
-                                                                <Setter Property="IsEnabled" Value="False"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBox.Style>
-                                            </TextBox>
-                                            <StackPanel Grid.Column="1" VerticalAlignment="Stretch">
-                                                <StackPanel.Style>
-                                                    <Style TargetType="StackPanel">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
-                                                                <Setter Property="IsEnabled" Value="False"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </StackPanel.Style>
-                                                <RepeatButton Content="▲" FontSize="7" Padding="0" Height="12"
-                                                              Command="{Binding IncrementExposureCommand}"/>
-                                                <RepeatButton Content="▼" FontSize="7" Padding="0" Height="12"
-                                                              Command="{Binding DecrementExposureCommand}"/>
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="4,0,0,0"
-                                                       Text="{Binding SelectedExposureRange.Unit, StringFormat=({0})}"/>
-                                        </Grid>
-                                    </DockPanel>
-                                    <Slider Minimum="{Binding SelectedExposureRange.MinMicroseconds}"
-                                            Maximum="{Binding SelectedExposureRange.MaxMicroseconds}"
-                                            Value="{Binding ExposureMicroseconds}" Margin="0,0,0,12">
-                                        <Slider.Style>
-                                            <Style TargetType="Slider">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsExposureAuto}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Slider.Style>
-                                    </Slider>
-
-                                    <!-- Gain: 0-600 (0.1dB/step), matching the ASI678MM's own range in SharpCap -->
-                                    <DockPanel Margin="0,0,0,4">
-                                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsGainAuto}"/>
-                                        <TextBlock Text="{Binding Gain, StringFormat='Gain: {0:0}'}" FontWeight="Bold" VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                    <Slider Minimum="0" Maximum="600" Value="{Binding Gain}" Margin="0,0,0,12">
-                                        <Slider.Style>
-                                            <Style TargetType="Slider">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsGainAuto}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Slider.Style>
-                                    </Slider>
-
-                                    <!-- USB Turbo: 40-100, matching SharpCap's floor for the ASI678MM -->
-                                    <DockPanel Margin="0,0,0,4">
-                                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsUsbBandwidthAuto}"/>
-                                        <TextBlock Text="{Binding UsbBandwidthPercent, StringFormat='USB Turbo: {0}%'}" FontWeight="Bold" VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                    <Slider Minimum="40" Maximum="100" Value="{Binding UsbBandwidthPercent}">
-                                        <Slider.Style>
-                                            <Style TargetType="Slider">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsUsbBandwidthAuto}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Slider.Style>
-                                    </Slider>
-                                </StackPanel>
-                            </Expander>
-
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Histogram" IsExpanded="{Binding IsHistogramExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <Border Height="60" Background="#FF1E1E1E" BorderBrush="#FF3F3F3F" BorderThickness="1">
-                                        <!-- The inner Canvas is sized to CaptureViewModel.HistogramPlotWidth x
-                                             HistogramPlotHeight explicitly, rather than letting the Viewbox
-                                             size itself off the Path's own (data-dependent) geometry bounds -
-                                             a bar right at the plotted area's edge (e.g. a fully saturated
-                                             frame, every pixel piled into the very last bucket) was getting
-                                             rounded away to nothing by WPF's layout rounding when the
-                                             Viewbox's scale factor came from that same edge-flush geometry,
-                                             confirmed on real ASI678MM hardware. A fixed, explicit viewport
-                                             plus CaptureViewModel's own small margin on each side keeps every
-                                             bar comfortably inside it instead. -->
-                                        <Viewbox Stretch="Fill">
-                                            <Canvas Width="{x:Static local:CaptureViewModel.HistogramPlotWidth}"
-                                                    Height="{x:Static local:CaptureViewModel.HistogramPlotHeight}">
-                                                <Path Data="{Binding HistogramGeometry}" Fill="#FF66B2FF"/>
-                                            </Canvas>
-                                        </Viewbox>
-                                    </Border>
-                                    <!-- Matches ASICap's own Max/Min/AVG readout - the fastest way to tell a
-                                         display-stretch issue apart from the camera reporting different raw
-                                         values than expected for the current Colour Space. -->
-                                    <TextBlock Text="{Binding HistogramStatsText}" Opacity="0.8" FontSize="11" Margin="0,4,0,0"/>
-                                </StackPanel>
-                            </Expander>
-
-                            <!-- Collimator-focus aid (see FocusAnalyzer/CaptureViewModel.EdgeWidthText) - the
-                                 sub-pixel width (in pixels) of the sharpest disk/slit edge transition found;
-                                 dial the collimator towards the *smallest* number rather than eyeballing a
-                                 graph's slope (same "smaller is better" convention as an autofocus routine's
-                                 HFD/HFR reading). "Best" is a running low-water mark since live view
-                                 (re)started or Reset was last pressed, so overshooting the true optimum while
-                                 adjusting still leaves the best (narrowest) point actually reached visible. -->
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Focus Aid" IsExpanded="{Binding IsFocusAidExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <TextBlock Text="{Binding EdgeWidthText, StringFormat='Edge Width: {0}'}" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding BestEdgeWidthText, StringFormat='Best: {0}'}" Margin="0,4,0,8"/>
-                                    <Button Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" HorizontalAlignment="Left"/>
-                                    <TextBlock Text="Minimize the edge width while adjusting the collimator - smaller is sharper."
-                                               Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                </StackPanel>
-                            </Expander>
-
-                            <!-- On-screen reticule overlay (see CaptureView.xaml.cs's ReticuleOverlay) - purely
-                                 a viewing aid, never affects what's recorded. The crosshair is a plain fixed
-                                 centre-mark; the rotation guides are two vertical lines inset from the preview's
-                                 left/right edges, each pivotable about its own midpoint (see
-                                 CaptureViewModel.ReticuleAngleDegrees) so the user can judge camera rotation by
-                                 matching the slit's two edges to them. Neither scales with Zoom - both are drawn
-                                 against the fixed preview viewport, not the zoomed/scrolled image content. -->
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Reticule" IsExpanded="{Binding IsReticuleExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <CheckBox Content="Crosshair" IsChecked="{Binding ShowCrosshairReticule}" Margin="0,0,0,8"/>
-                                    <CheckBox Content="Rotation Guides" IsChecked="{Binding ShowRotationReticule}" Margin="0,0,0,8"/>
-
-                                    <TextBlock Text="{Binding ReticuleAngleDegrees, StringFormat='Angle: {0:0.0}°'}" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <Slider Minimum="-10" Maximum="10" Value="{Binding ReticuleAngleDegrees}"
-                                            IsEnabled="{Binding ShowRotationReticule}" Margin="0,0,0,12"/>
-
-                                    <TextBlock Text="{Binding ReticuleInsetPixels, StringFormat='Edge Inset: {0:0} px'}" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <Slider Minimum="0" Maximum="300" Value="{Binding ReticuleInsetPixels}"
-                                            IsEnabled="{Binding ShowRotationReticule}"/>
-                                </StackPanel>
-                            </Expander>
-
-                            <!-- Live line-identification overlay (labels + colour gradient band - see
-                                 SolScan.Processing.Spectrum.SpectralOverlayAnalyzer/CaptureView.xaml's own
-                                 SpectralLabelOverlay/gradient Border) - aids finding a particular
-                                 Fraunhofer line while turning the grating. "Load Test Image…" is a dev/
-                                 test feature: feeds a PNG/TIFF file through the same live-preview pipeline
-                                 a real camera frame would go through, so the overlay can be tried without
-                                 a camera or telescope connected at all - see CaptureViewModel.LoadTestImage. -->
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Spectral Overlay" IsExpanded="{Binding IsSpectralOverlayExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <CheckBox Content="Line Labels" IsChecked="{Binding ShowSpectralLineLabels}" Margin="0,0,0,8"
-                                              ToolTip="Show a label over each of the 12 named spectral lines currently visible in the preview, hovering closer to full opacity the more confident the identification is."/>
-                                    <CheckBox Content="Colour Band" IsChecked="{Binding ShowSpectralColorBand}" Margin="0,0,0,8"
-                                              ToolTip="Show a coloured gradient band on the left edge of the preview, indicating which part of the visible spectrum the current view spans."/>
-
-                                    <TextBlock Text="Fallback pixel size (µm)" Margin="0,8,0,4"
-                                               ToolTip="Used for the overlay above whenever no connected camera's own pixel size is known - the normal case for a loaded test image below, since it isn't tied to any real camera."/>
-                                    <TextBox Text="{Binding SpectralOverlayFallbackPixelSizeMicrons, StringFormat=F2}" Margin="0,0,0,8"/>
-
-                                    <Button Content="Load Test Image…" Command="{Binding LoadTestImageCommand}" HorizontalAlignment="Left"
-                                            ToolTip="Load a PNG or TIFF file into the preview to see what the spectral overlay looks like on it - a dev/test feature, no camera or telescope needed."/>
-                                    <TextBlock Text="Loads a still image into the preview above to test the line labels/colour band without a camera connected."
-                                               Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
-
-                                    <!-- Diagnostics - see CaptureViewModel.SpectralOverlayDiagnosticsText's own
-                                         doc comment: real numbers behind the overlay, to check an unexpected
-                                         label position/colour against rather than guessing from the preview.
-                                         Blank (nothing rendered) until the first successful overlay pass. -->
-                                    <TextBlock Text="{Binding SpectralOverlayDiagnosticsText}"
-                                               FontFamily="Consolas" FontSize="10" Opacity="0.85" TextWrapping="Wrap" Margin="0,12,0,0"/>
-                                </StackPanel>
-                            </Expander>
-
-                            <Expander Style="{StaticResource FlatExpanderStyle}" Header="Display Settings" IsExpanded="{Binding IsDisplaySettingsExpanded, Mode=TwoWay}" Margin="0,0,0,12">
-                                <StackPanel Margin="0,8,0,0">
-                                    <!-- On by default (see CaptureViewModel.IsContrastAuto) - display-only,
-                                         never affects what's recorded, matches SharpCap's "Display Histogram
-                                         Stretch" -->
-                                    <DockPanel Margin="0,0,0,4">
-                                        <ToggleButton Content="Auto" Width="50" DockPanel.Dock="Right" IsChecked="{Binding IsContrastAuto}"/>
-                                        <TextBlock Text="Contrast" FontWeight="Bold" VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                    <TextBlock Text="Black point" Margin="0,4,0,0"/>
-                                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastBlackPoint}">
-                                        <Slider.Style>
-                                            <Style TargetType="Slider">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Slider.Style>
-                                    </Slider>
-                                    <TextBlock Text="White point" Margin="0,4,0,0"/>
-                                    <Slider Minimum="0" Maximum="1" Value="{Binding ContrastWhitePoint}" Margin="0,0,0,12">
-                                        <Slider.Style>
-                                            <Style TargetType="Slider">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsContrastAuto}" Value="True">
-                                                        <Setter Property="IsEnabled" Value="False"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Slider.Style>
-                                    </Slider>
-
-                                    <!-- Purely cosmetic "make the live view easier to look at" knob (see
-                                         CaptureViewModel.DisplayBrightness) - display-only, never affects
-                                         what's recorded. No "Auto" toggle, unlike Contrast above: there's no
-                                         camera/histogram-driven value to defer to, just a straight gamma curve
-                                         on top of the black/white stretch, 1.0 = unchanged. -->
-                                    <TextBlock Text="{Binding DisplayBrightness, StringFormat='Display Brightness: {0:0.00}'}" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <Slider Minimum="0.3" Maximum="3" Value="{Binding DisplayBrightness}"/>
-                                </StackPanel>
-                            </Expander>
-                        </StackPanel>
-                    </ScrollViewer>
-                </Grid>
+                <Border Width="340">
+                    <views:CaptureOptionsPanel/>
+                </Border>
             </md:DrawerHost.RightDrawerContent>
 
             <!-- Main content - unchanged, just now always full-width since the settings panel is an
@@ -602,5 +278,19 @@
                 <TextBlock Grid.Row="6" Text="{Binding StatusText}" Opacity="0.8"/>
             </Grid>
         </md:DrawerHost>
+
+        <!-- Only visible while pinned+open (IsCaptureOptionsPanelDocked) - the Auto column above it
+             collapses to 0 for free once this is Collapsed, no code-behind needed for this column. -->
+        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Cursor="SizeWE"
+                      Background="{StaticResource MaterialDesignDivider}"
+                      Visibility="{Binding IsCaptureOptionsPanelDocked, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+
+        <!-- The docked panel itself - same CaptureOptionsPanel content as the floating drawer above,
+             just resized by OptionsPanelColumn (see CaptureView.xaml.cs's UpdatePanelDockState) instead
+             of shown as an overlay. OptionsPanelHost's own SizeChanged reports a user's GridSplitter
+             drag back into CaptureViewModel.CaptureOptionsPanelWidth for persistence. -->
+        <Border Grid.Column="2" x:Name="OptionsPanelHost" Background="{StaticResource MaterialDesignPaper}">
+            <views:CaptureOptionsPanel/>
+        </Border>
     </Grid>
 </UserControl>

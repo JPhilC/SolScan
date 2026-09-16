@@ -1,0 +1,60 @@
+<UserControl x:Class="SolScan.App.Views.ProcessOptionsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
+             xmlns:processing="clr-namespace:SolScan.App.Views.Processing"
+             mc:Ignorable="d">
+    <!--
+        The Process Parameters/Image Enhancement/Image Selection Expanders - extracted out of
+        ProcessView.xaml (where they used to live directly inside md:DrawerHost.RightDrawerContent)
+        so the exact same content/bindings can be shown in either of two places: ProcessView.xaml's
+        own floating drawer (unpinned) or its new docked Grid column (pinned) - see
+        ProcessViewModel.IsProcessOptionsPanelPinned's own doc comment (mirrors
+        CaptureOptionsPanel.xaml's own identical rationale). No DataContext override here for this
+        control itself: it inherits ProcessViewModel from whichever parent hosts it - only each
+        Expander's own body still overrides DataContext to its own child view model, unchanged from
+        before.
+
+        Merges MaterialDesignScoped.xaml itself - see CaptureOptionsPanel.xaml's own doc comment for
+        why (this control is instantiated in two different places, so it can't rely on inheriting
+        resources from just one specific parent).
+    -->
+    <UserControl.Resources>
+        <ResourceDictionary Source="/Themes/MaterialDesignScoped.xaml"/>
+    </UserControl.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="12,12,12,0">
+            <ToggleButton DockPanel.Dock="Right"
+                          Style="{StaticResource MaterialDesignHamburgerToggleButtonRightDrawer}"
+                          Command="{x:Static md:DrawerHost.CloseDrawerCommand}"
+                          CommandParameter="{x:Static Dock.Right}"
+                          IsChecked="{Binding IsProcessOptionsPanelExpanded, Mode=TwoWay}"
+                          ToolTip="Hide this panel"/>
+            <ToggleButton DockPanel.Dock="Right"
+                          Style="{StaticResource PanelPinToggleButtonStyle}"
+                          IsChecked="{Binding IsProcessOptionsPanelPinned, Mode=TwoWay}"/>
+            <TextBlock Text="Process Options" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
+        </DockPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+            <StackPanel Margin="12">
+                <Expander Style="{StaticResource FlatExpanderStyle}" Header="Process Parameters" IsExpanded="{Binding IsProcessParametersExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                    <processing:ProcessParametersView DataContext="{Binding ProcessParameters}"/>
+                </Expander>
+                <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Enhancement" IsExpanded="{Binding IsImageEnhancementExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                    <processing:ImageEnhancementView DataContext="{Binding ImageEnhancement}"/>
+                </Expander>
+                <Expander Style="{StaticResource FlatExpanderStyle}" Header="Image Selection" IsExpanded="{Binding IsImageSelectionExpanded, Mode=TwoWay}" Margin="0,0,0,12">
+                    <processing:ImageSelectionView DataContext="{Binding ImageSelection}"/>
+                </Expander>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

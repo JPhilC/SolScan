@@ -19,7 +19,18 @@ public partial class CaptureView : UserControl
 {
     private static readonly TimeSpan SpectralLabelAnimationDuration = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Min/max pixel width for the docked options panel column - see
+    /// <see cref="UpdatePanelDockState"/>. Same 340px-ballpark default the floating drawer already
+    /// uses sits comfortably inside this range.</summary>
+    private const double MinDockedPanelWidth = 260;
+    private const double MaxDockedPanelWidth = 700;
+
     private CaptureViewModel? _viewModel;
+
+    /// <summary>Guards <see cref="UpdatePanelDockState"/>'s own writes to <c>OptionsPanelColumn.Width</c>
+    /// from being misreported by <c>OptionsPanelHost.SizeChanged</c> as a user's GridSplitter drag -
+    /// same reentrancy-guard shape as <c>CaptureViewModel._syncingFromDevice</c>.</summary>
+    private bool _updatingPanelColumnFromViewModel;
 
     /// <summary>One persistent <see cref="TextBlock"/> per currently-shown named line, keyed by
     /// <see cref="SpectralRay"/> - kept across updates (not recreated every throttled tick) so
@@ -33,6 +44,51 @@ public partial class CaptureView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         PreviewScrollViewer.SizeChanged += (_, _) => UpdateImageSize();
+        OptionsPanelHost.SizeChanged += OptionsPanelHost_SizeChanged;
+    }
+
+    /// <summary>Reports a user's GridSplitter drag (which resizes <c>OptionsPanelColumn</c>, and so
+    /// this Border filling it) back into <see cref="CaptureViewModel.CaptureOptionsPanelWidth"/> for
+    /// persistence - guarded so <see cref="UpdatePanelDockState"/>'s own programmatic width changes
+    /// (docking/undocking) don't get misreported as a drag.</summary>
+    private void OptionsPanelHost_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_updatingPanelColumnFromViewModel && _viewModel is not null && OptionsPanelHost.ActualWidth > 0)
+        {
+            _viewModel.CaptureOptionsPanelWidth = OptionsPanelHost.ActualWidth;
+        }
+    }
+
+    /// <summary>Drives <c>OptionsPanelColumn</c> (the docked panel's own Grid column - see
+    /// CaptureView.xaml) directly, since a GridSplitter-resizable column needs a real pixel
+    /// <see cref="GridLength"/>, not something WPF makes bindable from a view model. Docked
+    /// (<see cref="CaptureViewModel.IsCaptureOptionsPanelDocked"/>): restores the last-known/saved
+    /// width, clamped to <see cref="MinDockedPanelWidth"/>-<see cref="MaxDockedPanelWidth"/>. Not
+    /// docked: collapses the column to 0 so the main content reclaims the space (the column has no
+    /// static MinWidth precisely so this can go all the way to 0 - see CaptureView.xaml's own
+    /// OptionsPanelColumn doc comment). Guarded (<see cref="_updatingPanelColumnFromViewModel"/>) so
+    /// <see cref="OptionsPanelHost_SizeChanged"/> doesn't mistake this for a user drag.</summary>
+    private void UpdatePanelDockState()
+    {
+        if (_viewModel is null)
+        {
+            return;
+        }
+
+        _updatingPanelColumnFromViewModel = true;
+        if (_viewModel.IsCaptureOptionsPanelDocked)
+        {
+            OptionsPanelColumn.MinWidth = MinDockedPanelWidth;
+            OptionsPanelColumn.MaxWidth = MaxDockedPanelWidth;
+            OptionsPanelColumn.Width = new GridLength(Math.Clamp(_viewModel.CaptureOptionsPanelWidth, MinDockedPanelWidth, MaxDockedPanelWidth));
+        }
+        else
+        {
+            OptionsPanelColumn.MinWidth = 0;
+            OptionsPanelColumn.MaxWidth = 0;
+            OptionsPanelColumn.Width = new GridLength(0);
+        }
+        _updatingPanelColumnFromViewModel = false;
     }
 
     private void ReticuleOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateReticuleOverlay();
@@ -56,6 +112,7 @@ public partial class CaptureView : UserControl
         UpdateImageSize();
         UpdateReticuleOverlay();
         UpdateSpectralLabelOverlay();
+        UpdatePanelDockState();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -83,6 +140,11 @@ public partial class CaptureView : UserControl
         if (e.PropertyName is nameof(CaptureViewModel.SpectralLineLabels) or nameof(CaptureViewModel.ShowSpectralLineLabels))
         {
             UpdateSpectralLabelOverlay();
+        }
+
+        if (e.PropertyName is nameof(CaptureViewModel.IsCaptureOptionsPanelExpanded) or nameof(CaptureViewModel.IsCaptureOptionsPanelPinned))
+        {
+            UpdatePanelDockState();
         }
     }
 

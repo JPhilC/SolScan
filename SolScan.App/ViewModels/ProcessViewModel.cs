@@ -73,6 +73,9 @@ public partial class ProcessViewModel : ObservableObject
     // PropertyChanged events - see this class's own doc comment for why.
     private DispatcherTimer? _persistProcessParamsDebounceTimer;
 
+    // Debounces OnProcessOptionsPanelWidthChanged - see that method's own doc comment for why.
+    private DispatcherTimer? _persistPanelWidthDebounceTimer;
+
     /// <summary>One entry in <see cref="AvailableProcessedImages"/> - a PNG found in the output
     /// folder, with a display label derived from its filename (e.g. "raw.png" -> "Raw"). Public, not
     /// private - the [ObservableProperty] source generator emits a public property of this type,
@@ -146,6 +149,32 @@ public partial class ProcessViewModel : ObservableObject
     [ObservableProperty]
     private bool isProcessOptionsPanelExpanded;
 
+    /// <summary>Whether the panel above is "pinned" - VS-tool-window style - into a real, resizable
+    /// docked column (ProcessView.xaml's own code-behind, <c>UpdatePanelDockState</c>) instead of
+    /// shown as md:DrawerHost's default floating overlay. Off by default (today's overlay-only
+    /// behavior unchanged) - see <see cref="IsProcessDrawerOpen"/>/<see cref="IsProcessOptionsPanelDocked"/>
+    /// for how this and <see cref="IsProcessOptionsPanelExpanded"/> combine to pick one or the other.
+    /// Mirrors <c>CaptureViewModel</c>'s own identically-named members exactly.</summary>
+    [ObservableProperty]
+    private bool isProcessOptionsPanelPinned;
+
+    /// <summary>The docked column's width in pixels while pinned - see
+    /// <c>CaptureViewModel.CaptureOptionsPanelWidth</c>'s own doc comment, same idea.</summary>
+    [ObservableProperty]
+    private double processOptionsPanelWidth = 340;
+
+    /// <summary>See <c>CaptureViewModel.IsCaptureDrawerOpen</c>'s own doc comment - identical
+    /// reasoning, just for this view's panel.</summary>
+    public bool IsProcessDrawerOpen
+    {
+        get => IsProcessOptionsPanelExpanded && !IsProcessOptionsPanelPinned;
+        set => IsProcessOptionsPanelExpanded = value;
+    }
+
+    /// <summary>See <c>CaptureViewModel.IsCaptureOptionsPanelDocked</c>'s own doc comment - identical
+    /// reasoning, just for this view's panel.</summary>
+    public bool IsProcessOptionsPanelDocked => IsProcessOptionsPanelExpanded && IsProcessOptionsPanelPinned;
+
     [ObservableProperty]
     private bool isProcessParametersExpanded;
 
@@ -183,6 +212,8 @@ public partial class ProcessViewModel : ObservableObject
 
         var appSettings = appSettingsStore.Load();
         isProcessOptionsPanelExpanded = appSettings.ProcessOptionsPanelExpanded;
+        isProcessOptionsPanelPinned = appSettings.ProcessOptionsPanelPinned;
+        processOptionsPanelWidth = appSettings.ProcessOptionsPanelWidth;
         isProcessParametersExpanded = appSettings.ProcessParametersExpanded;
         isImageEnhancementExpanded = appSettings.ProcessImageEnhancementExpanded;
         isImageSelectionExpanded = appSettings.ProcessImageSelectionExpanded;
@@ -196,8 +227,43 @@ public partial class ProcessViewModel : ObservableObject
     /// fields.</summary>
     private void SetStatus(string message) => _statusBar.ProcessStatusText = $"Process: {message}";
 
-    partial void OnIsProcessOptionsPanelExpandedChanged(bool value) =>
+    partial void OnIsProcessOptionsPanelExpandedChanged(bool value)
+    {
         PersistAppSetting(s => s with { ProcessOptionsPanelExpanded = value });
+        OnPropertyChanged(nameof(IsProcessDrawerOpen));
+        OnPropertyChanged(nameof(IsProcessOptionsPanelDocked));
+    }
+
+    partial void OnIsProcessOptionsPanelPinnedChanged(bool value)
+    {
+        PersistAppSetting(s => s with { ProcessOptionsPanelPinned = value });
+        OnPropertyChanged(nameof(IsProcessDrawerOpen));
+        OnPropertyChanged(nameof(IsProcessOptionsPanelDocked));
+    }
+
+    /// <summary>Debounced the same way <see cref="SchedulePersistProcessParams"/> is - a GridSplitter
+    /// drag raises this on every pixel of movement (see ProcessView.xaml.cs's
+    /// <c>OptionsPanelHost.SizeChanged</c> handler).</summary>
+    partial void OnProcessOptionsPanelWidthChanged(double value)
+    {
+        _persistPanelWidthDebounceTimer ??= CreatePersistPanelWidthDebounceTimer();
+        _persistPanelWidthDebounceTimer.Stop();
+        _persistPanelWidthDebounceTimer.Start();
+    }
+
+    private DispatcherTimer CreatePersistPanelWidthDebounceTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            PersistAppSetting(s => s with { ProcessOptionsPanelWidth = ProcessOptionsPanelWidth });
+        };
+        return timer;
+    }
 
     partial void OnIsProcessParametersExpandedChanged(bool value) =>
         PersistAppSetting(s => s with { ProcessParametersExpanded = value });

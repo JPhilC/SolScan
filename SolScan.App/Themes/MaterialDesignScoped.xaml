@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes">
     <!-- Merged into individual views' own UserControl.Resources (not App.xaml.Resources) so
          MaterialDesignThemes - used only for md:DrawerHost's hamburger-style side panels - doesn't
          reskin every view in the app, just the ones that actually use it (ProcessView, CaptureView).
@@ -103,6 +104,40 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsExpanded" Value="True">
                             <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The VS-tool-window-style Pin toggle in CaptureOptionsPanel.xaml/ProcessOptionsPanel.xaml's
+         own headers - switches the panel between md:DrawerHost's default floating overlay and a
+         real, resizable docked Grid column (see CaptureViewModel.IsCaptureOptionsPanelPinned/
+         IsCaptureDrawerOpen/IsCaptureOptionsPanelDocked's own doc comments for the state this
+         drives). A plain ToggleButton wrapping a md:PackIcon - this app's first use of PackIcon,
+         confirmed present in the already-referenced MaterialDesignThemes 4.8.0 package (searched its
+         DLL directly for "Pin"/"PinOff" rather than assuming). The icon lives directly in the
+         ControlTemplate (not a Content Setter - a literal element there would be one shared instance
+         reused - and broken - across every ToggleButton that applies this Style) and flips from "Pin"
+         to "PinOff" via the same ControlTemplate.Triggers/TargetName idiom FlatExpanderHeaderToggleStyle's
+         own chevron above already uses, rather than a new IValueConverter. -->
+    <Style x:Key="PanelPinToggleButtonStyle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Padding" Value="4"/>
+        <Setter Property="ToolTip" Value="Pin/unpin this panel - pinned docks it as a resizable column instead of floating over the view."/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                        <md:PackIcon x:Name="PinIcon" Kind="Pin" Width="18" Height="18"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="PinIcon" Property="Kind" Value="PinOff"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{StaticResource MaterialDesignSelection}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

@@ -1590,6 +1590,70 @@ hardware behaviour to drive further changes here the same way it already has for
 hardware feature in this project (the collimator-focus-aid's own four-revision history is the clearest
 precedent for this).
 
+Also real: **an ASICap-style Exposure control**, replacing the single slider CaptureView's own Camera
+Settings Expander used to have (0.032ms-5s mapped onto one 0-1 log-scale position, see
+`ExposureScale.ToSliderPosition`/`FromSliderPosition` - since removed). Requested directly from a
+screenshot of ASICap's own real control: a dropdown (`32µs ~ 10ms`/`1ms ~ 100ms`/`100ms ~ 1000ms`/
+`1s ~ 5s` - `SolScan.Core.Camera.ExposureScale.Ranges`, matching ASICap's own fixed list except the
+last range is capped at 5s rather than its 2000s, since LX mode isn't supported here - see
+`ICameraDevice.ExposureMicroseconds`'s own doc comment) picks which sub-range a numeric up/down box
+(with spinner `RepeatButton`s) and a plain linear `Slider` operate over, each in that range's own
+unit - a new `SolScan.Core.Camera.ExposureRangeOption` record carries the range's bounds/unit/
+spinner-step/decimal-places. A same-day follow-up request ("all ranges except 1-2000s [i.e. the
+seconds one] should only allow integer values or whole decimals") added `ExposureRangeOption.
+DecimalPlaces` (0 for every range but the last) and `CaptureViewModel.QuantizeToRange`, applied to
+`ExposureMicroseconds` itself (not just how it's displayed) so a slider drag can't leave the camera
+set to some arbitrary fractional-µs/ms exposure the box could never have been used to enter.
+`ExposureScale.FindRange` re-selects whichever dropdown range actually contains a value that lands
+outside the currently-selected one (auto-readback while Auto is on, a loaded/saved setting, or a
+spinner click at a range's own edge). Covered by `ExposureScaleTests` (range-boundary matching,
+whole-domain coverage, and that only the last range has `DecimalPlaces > 0`).
+
+Also real: **flat Expander headers**. MaterialDesignThemes' own implicit `Expander` style (merged via
+`MaterialDesignScoped.xaml` into both CaptureView.xaml/ProcessView.xaml) indents the header text a
+chevron-arrow's width in from the left while the body content below sits flush at the edge - reported
+directly by the user as looking wrong once several Expanders were stacked in either view's drawer
+panel. `FlatExpanderStyle`/`FlatExpanderHeaderToggleStyle` (in `MaterialDesignScoped.xaml`) replace the
+whole header chrome: bold text starting at the same left edge as the body, a bottom divider rule
+(`MaterialDesignDivider`) marking it as a header instead of the indent, and the expand/collapse
+chevron (▸/▾, flipped via a `ControlTemplate.Triggers`/`TargetName` `Setter` - no new `IValueConverter`,
+this app's own established preference) moved to the row's right edge. Applied to all ten Expanders
+across both views.
+
+Also real: **VS-tool-window-style pin/dock for the Capture and Process options panels**. Prompted by
+the user noticing `md:DrawerHost`'s right-hand drawer (used by both views' settings panels) is
+overlay-only by design - it has no way to keep a panel open *and* see the whole preview, since it
+always slides in on top rather than sharing space. Planned via `EnterPlanMode` given the size (new
+persisted state on both view models, two new `UserControl`s, and a WPF layout pattern - a collapsible,
+resizable `Grid` column - this app hadn't combined with `DrawerHost` before). A Pin `ToggleButton`
+(`PanelPinToggleButtonStyle` in `MaterialDesignScoped.xaml` - a `md:PackIcon` flipping `Kind="Pin"`/
+`"PinOff"` the same `TargetName`-`Setter`-in-a-`Trigger` way the Expander chevron above does; this
+app's first use of `PackIcon`, confirmed present in the already-referenced MaterialDesignThemes 4.8.0
+package rather than assumed) now sits in each panel's own header, next to the existing close hamburger.
+Unpinned (the default - unchanged behavior) is exactly today's floating overlay; pinned docks the
+identical panel content into a real, resizable `Grid` column via a `GridSplitter`, shrinking the main
+content area so the preview/status area is never covered. Each view's settings content (previously
+inline inside `md:DrawerHost.RightDrawerContent`) was extracted into its own `UserControl` -
+`CaptureOptionsPanel.xaml`/`ProcessOptionsPanel.xaml`, no `DataContext` override, so the identical
+markup/bindings can be instantiated in either the floating drawer or the docked column - and each is
+now shown twice (drawer content + docked column), toggled by a new pair of `AppSettings` fields per
+view (`CaptureOptionsPanelPinned`/`Width`, `ProcessOptionsPanelPinned`/`Width`, the latter persisted
+debounced the same way `CaptureViewModel.PersistSettingsIfConnected`'s own camera-settings writes
+already are) plus two derived, non-persisted view-model properties: `IsCaptureDrawerOpen` (settable -
+proxies straight through to `IsCaptureOptionsPanelExpanded`, since `DrawerHost.IsRightDrawerOpen`
+binds `Mode=TwoWay` - true only while open *and not* pinned) and `IsCaptureOptionsPanelDocked` (get-only,
+true only while open *and* pinned) - `ProcessViewModel` carries the identical pair for its own panel.
+`CaptureView.xaml.cs`/`ProcessView.xaml.cs`'s new `UpdatePanelDockState` drives the docked column's
+`GridLength` directly (a `GridSplitter`-resizable column needs a real pixel `GridLength`, which WPF
+doesn't make bindable from a view model - the same "code-behind owns layout math" precedent as
+`CaptureView.xaml.cs`'s pre-existing `UpdateImageSize`), clamped to 260-700px; the splitter's own
+column, by contrast, needs no code-behind at all - `Width="Auto"` sizing to a `Collapsed` `GridSplitter`
+already collapses to 0 for free. A plain `FrameworkElement.SizeChanged` on the docked column's own
+host `Border` reports a user's splitter drag back into the persisted width, guarded against
+misinterpreting `UpdatePanelDockState`'s own programmatic resizes as a drag. NOT YET VALIDATED against
+the running app - confirmed to build clean and pass the existing test suite only; the pin/dock/resize/
+persist-across-restart behavior itself hasn't been exercised by the user yet.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
 no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also

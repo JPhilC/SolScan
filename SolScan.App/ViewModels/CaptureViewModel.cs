@@ -130,6 +130,9 @@ public partial class CaptureViewModel : ObservableObject
     // Debounces ApplyOutputFormatChange - see ScheduleApplyOutputFormatChange's own doc comment for why.
     private DispatcherTimer? _applyOutputFormatDebounceTimer;
 
+    // Debounces OnCaptureOptionsPanelWidthChanged - see that method's own doc comment for why.
+    private DispatcherTimer? _persistPanelWidthDebounceTimer;
+
     // 0 = idle, 1 = a background preview-processing Task is currently running - see
     // OnFrameCaptured/ProcessPreviewFrame. Interlocked rather than a plain bool since it's read and
     // written from whichever thread the connected device raises FrameCaptured on.
@@ -295,6 +298,41 @@ public partial class CaptureViewModel : ObservableObject
     /// (md:DrawerHost, same pattern ProcessView.xaml uses).</summary>
     [ObservableProperty]
     private bool isCaptureOptionsPanelExpanded = true;
+
+    /// <summary>Whether the panel above is "pinned" - VS-tool-window style - into a real, resizable
+    /// docked column (CaptureView.xaml's own code-behind, <c>UpdatePanelDockState</c>) instead of
+    /// shown as md:DrawerHost's default floating overlay. Off by default (today's overlay-only
+    /// behavior unchanged) - see <see cref="IsCaptureDrawerOpen"/>/<see cref="IsCaptureOptionsPanelDocked"/>
+    /// for how this and <see cref="IsCaptureOptionsPanelExpanded"/> combine to pick one or the other.</summary>
+    [ObservableProperty]
+    private bool isCaptureOptionsPanelPinned;
+
+    /// <summary>The docked column's width in pixels while pinned - set from CaptureView.xaml.cs
+    /// whenever the user drags its GridSplitter (see <c>OptionsPanelHost.SizeChanged</c>), persisted
+    /// (debounced, see <see cref="OnCaptureOptionsPanelWidthChanged"/>) the same way a GridSplitter-
+    /// resized column normally isn't. Meaningless while unpinned - CaptureView.xaml.cs only ever
+    /// applies it to the docked column's own width, never the floating drawer's fixed one.</summary>
+    [ObservableProperty]
+    private double captureOptionsPanelWidth = 340;
+
+    /// <summary>Drives <c>md:DrawerHost.IsRightDrawerOpen</c> - true only while the panel is open
+    /// <em>and not</em> pinned, since a pinned-open panel is shown docked instead of as a floating
+    /// overlay (see <see cref="IsCaptureOptionsPanelDocked"/>). The setter writes straight through to
+    /// <see cref="IsCaptureOptionsPanelExpanded"/> - needed because DrawerHost's own binding is
+    /// <c>Mode=TwoWay</c> (e.g. Escape/scrim-click closes it) - which is always correct here: the
+    /// drawer can only have been open because <see cref="IsCaptureOptionsPanelPinned"/> was already
+    /// false, so collapsing <see cref="IsCaptureOptionsPanelExpanded"/> is exactly what closing it
+    /// should do.</summary>
+    public bool IsCaptureDrawerOpen
+    {
+        get => IsCaptureOptionsPanelExpanded && !IsCaptureOptionsPanelPinned;
+        set => IsCaptureOptionsPanelExpanded = value;
+    }
+
+    /// <summary>Drives the docked column/GridSplitter's visibility in CaptureView.xaml - true only
+    /// while the panel is both open and pinned (see <see cref="IsCaptureDrawerOpen"/> for the
+    /// complementary floating-overlay case).</summary>
+    public bool IsCaptureOptionsPanelDocked => IsCaptureOptionsPanelExpanded && IsCaptureOptionsPanelPinned;
 
     /// <summary>Fixed (non-zoom-scaling) horizontal/vertical crosshair overlay - drawn by
     /// CaptureView.xaml.cs's ReticuleOverlay directly over the preview viewport, not inside the
@@ -509,6 +547,8 @@ public partial class CaptureViewModel : ObservableObject
         isFocusAidExpanded = savedAppSettings.FocusAidExpanded;
         isReticuleExpanded = savedAppSettings.ReticuleExpanded;
         isCaptureOptionsPanelExpanded = savedAppSettings.CaptureOptionsPanelExpanded;
+        isCaptureOptionsPanelPinned = savedAppSettings.CaptureOptionsPanelPinned;
+        captureOptionsPanelWidth = savedAppSettings.CaptureOptionsPanelWidth;
         showCrosshairReticule = savedAppSettings.ShowCrosshairReticule;
         showRotationReticule = savedAppSettings.ShowRotationReticule;
         reticuleAngleDegrees = savedAppSettings.ReticuleAngleDegrees;
@@ -1416,8 +1456,45 @@ public partial class CaptureViewModel : ObservableObject
     partial void OnIsReticuleExpandedChanged(bool value) =>
         PersistAppSetting(s => s with { ReticuleExpanded = value });
 
-    partial void OnIsCaptureOptionsPanelExpandedChanged(bool value) =>
+    partial void OnIsCaptureOptionsPanelExpandedChanged(bool value)
+    {
         PersistAppSetting(s => s with { CaptureOptionsPanelExpanded = value });
+        OnPropertyChanged(nameof(IsCaptureDrawerOpen));
+        OnPropertyChanged(nameof(IsCaptureOptionsPanelDocked));
+    }
+
+    partial void OnIsCaptureOptionsPanelPinnedChanged(bool value)
+    {
+        PersistAppSetting(s => s with { CaptureOptionsPanelPinned = value });
+        OnPropertyChanged(nameof(IsCaptureDrawerOpen));
+        OnPropertyChanged(nameof(IsCaptureOptionsPanelDocked));
+    }
+
+    /// <summary>Debounced the same way <see cref="PersistSettingsIfConnected"/> is - a GridSplitter
+    /// drag raises this on every pixel of movement (see CaptureView.xaml.cs's
+    /// <c>OptionsPanelHost.SizeChanged</c> handler), and writing app-settings.json that fast risks the
+    /// same antivirus-scan IOException <see cref="PersistSettingsIfConnected"/>'s own doc comment
+    /// describes.</summary>
+    partial void OnCaptureOptionsPanelWidthChanged(double value)
+    {
+        _persistPanelWidthDebounceTimer ??= CreatePersistPanelWidthDebounceTimer();
+        _persistPanelWidthDebounceTimer.Stop();
+        _persistPanelWidthDebounceTimer.Start();
+    }
+
+    private DispatcherTimer CreatePersistPanelWidthDebounceTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            PersistAppSetting(s => s with { CaptureOptionsPanelWidth = CaptureOptionsPanelWidth });
+        };
+        return timer;
+    }
 
     // Reticule toggles/angle/inset - a UI display preference with nothing to do with which camera is
     // connected (the overlay is pure on-screen geometry, see CaptureView.xaml.cs's ReticuleOverlay),
