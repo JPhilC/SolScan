@@ -7,6 +7,7 @@
 // Both passes are parallelized across CPU cores (see ComputeAverage's own doc comment) - a pure
 // execution-strategy change, not a port difference.
 
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using SolScan.Core.Capture;
@@ -32,6 +33,8 @@ public sealed class FrameAverager
             throw new InvalidOperationException("The SER file has no frames.");
         }
 
+        var stopwatch = Stopwatch.StartNew();
+        var frameSizeBytes = (long)header.Width * header.Height * (header.PixelDepth <= 8 ? 1 : 2);
         var parallelOptions = new ParallelOptions { CancellationToken = cancellationToken };
 
         progress?.Report("Averaging frames (measuring brightness)...");
@@ -109,6 +112,11 @@ public sealed class FrameAverager
                 average[y, x] = (float)(sum[y, x] * invCount);
             }
         }
+
+        // Two full passes each read every frame, so total bytes moved is double the file's own raw
+        // video size - this is a real, measured figure, not the file's own on-disk size (see
+        // FrameConversion.FormatThroughput's own doc comment for why this exists at all).
+        progress?.Report($"Averaging: {FrameConversion.FormatThroughput(frameSizeBytes * frameCount * 2, stopwatch.Elapsed)}");
 
         return average;
     }

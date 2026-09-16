@@ -2,6 +2,7 @@
 // (processSingleFrame, Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0).
 // See SolScan's NOTICE file for full attribution.
 
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using SolScan.Core.Capture;
@@ -60,10 +61,12 @@ public sealed class DiskReconstructor
             throw new ArgumentException("At least one pixel shift is required.", nameof(pixelShifts));
         }
 
+        var stopwatch = Stopwatch.StartNew();
         var header = reader.Header;
         var width = header.Width;
         var height = header.Height;
         var frameCount = header.FrameCount;
+        var frameSizeBytes = (long)width * height * (header.PixelDepth <= 8 ? 1 : 2);
         var outputs = new float[pixelShifts.Count][,];
         for (var s = 0; s < pixelShifts.Count; s++)
         {
@@ -121,6 +124,10 @@ public sealed class DiskReconstructor
                 progress?.Report($"Reconstructing... {completed}/{frameCount}");
             }
         });
+
+        // Every requested shift is decoded from the same one pass over the file, so total bytes moved
+        // is just the file's own raw video size once, regardless of how many shifts were requested.
+        progress?.Report($"Reconstruction: {FrameConversion.FormatThroughput(frameSizeBytes * frameCount, stopwatch.Elapsed)}");
 
         return outputs;
     }

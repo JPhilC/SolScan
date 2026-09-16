@@ -63,6 +63,92 @@ public class ShgProcessorTests
     }
 
     [Fact]
+    public async Task ProcessAsync_CachingInMemoryProducesTheSameOutputAsTheDiskFallbackPath()
+    {
+        // Regression check for the "eliminate redundant disk re-reads" optimization: whether the
+        // recording is cached in memory (availableMemoryBytesProvider reporting plenty) or re-read from
+        // disk at each stage (reporting none, forcing the fallback branch - see ShgProcessor's own doc
+        // comment) must produce numerically identical output, since this is purely an execution-strategy
+        // change, never an algorithm change.
+        const int width = 20;
+        const int height = 15;
+        const int frameCount = 5;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticFile(path, width, height, frameCount, lineRow: 7, background: 1000, depth: 800, sigma: 1.5);
+
+            var defaults = ProcessParams.CreateDefault();
+            var processParams = defaults with
+            {
+                RequestedImages = new RequestedImages([GeneratedImageKind.Raw, GeneratedImageKind.Continuum]),
+                SpectrumParams = defaults.SpectrumParams with { PixelShift = 0, ContinuumShift = 2 },
+            };
+
+            var cachingProcessor = new ShgProcessor(() => new SerReader(), availableMemoryBytesProvider: () => long.MaxValue);
+            var fallbackProcessor = new ShgProcessor(() => new SerReader(), availableMemoryBytesProvider: () => 0);
+
+            var cached = await cachingProcessor.ProcessAsync(path, processParams);
+            var fallback = await fallbackProcessor.ProcessAsync(path, processParams);
+
+            var cachedRaw = Assert.Single(cached.Images, i => i.Kind == GeneratedImageKind.Raw);
+            var fallbackRaw = Assert.Single(fallback.Images, i => i.Kind == GeneratedImageKind.Raw);
+            AssertSamePixels(cachedRaw.Pixels, fallbackRaw.Pixels, width, frameCount);
+
+            var cachedContinuum = Assert.Single(cached.Images, i => i.Kind == GeneratedImageKind.Continuum);
+            var fallbackContinuum = Assert.Single(fallback.Images, i => i.Kind == GeneratedImageKind.Continuum);
+            AssertSamePixels(cachedContinuum.Pixels, fallbackContinuum.Pixels, width, frameCount);
+
+            Assert.Equal(cached.DetectedLinePolynomial, fallback.DetectedLinePolynomial);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NoAvailableMemoryReported_FallsBackToDiskAndWarns()
+    {
+        const int width = 10;
+        const int height = 8;
+        var path = Path.Combine(Path.GetTempPath(), $"solscan-test-{Guid.NewGuid():N}.ser");
+
+        try
+        {
+            WriteSyntheticFile(path, width, height, frameCount: 3, lineRow: 4, background: 500, depth: 300, sigma: 1.0);
+
+            var processor = new ShgProcessor(() => new SerReader(), availableMemoryBytesProvider: () => 0);
+            var processParams = ProcessParams.CreateDefault() with { RequestedImages = new RequestedImages([GeneratedImageKind.Raw]) };
+
+            var messages = new List<string>();
+            var progress = new Progress<string>(messages.Add);
+
+            var result = await processor.ProcessAsync(path, processParams, progress: progress);
+
+            Assert.Single(result.Images);
+            Assert.Contains(messages, m => m.Contains("re-read it from disk", StringComparison.Ordinal));
+            Assert.DoesNotContain(messages, m => m.Contains("Loading frames into memory", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static void AssertSamePixels(ushort[,] a, ushort[,] b, int width, int height)
+    {
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                Assert.Equal(a[y, x], b[y, x]);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ProcessAsync_NothingRequestedFromTheUnimplementedOrReconstructionSet_ReturnsNoImagesNoPolynomial()
     {
         const int width = 10;

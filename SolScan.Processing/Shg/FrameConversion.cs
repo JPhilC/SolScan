@@ -46,4 +46,27 @@ internal static class FrameConversion
 
         return sum / ((double)height * width);
     }
+
+    /// <summary>Formats a real, measured data rate for a processing-log line (e.g. "1.76GB in 4.13s
+    /// (426.3 MB/s)") - JSol'Ex's own "Reconstruction performance: N MB/s" has no SolScan equivalent
+    /// otherwise (see CLAUDE.md's "closing the I/O throughput gap" investigation). Shared by
+    /// <see cref="FrameAverager"/>, <see cref="DiskReconstructor"/>, and
+    /// <see cref="InMemorySerReader"/>'s own load pass so the three don't format this three different
+    /// ways.</summary>
+    public static string FormatThroughput(long bytes, TimeSpan elapsed)
+    {
+        var seconds = System.Math.Max(elapsed.TotalSeconds, 0.001); // avoid a divide-by-zero on a near-instant run
+        var mbPerSecond = bytes / 1024.0 / 1024.0 / seconds;
+        return $"{FormatBytes(bytes)} in {seconds:F2}s ({mbPerSecond:F1} MB/s)";
+    }
+
+    /// <summary>Formats a plain byte count as "N.NNMB"/"N.NNGB" - the size half of
+    /// <see cref="FormatThroughput"/>, also used standalone by <see cref="ShgProcessor"/>'s own
+    /// memory-availability check (comparing a recording's raw size against what's available before
+    /// deciding whether to cache it in memory).</summary>
+    public static string FormatBytes(long bytes)
+    {
+        var megabytes = bytes / 1024.0 / 1024.0;
+        return megabytes >= 1024 ? $"{megabytes / 1024.0:F2}GB" : $"{megabytes:F2}MB";
+    }
 }

@@ -542,8 +542,7 @@ public partial class ProcessViewModel : ObservableObject
             SetStatus(BuildResultSummary(result, outputFolder, ProcessParameters.SelectedRay));
             UpdateResultInfoPanel(result, outputFolder);
 
-            var imageCount = result.Images.Count + (result.ColorImages?.Count ?? 0);
-            log?.Info($"Wrote {imageCount} image(s) under {outputFolder}.");
+            log?.Info($"Wrote {TotalImageCount(result)} image(s) under {outputFolder}.");
             log?.Info("Processing done.");
         }
         catch (OperationCanceledException)
@@ -795,9 +794,18 @@ public partial class ProcessViewModel : ObservableObject
             : $"Best guess: {ray.Label} (score {result.IdentificationScore:F2}, not confident) - kept the configured line ({configuredRay.Label}) instead.";
     }
 
+    /// <summary>The real total image count for a completed run - <see cref="ShgProcessingResult.Images"/>
+    /// alone undercounts whenever <see cref="ShgProcessingResult.ColorImages"/> (e.g. Colorized) has any
+    /// entries, since those are a genuinely separate list, not a subset of <c>Images</c>. Shared by
+    /// <see cref="BuildResultSummary"/> (the status bar), <see cref="UpdateResultInfoPanel"/> (the
+    /// "Processing Results" panel), and <see cref="ProcessAsync"/>'s own log line, so the three can't
+    /// disagree about how many images were actually written - they did, until this was extracted (the
+    /// log line already added the two counts together; the other two didn't).</summary>
+    private static int TotalImageCount(ShgProcessingResult result) => result.Images.Count + (result.ColorImages?.Count ?? 0);
+
     private static string BuildResultSummary(ShgProcessingResult result, string outputFolder, SpectralRay configuredRay)
     {
-        var summary = $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders).";
+        var summary = $"Wrote {TotalImageCount(result)} image(s) under {outputFolder} (raw/processed subfolders).";
         if (FormatDetectedLine(result) is { } line)
         {
             summary += $" {line}";
@@ -833,9 +841,9 @@ public partial class ProcessViewModel : ObservableObject
         DetectedGeometryText = FormatDetectedGeometry(result) ?? NoGeometryDetectedYetText;
         IdentifiedLineText = FormatLineIdentification(result, ProcessParameters.SelectedRay) ?? NoLineIdentifiedYetText;
         ResultImagesText = result.SkippedKinds.Count > 0
-            ? $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders). "
+            ? $"Wrote {TotalImageCount(result)} image(s) under {outputFolder} (raw/processed subfolders). "
                 + $"Not yet implemented: {string.Join(", ", result.SkippedKinds)}."
-            : $"Wrote {result.Images.Count} image(s) under {outputFolder} (raw/processed subfolders).";
+            : $"Wrote {TotalImageCount(result)} image(s) under {outputFolder} (raw/processed subfolders).";
     }
 
     /// <summary>Saves a 16-bit grayscale <see cref="ProcessedImage"/> as PNG via WPF's own

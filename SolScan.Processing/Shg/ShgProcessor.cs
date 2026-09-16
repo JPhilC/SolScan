@@ -32,14 +32,42 @@ namespace SolScan.Processing.Shg;
 /// `System.Drawing.Common`'s well-known GDI+ save-path issues - so the actual encode/save step lives
 /// in SolScan.App instead, keeping this project genuinely IO-free per its own "pure algorithms"
 /// description.
+///
+/// **Eliminates redundant disk re-reads when it's safe to do so**: a recording's raw frames would
+/// otherwise be read from disk up to three times (twice by <see cref="FrameAverager"/>'s own two
+/// passes, once more by <see cref="DiskReconstructor"/>) - real, measured cost identified against a
+/// real JSol'Ex comparison (see CLAUDE.md's "closing the I/O throughput gap" investigation). When the
+/// recording's own raw size comfortably fits in available memory (see
+/// <see cref="_availableMemoryBytesProvider"/>/<see cref="InMemoryCacheSafetyFraction"/>), this class
+/// reads it into memory exactly once via <see cref="InMemorySerReader.LoadFrom"/> and hands that same
+/// instance to both <see cref="FrameAverager"/> and <see cref="DiskReconstructor"/> - neither needed
+/// any changes themselves, since both already just accept a plain <see cref="ISerReader"/>. A
+/// recording too large for that (an un-cropped legacy full-frame capture, most likely) falls back to
+/// today's exact original behaviour - a fresh disk-backed reader opened per stage - with a warning
+/// reported via <c>progress</c> suggesting a tighter ROI or the Crop SER utility.
 /// </summary>
 public sealed class ShgProcessor : IShgProcessor
 {
+    /// <summary>Cache a recording's raw frames in memory (see the "eliminate redundant disk re-reads"
+    /// section of this class's own doc comment) only when doing so would use at most this fraction of
+    /// what <see cref="_availableMemoryBytesProvider"/> reports - leaving headroom for the rest of the
+    /// app, the OS, and the smaller working buffers averaging/reconstruction/geometry correction still
+    /// need on top. A conservative starting value, not a measured one.</summary>
+    private const double InMemoryCacheSafetyFraction = 0.5;
+
     private readonly Func<ISerReader> _serReaderFactory;
 
-    public ShgProcessor(Func<ISerReader> serReaderFactory)
+    /// <summary>How much memory is available to safely spend on caching a recording's raw frames -
+    /// defaults to <see cref="GC.GetGCMemoryInfo()"/>'s own <c>TotalAvailableMemoryBytes</c> (the
+    /// .NET-native, cross-platform answer to "how much memory can this process safely use", no
+    /// P/Invoke needed), overridable so a test can simulate "plenty of memory" or "none at all" cheaply
+    /// without depending on the real machine's own state.</summary>
+    private readonly Func<long> _availableMemoryBytesProvider;
+
+    public ShgProcessor(Func<ISerReader> serReaderFactory, Func<long>? availableMemoryBytesProvider = null)
     {
         _serReaderFactory = serReaderFactory;
+        _availableMemoryBytesProvider = availableMemoryBytesProvider ?? (() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
     }
 
     public Task<ShgProcessingResult> ProcessAsync(
@@ -87,10 +115,38 @@ public sealed class ShgProcessor : IShgProcessor
 
         if (wantsRaw || wantsReconstruction || wantsContinuum || needsGeometryCorrection)
         {
+            // Non-null only when the recording was small enough to cache in memory below - shared
+            // across both the averaging and reconstruction stages so neither re-reads the file from
+            // disk a second/third time. Disposed at the very end of this whole block (see far below) -
+            // in practice a no-op (see InMemorySerReader's own Dispose), but kept for IDisposable
+            // hygiene regardless.
+            InMemorySerReader? cachedReader = null;
+
             using (var averagingReader = _serReaderFactory())
             {
                 averagingReader.Open(serFilePath);
-                var average = new FrameAverager().ComputeAverage(averagingReader, progress, cancellationToken);
+
+                var header = averagingReader.Header;
+                var rawVideoBytes = (long)header.Width * header.Height * (header.PixelDepth <= 8 ? 1 : 2) * header.FrameCount;
+                var availableBytes = _availableMemoryBytesProvider();
+
+                ISerReader sourceForAveraging = averagingReader;
+                if (availableBytes > 0 && rawVideoBytes <= availableBytes * InMemoryCacheSafetyFraction)
+                {
+                    progress?.Report("Loading frames into memory for faster processing...");
+                    cachedReader = InMemorySerReader.LoadFrom(averagingReader, progress, cancellationToken);
+                    sourceForAveraging = cachedReader;
+                }
+                else
+                {
+                    progress?.Report(
+                        $"Recording is large ({FrameConversion.FormatBytes(rawVideoBytes)}, available memory "
+                        + $"{FrameConversion.FormatBytes(availableBytes)}) - processing will re-read it from disk "
+                        + "at each stage rather than caching it, which is slower. If this wasn't intentional, "
+                        + "consider a tighter ROI height at capture time or the Crop SER utility to trim this file.");
+                }
+
+                var average = new FrameAverager().ComputeAverage(sourceForAveraging, progress, cancellationToken);
 
                 cancellationToken.ThrowIfCancellationRequested();
                 progress?.Report("Detecting spectral line...");
@@ -137,107 +193,132 @@ public sealed class ShgProcessor : IShgProcessor
             var needsRawReconstruction = wantsRaw || wantsReconstruction || needsGeometryCorrection;
             if (needsRawReconstruction || wantsContinuum)
             {
-                using var reader = _serReaderFactory();
-                reader.Open(serFilePath);
-                var nativeBitDepth = reader.Header.PixelDepth;
-
-                var shifts = new List<double>();
-                if (needsRawReconstruction)
+                // Reuse the same in-memory copy averaging just used, when there is one - no second
+                // disk read at all in that case. Otherwise open a fresh disk reader exactly as before
+                // this optimization existed.
+                ISerReader reconstructionReader;
+                var ownsReconstructionReader = cachedReader is null;
+                if (cachedReader is not null)
                 {
-                    shifts.Add(spectrumParams.PixelShift);
+                    reconstructionReader = cachedReader;
+                }
+                else
+                {
+                    reconstructionReader = _serReaderFactory();
+                    reconstructionReader.Open(serFilePath);
                 }
 
-                if (wantsContinuum)
+                try
                 {
-                    shifts.Add(spectrumParams.ContinuumShift);
-                }
+                    var nativeBitDepth = reconstructionReader.Header.PixelDepth;
 
-                progress?.Report(needsRawReconstruction && wantsContinuum
-                    ? "Reconstructing Raw and Continuum..."
-                    : needsRawReconstruction ? "Reconstructing Raw..." : "Reconstructing Continuum...");
-                var reconstructed = new DiskReconstructor().ReconstructMultiple(reader, polynomial.Value, shifts, progress, cancellationToken);
-                var nextShiftIndex = 0;
-
-                if (needsRawReconstruction)
-                {
-                    var raw = reconstructed[nextShiftIndex++];
-
-                    if (wantsRaw || wantsReconstruction)
+                    var shifts = new List<double>();
+                    if (needsRawReconstruction)
                     {
-                        var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, nativeBitDepth);
-                        if (wantsRaw)
-                        {
-                            images.Add(rawImage);
-                        }
-
-                        if (wantsReconstruction)
-                        {
-                            // JSolex's "Reconstruction" is a progressive *live-display* variant of the
-                            // same reconstruction, not a separately computed image - SolScan has no live
-                            // progress view yet to make that distinction meaningful, so it's saved as
-                            // the same data.
-                            images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
-                        }
+                        shifts.Add(spectrumParams.PixelShift);
                     }
 
-                    if (needsGeometryCorrection)
+                    if (wantsContinuum)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        progress?.Report("Fitting disk ellipse and correcting geometry...");
-                        var maxPixelValue = (1 << nativeBitDepth) - 1;
-                        geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
-                        // Reported as soon as it's known - see the distortion-polynomial progress
-                        // report above for why (real-time narration, not just the final result).
-                        progress?.Report($"Disk tilt: {geometryResult.Value.TiltDegrees:F2}°, X/Y ratio: {geometryResult.Value.XyRatio:F3}.");
-                        // From here on, use the effective SpectrumParams (spectrumParams), not the
-                        // originally-configured processParams.SpectrumParams - see this class's own doc
-                        // comment for why the two can differ.
-                        var effectiveProcessParams = processParams with { SpectrumParams = spectrumParams };
-                        if (wantsGeometryCorrected)
-                        {
-                            images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
-                        }
+                        shifts.Add(spectrumParams.ContinuumShift);
+                    }
 
-                        if (wantsVirtualEclipse)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            progress?.Report("Generating virtual eclipse...");
-                            var scaled = ScaleToContainerRange(geometryResult.Value.Pixels, maxPixelValue);
-                            var eclipse = Coronagraph.Produce(scaled, geometryResult.Value.CorrectedEllipse);
-                            images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.VirtualEclipse, eclipse));
-                        }
+                    progress?.Report(needsRawReconstruction && wantsContinuum
+                        ? "Reconstructing Raw and Continuum..."
+                        : needsRawReconstruction ? "Reconstructing Raw..." : "Reconstructing Continuum...");
+                    var reconstructed = new DiskReconstructor().ReconstructMultiple(reconstructionReader, polynomial.Value, shifts, progress, cancellationToken);
+                    var nextShiftIndex = 0;
 
-                        if (needsContrastEnhancement)
+                    if (needsRawReconstruction)
+                    {
+                        var raw = reconstructed[nextShiftIndex++];
+
+                        if (wantsRaw || wantsReconstruction)
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
-                            var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, effectiveProcessParams, maxPixelValue);
-                            if (wantsGeometryCorrectedProcessed)
+                            var rawImage = BuildProcessedImage(GeneratedImageKind.Raw, raw, nativeBitDepth);
+                            if (wantsRaw)
                             {
-                                images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                                images.Add(rawImage);
                             }
 
-                            if (wantsColorized)
+                            if (wantsReconstruction)
+                            {
+                                // JSolex's "Reconstruction" is a progressive *live-display* variant of the
+                                // same reconstruction, not a separately computed image - SolScan has no live
+                                // progress view yet to make that distinction meaningful, so it's saved as
+                                // the same data.
+                                images.Add(rawImage with { Kind = GeneratedImageKind.Reconstruction });
+                            }
+                        }
+
+                        if (needsGeometryCorrection)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            progress?.Report("Fitting disk ellipse and correcting geometry...");
+                            var maxPixelValue = (1 << nativeBitDepth) - 1;
+                            geometryResult = DiskGeometryCorrector.Correct(raw, processParams.GeometryParams, maxPixelValue);
+                            // Reported as soon as it's known - see the distortion-polynomial progress
+                            // report above for why (real-time narration, not just the final result).
+                            progress?.Report($"Disk tilt: {geometryResult.Value.TiltDegrees:F2}°, X/Y ratio: {geometryResult.Value.XyRatio:F3}.");
+                            // From here on, use the effective SpectrumParams (spectrumParams), not the
+                            // originally-configured processParams.SpectrumParams - see this class's own doc
+                            // comment for why the two can differ.
+                            var effectiveProcessParams = processParams with { SpectrumParams = spectrumParams };
+                            if (wantsGeometryCorrected)
+                            {
+                                images.Add(BuildProcessedImage(GeneratedImageKind.GeometryCorrected, geometryResult.Value.Pixels, nativeBitDepth));
+                            }
+
+                            if (wantsVirtualEclipse)
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
-                                progress?.Report("Colorizing...");
-                                var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
-                                var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, spectrumParams.Ray);
-                                if (colorized is not null)
+                                progress?.Report("Generating virtual eclipse...");
+                                var scaled = ScaleToContainerRange(geometryResult.Value.Pixels, maxPixelValue);
+                                var eclipse = Coronagraph.Produce(scaled, geometryResult.Value.CorrectedEllipse);
+                                images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.VirtualEclipse, eclipse));
+                            }
+
+                            if (needsContrastEnhancement)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                progress?.Report($"Applying {processParams.ContrastEnhancement} contrast enhancement...");
+                                var processed = ApplyContrastEnhancement(geometryResult.Value.Pixels, geometryResult.Value.CorrectedEllipse, effectiveProcessParams, maxPixelValue);
+                                if (wantsGeometryCorrectedProcessed)
                                 {
-                                    colorImages.Add(colorized);
+                                    images.Add(BuildProcessedImageFromFullRange(GeneratedImageKind.GeometryCorrectedProcessed, processed));
+                                }
+
+                                if (wantsColorized)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    progress?.Report("Colorizing...");
+                                    var blackPointOnContainerScale = (float)(geometryResult.Value.BlackPoint * 65535.0 / maxPixelValue);
+                                    var colorized = ProduceColorizedImage(processed, blackPointOnContainerScale, spectrumParams.Ray);
+                                    if (colorized is not null)
+                                    {
+                                        colorImages.Add(colorized);
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if (wantsContinuum)
+                    if (wantsContinuum)
+                    {
+                        var continuum = reconstructed[nextShiftIndex++];
+                        images.Add(BuildProcessedImage(GeneratedImageKind.Continuum, continuum, nativeBitDepth));
+                    }
+                }
+                finally
                 {
-                    var continuum = reconstructed[nextShiftIndex++];
-                    images.Add(BuildProcessedImage(GeneratedImageKind.Continuum, continuum, nativeBitDepth));
+                    if (ownsReconstructionReader)
+                    {
+                        reconstructionReader.Dispose();
+                    }
                 }
             }
+
+            cachedReader?.Dispose();
         }
 
         progress?.Report("Done.");

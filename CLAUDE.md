@@ -225,6 +225,13 @@ dotnet test SolScan.Tests/SolScan.Tests.csproj      # run tests
 Platform is x64 throughout (`PlatformTarget`/`Platforms` set on every project) — the ZWO ASI camera
 SDK ships x64 native binaries, so building `AnyCPU` risks a mismatch once that dependency lands.
 
+**Always benchmark/compare performance in a Release build (`dotnet build -c Release`, or the built
+`.exe` launched directly), never Debug (a plain `dotnet run`/Visual Studio F5 launch defaults to it).**
+Confirmed concretely, not assumed: the exact same code processing the exact same real file measured
+45.60s in Debug vs. 15.91s in Release - a 2.87x difference from build configuration alone, on top of
+(and easily large enough to hide or invert) whatever an actual code change's own real effect is - see
+the Process-pipeline-performance entries below for the full investigation this came out of.
+
 ## Architecture
 
 ### Project layering
@@ -1155,6 +1162,16 @@ only ever updated on a *successful* `ProcessAsync` completion - left untouched (
 cancel/failure, so a previous successful run's numbers stay visible rather than being wiped by an
 unrelated error on a later attempt.
 
+**Follow-up bug, found once the processing log (below) let the user cross-check the two against each
+other**: `ResultImagesText`/`BuildResultSummary` both counted `result.Images.Count` only, undercounting
+by however many entries `result.ColorImages` had (e.g. one Colorized image) - a real Colorized run would
+show "Wrote 2 image(s)" on the panel/status bar while the log correctly said "Wrote 3". The processing
+log's own line (added later, see below) already added the two counts together correctly, which is what
+made the mismatch visible at all. Fixed by extracting a single `TotalImageCount(ShgProcessingResult)`
+helper (`result.Images.Count + (result.ColorImages?.Count ?? 0)`), now the one and only place this sum
+is computed - used by `BuildResultSummary`, `UpdateResultInfoPanel`, and the log line alike, so the
+three can't drift apart again the way they just did.
+
 Also real: **the Colorized image** - `GeneratedImageKind.Colorized`, the first output landed from
 JSolex's separate "Advanced Images" section rather than "Basic Images" (astro4j's own
 `ImageSelectionPanel.java` puts its checkbox in `advancedGrid`, not the basic one - confirmed by
@@ -1820,9 +1837,9 @@ that merging Raw/Continuum into one pass didn't mix up which output belongs to w
 exactly the kind of subtle bug this refactor could otherwise introduce silently), and
 `ReconstructMultiple` with a single shift produces byte-identical output to `Reconstruct` (proving the
 delegation is behaviour-preserving, on top of `Reconstruct`'s own two pre-existing tests continuing to
-pass unchanged). NOT YET benchmarked against a real file to measure the actual wall-clock improvement -
-both fixes are real, verified-correct reductions in I/O, but no before/after timing was captured
-against the user's own Calcium K file or any other real capture.
+pass unchanged). Benchmarked against a real file three sessions later, alongside the other two rounds of
+I/O work below - see the "now actually benchmarked" entry further down for the real combined numbers
+(41.34s → 15.91s, a 2.6x speedup, beating JSol'Ex's own 34.63s on the same file).
 
 Also real (planned via `EnterPlanMode`, same session): **parallelizing the per-frame work across CPU
 cores** - `FrameAverager`'s two loops and `DiskReconstructor.ReconstructMultiple`'s reconstruction loop,
@@ -1880,11 +1897,11 @@ rethrows a bare (unwrapped) `OperationCanceledException` on cancellation, so exi
 
 All 161 tests pass (the pre-existing `FrameAveragerTests`/`DiskReconstructorTests`/`ShgProcessorTests`
 cases use tolerant `precision:` assertions on simple constant/ramp fixtures, not exact bit-level checks,
-so the different accumulation order from parallelization doesn't trip them). NOT YET benchmarked against
-a real file to measure the actual wall-clock improvement, same caveat as the two I/O fixes above - worth
-timing against the user's own real Calcium K file to see how close SolScan now gets to JSol'Ex's 29.86s,
-though matching it exactly was never the bar (JSol'Ex is a mature, long-optimized pipeline; meaningful
-improvement is the goal, not parity).
+so the different accumulation order from parallelization doesn't trip them). Benchmarked three sessions
+later alongside the rest of this I/O work - see the "now actually benchmarked" entry further down: real
+combined result 41.34s → 15.91s, comfortably past JSol'Ex's own 34.63s on the same file, not just
+matching it (matching it was never the bar anyway - JSol'Ex is a mature, long-optimized pipeline;
+meaningful improvement was always the actual goal).
 
 Also real: a **per-run processing log**, requested directly by the user after seeing JSol'Ex's own
 `.log` output for the same Calcium K file and asking for something along the same lines. `ProcessingLocations`
@@ -1955,6 +1972,117 @@ cache as a confound before concluding further, and worth reconsidering the still
 single-pass `FrameAverager` algorithm (currently reads the whole file twice) as the next real lever,
 rather than assuming more parallelism alone will close the gap. Not yet investigated further this
 session - a real, separate follow-up.
+
+Also real: **closing the I/O throughput gap** - the real, separate follow-up promised above, planned
+via `EnterPlanMode` given the size (a new `ISerReader` implementation and a real restructure of
+`ShgProcessor`'s own control flow). Investigated JSol'Ex's own "Processing will require approximatively
+X MB of disk space"/"Memory pressure factor" log lines directly (`SolexVideoProcessor.java` -
+`checkAvailableDiskSpace`, `Runtime.getRuntime().maxMemory()`) before assuming they were the same kind
+of input-caching idea being considered here - they aren't: that mechanism sizes how many simultaneously-
+held *output* reconstructed images (`width × frameCount × 4 bytes × 3` each) fit in the JVM heap when
+many pixel-shift images are requested at once, spilling the rest to temp-folder disk files via
+`FileBackedImage`/`MemoryAwareStreams`. SolScan has no equivalent problem today (it never holds many
+large output buffers at once), so that code wasn't the model for what actually landed - a genuinely
+SolScan-specific design instead, informed by but not copied from it.
+
+Three real changes:
+
+1. **`SerReader`'s own `FileOptions` hint reconsidered**: `Open` used `FileOptions.RandomAccess`
+   (`FILE_FLAG_RANDOM_ACCESS`), which explicitly disables Windows' own sequential read-ahead
+   prefetching - the right hint for literally-random single-frame lookups, but `FrameAverager`/
+   `DiskReconstructor`'s actual access pattern (per-thread, under `Parallel.For`'s own range
+   partitioning) is locally sequential, not truly random. Switched to `FileOptions.SequentialScan`
+   (`FILE_FLAG_SEQUENTIAL_SCAN`) instead - a one-line change, existing `SerReaderTests` (including the
+   concurrent-read case) prove correctness is unaffected either way, since only the OS hint changed,
+   not the read semantics.
+2. **Real per-stage throughput reporting**, closing the exact gap flagged in the previous entry ("no
+   per-stage instrumentation to report throughput honestly") - a new `FrameConversion.FormatThroughput`/
+   `FormatBytes` pair (shared by `FrameAverager`, `DiskReconstructor`, and the new type below) formats a
+   real, measured data rate (e.g. "1.76GB in 4.13s (426.3 MB/s)") from an actual `Stopwatch` and known
+   byte count, reported via `progress` - a genuine SolScan equivalent of JSol'Ex's own "Reconstruction
+   performance: N MB/s" line, not a guess.
+3. **Eliminate redundant disk re-reads, gated on available memory** - the core lever. A recording's raw
+   frames were being read from disk up to three times (`FrameAverager`'s own two passes, plus
+   `DiskReconstructor`'s own pass) - real, measured cost identified from the real JSol'Ex comparison
+   above. New `SolScan.Processing.Shg.InMemorySerReader`: a from-scratch `ISerReader` implementation
+   backed by an already-populated `byte[][]` instead of a file handle - placed in `SolScan.Processing`
+   itself (not `SolScan.Infrastructure`, where the real disk-backed `SerReader` lives), since it touches
+   no file at all, matching the same "hardware-free supporting type" precedent `FrameConversion` already
+   sets there. `ReadFrame` just wraps an already-resident array slot - trivially thread-safe (nothing
+   ever mutates after construction), unlike the real `SerReader`, which needed a deliberate rewrite
+   earlier this session to become safe for the same purpose. Never carries real per-frame timestamps
+   (always `DateTime.MinValue`) since its only consumers already pass `includeTimestamp: false` anyway -
+   a deliberate simplification, not an oversight. `Open(path)` throws `NotSupportedException` - it's
+   constructed pre-populated via the static `LoadFrom(ISerReader realReader, ...)`, which does the one
+   real disk pass (in parallel across cores, same pattern as `DiskReconstructor`'s own loop) and reports
+   its own throughput via the same formatter.
+
+   **Crucially, `FrameAverager`/`DiskReconstructor` needed zero changes** - they already accepted a
+   plain `ISerReader`, and `InMemorySerReader` satisfies that same contract. All the new logic is
+   orchestration inside `ShgProcessor.Process`: after opening the real reader and reading its header,
+   the raw video's total byte size (known instantly from the header, no read needed) is compared against
+   a new `Func<long> _availableMemoryBytesProvider` (defaults to `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`
+   - the .NET-native, cross-platform, no-P/Invoke-needed answer to "how much memory can this process
+   safely use"; overridable via a new optional `ShgProcessor` constructor parameter, so a test can
+   simulate "plenty of memory" or "none at all" cheaply) times a conservative `InMemoryCacheSafetyFraction`
+   constant (0.5 - leaves headroom for the rest of the app/OS/the smaller working buffers the later
+   stages still need). Comfortably fits → report "Loading frames into memory for faster processing...",
+   build an `InMemorySerReader` via `LoadFrom`, and reuse *that same instance* for both `FrameAverager`
+   and `DiskReconstructor` - three disk passes become one. Too large → keep today's exact original
+   behaviour (a fresh disk reader opened per stage) completely unchanged, plus a warning - per the user's
+   own explicit request, not a silent fallback: *"Recording is large (X, available memory Y) - processing
+   will re-read it from disk at each stage rather than caching it, which is slower. If this wasn't
+   intentional, consider a tighter ROI height at capture time or the Crop SER utility to trim this
+   file."* `ShgProcessor.Process`'s reconstruction stage needed a modest restructure to support reusing
+   the shared reader (a manual try/finally that either reuses the cached in-memory reader, undisposed
+   until both stages are done with it, or opens+owns+disposes a fresh disk reader exactly as before) -
+   the only place this branches; every other line is untouched.
+
+Covered by four new `InMemorySerReaderTests` (round-trips real frame data read back from a real
+`SerReader`, `Open` throws, never carries a real timestamp, and - matching the real `SerReader`'s own
+concurrency test - `ReadFrame` is safe under `Parallel.For` from many threads at once) and two new
+`ShgProcessorTests` cases: forcing the caching path (`availableMemoryBytesProvider: () => long.MaxValue`)
+and the fallback path (`() => 0`) against the same synthetic file produces byte-identical `Raw`/
+`Continuum` output and the same detected polynomial either way (the regression check that this is purely
+an execution-strategy change), and the fallback path reports the expected warning message and never the
+"loading into memory" one. All 168 tests pass, run three times in a row with no flakiness.
+
+**Now actually benchmarked against the real file**, closing out the "NOT YET benchmarked" caveat this
+and the previous two sessions all carried - and turning up a real, worth-recording lesson about Debug
+vs. Release along the way. The same real Calcium K file (2914 frames, 4656x130, 8-bit) went from 41.34s
+before any of this three-session investigation to **15.91s Release** after it - against JSol'Ex's own
+34.63s on the same file (a slightly different run than the 29.86s/30.07s figures earlier entries quote -
+real machine/cache variance run to run, not a discrepancy worth chasing) - so SolScan now finishes in
+46% of JSol'Ex's own time.
+
+A follow-up, fully-controlled same-code Debug-vs-Release run (Visual Studio F5 vs. the built `.exe`
+launched directly) turned up something the raw 2.6x headline number would have hidden: **45.60s Debug
+vs. 15.91s Release for the exact same, already-fully-optimized code - a 2.87x difference from build
+configuration alone.** Compared against the 41.34s pre-session baseline (whose own build configuration
+was never recorded, but is most likely Debug too, since a plain F5 launch defaults to it), this
+session's own code, run in Debug, is actually **4.26s slower** than the code before any of this
+three-session investigation (45.60s vs. 41.34s) - the 2.6x/2.87x speedup story only appears once JIT
+optimizations are actually engaged. Breaking down the new log's own real per-stage figures (all real
+measurements, not estimates, thanks to the throughput-reporting work) explains why:
+
+- **Averaging** (in-memory, parallelized): ~9.47s pre-session (disk, parallelized, no caching) → ~10.03s
+  in this session's own Debug run - flat to slightly worse. Debug's unoptimized JIT output mutes
+  `Parallel.For`'s own gains, and the new "load into memory" step's own overhead (~1.7s) isn't fully
+  paid back when the per-thread work itself is still running unoptimized.
+- **Reconstruction**: ~3.60s → 2.96s in Debug - a genuine, if modest, improvement even unoptimized.
+- **Geometry correction** (never touched by any of this session's work, in any of the three rounds): ~21.4s
+  → ~25.2s - most likely ordinary run-to-run variance (background load, thermal, whatever), not a
+  regression, since literally no code there changed.
+
+So in Debug, the real per-stage wins are small and get swamped by noise elsewhere in the pipeline; the
+real speedup only shows up once optimizations are actually engaged, which makes sense specifically for
+`Parallel.For`-based work - Debug's unoptimized IL adds real per-iteration overhead that eats into
+exactly the kind of gain parallelism is meant to deliver. Practically this changes nothing about the
+real-world value of the work - actual users run the Release-built installer (`SolScan.Setup`'s own
+publish pipeline already targets Release, never Debug) - but it's a genuinely useful, non-obvious lesson
+worth keeping on record: **future performance testing/comparisons in this codebase should always use a
+Release build** - Debug can hide, or even invert, a real improvement, particularly for parallelized/
+CPU-bound work like this.
 
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
 toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,

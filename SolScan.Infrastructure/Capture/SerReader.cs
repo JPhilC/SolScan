@@ -43,7 +43,12 @@ public sealed class SerReader : ISerReader
     {
         Close();
 
-        var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.RandomAccess);
+        // SequentialScan, not RandomAccess: FrameAverager/DiskReconstructor's actual access pattern -
+        // even under Parallel.For - is a set of contiguous per-thread sub-ranges walked forward, not
+        // truly random single-frame lookups. RandomAccess (FILE_FLAG_RANDOM_ACCESS on Windows)
+        // explicitly disables the OS's own read-ahead prefetching, which likely worked against this
+        // workload rather than for it - see CLAUDE.md's "closing the I/O throughput gap" investigation.
+        var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.SequentialScan);
         var length = RandomAccess.GetLength(handle);
         if (length < HeaderSizeBytes)
         {
