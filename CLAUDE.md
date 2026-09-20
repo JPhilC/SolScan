@@ -479,7 +479,10 @@ Alpaca `AxisRates` instead (same "ask the hardware, don't assume" ethos as `ICam
 SupportedBinning`/`PixelSizeMicrons`), falling back to GSServer's own 3.5°/s default if that fails.
 Directional buttons jog only while held (`Mouse.Capture` on press/release so a drag off the button
 before releasing still stops it), and closing the window - even via Alt+F4 mid-press - always calls
-`AbortSlewAsync` plus zeroes both axes as a safety net, so it can never leave a motor running.
+`AbortSlewAsync` plus zeroes both axes as a safety net, so it can never leave a motor running. The window
+also carries a Tracking checkbox mirroring Prepare's own - both bind the shared `MountState.IsTracking`
+(each view model re-syncs from it under an `_isSyncing` guard so the two stay in step without echoing back
+to the mount). NOT YET VERIFIED against a real mount.
 
 Also real: Phase 3's first slice, "Find Sun" - a `SolScan.Core.Astronomy.SunPosition` low-precision
 analytic solar ephemeris (Meeus ch. 25, ~0.01° accuracy 1950-2050, geocentric - the Sun's parallax is

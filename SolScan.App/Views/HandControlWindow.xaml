@@ -21,6 +21,10 @@
         <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="0,10,0,0"
                    Foreground="Gray" TextWrapping="Wrap"/>
 
+        <!-- Same toggle as PrepareView's Tracking checkbox; both bind the shared MountState.IsTracking. -->
+        <CheckBox DockPanel.Dock="Bottom" Content="Tracking" Margin="0,12,0,0"
+                  IsChecked="{Binding IsTracking}" IsEnabled="{Binding IsConnected}"/>
+
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>

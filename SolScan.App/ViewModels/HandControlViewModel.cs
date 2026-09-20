@@ -36,8 +36,15 @@ public partial class HandControlViewModel : ObservableObject
     [ObservableProperty]
     private bool isConnected;
 
+    /// <summary>Mirrors PrepareView's Tracking checkbox - both read/write the shared
+    /// <see cref="MountState.IsTracking"/>, so toggling either is reflected in the other.</summary>
+    [ObservableProperty]
+    private bool isTracking;
+
     [ObservableProperty]
     private string statusText = "Ready.";
+
+    private bool _isSyncing;
 
     /// <summary>The actual rate (deg/sec) <see cref="SpeedLevel"/> currently resolves to - shown in
     /// the UI and what's actually passed to <see cref="ITelescopeMount.MoveAxisAsync"/>.</summary>
@@ -49,6 +56,7 @@ public partial class HandControlViewModel : ObservableObject
         _mountState = mountState;
 
         IsConnected = _mountState.IsConnected;
+        SyncTrackingFromMountState();
         _mountState.PropertyChanged += MountStatePropertyChanged;
 
         _ = InitializeMaxRateAsync();
@@ -56,9 +64,45 @@ public partial class HandControlViewModel : ObservableObject
 
     private void MountStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MountState.IsConnected))
+        switch (e.PropertyName)
         {
-            IsConnected = _mountState.IsConnected;
+            case nameof(MountState.IsConnected):
+                IsConnected = _mountState.IsConnected;
+                break;
+            case nameof(MountState.IsTracking):
+                SyncTrackingFromMountState();
+                break;
+        }
+    }
+
+    private void SyncTrackingFromMountState()
+    {
+        _isSyncing = true;
+        IsTracking = _mountState.IsTracking;
+        _isSyncing = false;
+    }
+
+    /// <summary>Same behaviour as PrepareViewModel's own tracking toggle: push the new state to
+    /// <see cref="MountState"/> (so Prepare and the status bar follow) and to the mount itself.</summary>
+    partial void OnIsTrackingChanged(bool value)
+    {
+        if (_isSyncing || !IsConnected)
+            return;
+
+        _mountState.IsTracking = value;
+        _ = SetTrackingAsync(value);
+    }
+
+    private async Task SetTrackingAsync(bool value)
+    {
+        try
+        {
+            await _mount.SetTrackingAsync(value);
+            StatusText = value ? "Tracking on." : "Tracking off.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Error setting tracking: {ex.Message}";
         }
     }
 
