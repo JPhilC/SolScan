@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using SolScan.Core.Astronomy;
 using SolScan.Core.Telescope;
 
 namespace SolScan.App.ViewModels;
@@ -154,6 +155,25 @@ public partial class HandControlViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusText = $"Error stopping: {ex.Message}";
+        }
+    }
+
+    /// <summary>The Sync button: tells the mount it is now pointing at the Sun, for when the user has
+    /// centred it by hand. Syncs to a freshly computed ephemeris position - same approach and reasoning
+    /// as CaptureViewModel's own Sync button (see its SyncMountToSunPositionAsync): the mount's own
+    /// position readout is deliberately not used, since syncing a mount to what it already believes
+    /// would be a no-op.</summary>
+    public async Task SyncToSunAsync()
+    {
+        try
+        {
+            var (raHours, decDeg) = SunPosition.GetApparentRaDecJNow(DateTime.UtcNow);
+            await _mount.SyncToCoordinatesAsync(raHours, decDeg);
+            StatusText = $"Synced: mount now points at the Sun (RA {raHours:F3}h, Dec {decDeg:F2}°).";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Sync failed: {ex.Message}";
         }
     }
 

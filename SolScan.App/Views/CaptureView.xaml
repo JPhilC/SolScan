@@ -143,6 +143,13 @@
                                 ToolTip="Slew the mount to today's computed Sun position, then optionally fine-tune pointing using the live camera view.">
                             <Image Source="/Assets/Icons/FindSun.png" Width="20" Height="20" Stretch="Uniform"/>
                         </Button>
+                        <!-- Stops a running Find Sun (the spiral search can take several minutes); only
+                             enabled while one is running. -->
+                        <Button Style="{StaticResource ToolbarIconButtonStyle}"
+                                Command="{Binding CancelFindSunCommand}"
+                                ToolTip="Cancel Find Sun (stops the mount and restores the camera settings if the Sun hasn't been found).">
+                            <Image Source="/Assets/Icons/CancelProcessing.png" Width="20" Height="20" Stretch="Uniform"/>
+                        </Button>
                         <!-- Manual counterpart to Find Sun's own end-of-flow sync offer - for when the user
                              has aligned the Sun in the preview themselves (e.g. via Hand Control) and just
                              wants to sync the mount's pointing model to that alignment now. -->

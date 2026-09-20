@@ -482,7 +482,9 @@ before releasing still stops it), and closing the window - even via Alt+F4 mid-p
 `AbortSlewAsync` plus zeroes both axes as a safety net, so it can never leave a motor running. The window
 also carries a Tracking checkbox mirroring Prepare's own - both bind the shared `MountState.IsTracking`
 (each view model re-syncs from it under an `_isSyncing` guard so the two stay in step without echoing back
-to the mount). NOT YET VERIFIED against a real mount.
+to the mount), and a Sync button (top-right of the compass, `HandControlViewModel.SyncToSunAsync`) that
+tells the mount it is now pointing at the Sun - same freshly-computed-ephemeris sync as Capture's own Sync
+button, no confirmation. NOT YET VERIFIED against a real mount.
 
 Also real: Phase 3's first slice, "Find Sun" - a `SolScan.Core.Astronomy.SunPosition` low-precision
 analytic solar ephemeris (Meeus ch. 25, ~0.01° accuracy 1950-2050, geocentric - the Sun's parallax is
@@ -514,6 +516,37 @@ own existing belief about where it's pointed would be a no-op, since that belief
 the truth by whatever error a sync is meant to correct. `IsFindingSun` gates re-entry and disables
 live-view toggle/disconnect/start-recording for the duration, since the fine-tune loop depends on the
 live view staying exactly as it is mid-run.
+
+**Fine-tune reworked (2026-09-20) after a first real-mount try showed no visible movement.** Diagnosed from
+the code, not yet re-run on hardware: the original nudges (300ms at 1% of max rate ≈ 38") were invisible and
+too small to move brightness - total brightness through a slit follows the disk chord length, which is flat
+(quadratic) near the centre, so a 0.5% fixed threshold could never be cleared. Now: steps are *angles*
+(coarse 0.1°, fine 0.025°; pulse duration = step / nudge rate, nudge rate = 5% of max), each brightness
+reading is the mean of 5 fresh preview frames (`_previewFrameCounter`) with a standard error, and an
+"improvement" must beat 3 combined standard errors and 0.2% of the starting brightness. The outcome is now
+three-way (`FineTuneOutcome`): Improved / NoImprovement (varied, but the start was best) / NoSignal (never
+varied beyond noise - the Sun isn't reaching the slit, or the frame is saturated). Each run writes a
+diagnostic log to `%LocalAppData%\SolScan\logs\FindSun_<timestamp>.log` (camera settings, every pulse's
+planned/actual duration and the mount's own position readout before/after, every brightness measurement
+with noise/saturation, each comparison's threshold and verdict, the final signal range) - the path is
+appended to the status text. **Second and third real-mount runs (same day) drove the next rewrite.** Run 2 (frame dark, exposure far too
+low) proved the mount and the log work but that brightness on a dark frame is noise. Run 3 (exposure raised)
+showed brightness climbing steadily along Dec (Secondary) for 0.8° with the Sun still not centred, while RA
+(Primary) nudges changed nothing - i.e. through a slit, moving the disc *along* the slit leaves total
+brightness unchanged, so brightness can only centre the across-slit axis. `FindSunAsync` is now: (1) pre-check;
+if the frame has no signal (<0.5% of full scale) set exposure 500ms / gain 75% of range and **spiral-search**
+(square spiral, 0.35° steps, up to ±2.1°, two frames per point, detection = mean rises beyond
+max(6σ, 2% full scale) over a baseline, confirmed by a second reading; a baseline frame that needs its
+sensitivity cut >30x is treated as "Sun already on the slit"); on failure the mount slews back to the computed
+position and the camera settings are restored; (2) `AutoExposeAsync` - drive exposure (then gain, assuming
+ASI's 0.1 dB units) until <0.5% of pixels saturate and the mean is 4-30% of full scale (aim 12%); the tuned
+settings are left in place on success; (3) `RefinePointingAsync` - pulse each axis and see which shifts the
+brightness centroid (`SolScan.Core.Camera.FrameCentroid`, column-mean profile above a 10th-percentile
+background) sideways to identify the along-slit axis, drive that axis until the centroid is mid-frame, and
+hill-climb brightness on the other. Falls back to hill-climbing both axes if the axes can't be told apart.
+Cancellable (`CancelFindSunCommand`, toolbar button); syncing is only offered if the Sun was found. All
+thresholds/step sizes are first guesses - NOT YET VERIFIED on hardware; check the `FindSun_*.log` (now also
+records saturation, centroid, and each auto-expose decision).
 
 A standalone "Sync" button sits alongside it (`CaptureViewModel.SyncMountAsync`, sharing the same
 `SyncMountToSunPositionAsync` helper `FindSunAsync` uses) - the manual counterpart, for when the user

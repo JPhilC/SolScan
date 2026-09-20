@@ -77,15 +77,25 @@ public partial class CaptureViewModel : ObservableObject
     // UNTESTED against real hardware - the constants below are unvalidated first guesses (see
     // FindSunAsync's own doc comment) and may well need retuning once tried against a real mount +
     // camera pointed at the actual Sun.
-    private const double FindSunCoarseNudgeFraction = 0.01; // ~1% of the mount's own max slew rate
-    private const double FindSunFineNudgeFraction = 0.3; // second pass, relative to the coarse rate
-    private static readonly TimeSpan FindSunPulseDuration = TimeSpan.FromMilliseconds(300);
-    private static readonly TimeSpan FindSunSettleDelay = TimeSpan.FromMilliseconds(400); // let a couple of throttled preview frames catch up
-    private const int FindSunMaxStepsPerAxis = 8;
-    // Relative, not absolute - Mono16's raw average sits ~256x higher than Mono8's for the same
-    // scene, so a fixed absolute threshold would be far too twitchy in one format and far too
-    // insensitive in the other.
-    private const double FindSunRelativeImprovementThreshold = 0.005;
+    //
+    // Steps are sized as angles (a pulse's duration is derived from the step and the nudge rate), not
+    // as a fixed pulse at a fraction of max rate: the first version's ~38" nudges were far too small
+    // to see or to measure against the Sun's ~1900" disk.
+    private const double FindSunNudgeRateFraction = 0.05; // of the mount's own max slew rate
+    private const double FindSunCoarseStepDeg = 0.1; // ~1/5 of the Sun's diameter
+    private const double FindSunFineStepDeg = 0.025;
+    private static readonly TimeSpan FindSunMaxPulseDuration = TimeSpan.FromSeconds(5);
+    private const int FindSunMaxStepsPerAxis = 10;
+    private const int FindSunFramesPerMeasurement = 5;
+    private const int FindSunNoiseSigmas = 3; // an "improvement" must beat this many standard errors
+    // Floor on the improvement threshold, relative to the brightness - guards against a near-zero
+    // measured noise (e.g. a saturated or perfectly static frame) making any wobble look real.
+    // Relative, not absolute: Mono16's raw average sits ~256x higher than Mono8's for the same scene.
+    private const double FindSunMinRelativeImprovement = 0.002;
+    // A frame whose average is below this fraction of full scale is treated as dark - the slit isn't
+    // seeing the Sun, so a brightness hill-climb has nothing to climb (its readings are just sensor
+    // noise). From the first real run: average 46 of 65535 (0.07%), max 1.8%, with the Sun not in the slit.
+    private const double FindSunDarkFractionOfFullScale = 0.005;
     private const double FindSunFallbackMaxSlewRateDegPerSec = 3.5; // matches AscomTelescopeMount's own hand-control fallback
 
     private readonly ICameraDiscoveryService _discoveryService;
@@ -107,6 +117,28 @@ public partial class CaptureViewModel : ObservableObject
     /// (set from <see cref="ProcessPreviewFrame"/>'s dispatcher callback, read from
     /// <see cref="FindSunAsync"/>'s own UI-thread async continuations), so no locking is needed.</summary>
     private double _lastFrameAverageBrightness;
+
+    /// <summary>Companions to <see cref="_lastFrameAverageBrightness"/> for the Find Sun fine-tune,
+    /// set at the same place (UI thread): a running count of processed preview frames (so a
+    /// measurement can wait for genuinely fresh frames rather than re-reading one), plus the frame's
+    /// max value/bit depth (so saturation - a flat, uninformative signal - can be spotted and logged).</summary>
+    private long _previewFrameCounter;
+    private double _lastFrameMaxValue;
+    private int _lastFrameBitDepth;
+
+    /// <summary>Fraction of the last frame's sampled pixels at full scale (top histogram bucket) - a
+    /// few hot pixels are far below the limit, a saturated Sun/sky isn't.</summary>
+    private double _lastFrameSaturatedFraction;
+
+    /// <summary>Brightness centroid of the last frame (0-1 of width/height; NaN when not computed or no
+    /// signal). Only computed while <see cref="_findSunMeasuringCentroid"/> is set, since it costs a
+    /// strided pass over the frame the preview otherwise doesn't need.</summary>
+    private double _lastFrameCentreX = double.NaN;
+    private double _lastFrameCentreY = double.NaN;
+    private volatile bool _findSunMeasuringCentroid;
+
+    /// <summary>The current Find Sun run's diagnostic log; null outside a run, or if it couldn't be opened.</summary>
+    private ProcessingLog? _findSunLog;
 
     /// <summary>The currently-open Hand Control window, if any - tracked so a second click on
     /// "Hand Control…" brings the existing one to front instead of opening a duplicate (two windows
@@ -795,31 +827,34 @@ public partial class CaptureViewModel : ObservableObject
     /// <summary>
     /// "Find Sun" - see SolScan CLAUDE.md Phase 3. Slews the mount to today's computed solar
     /// position (<see cref="SunPosition"/>), then - only if a camera is live here - offers to
-    /// fine-tune pointing using the live view's total frame brightness as a slit-overlap proxy
-    /// (<see cref="RunFineTuneAsync"/>), then offers to sync the mount's pointing model to the
-    /// result via Alpaca. No camera live, or the user declines the fine-tune, and the flow stops
-    /// right after the ephemeris slew - there's nothing more automatic to offer without a camera to
-    /// judge alignment by.
+    /// locate and centre the Sun using the live view (<see cref="RunFineTuneAsync"/>): a spiral search
+    /// if the frame is dark, then exposure/gain adjustment, then centring. Finally offers to sync the
+    /// mount's pointing model to the result via Alpaca (only if the Sun was actually found).
+    /// Cancellable via <see cref="CancelFindSunCommand"/>; every run writes a diagnostic log.
     ///
-    /// NOT YET VERIFIED against real hardware: the ephemeris slew + tracking-on fix + manual Sync
-    /// button have been (see CLAUDE.md's "Also real" note), but the camera-driven fine-tune itself
-    /// (<see cref="RunFineTuneAsync"/>/<see cref="ClimbAxisAsync"/>) has only been exercised by
-    /// build/unit tests, not against a real mount+camera pointed at the actual Sun - in particular
-    /// the nudge rate/pulse duration/settle delay constants near the top of this class are
-    /// unvalidated guesses, and may need retuning once it's actually tried.
+    /// NOT YET VERIFIED against real hardware: the search phase and the centroid-based centring are new
+    /// (the brightness hill-climb has been run on the mount and Sun - see CLAUDE.md), and their step
+    /// sizes/thresholds are first guesses to be tuned from the logs.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanFindSun))]
     private async Task FindSunAsync()
     {
+        using var cts = new CancellationTokenSource();
+        _findSunCts = cts;
+        var ct = cts.Token;
+
         try
         {
             IsFindingSun = true;
+            OpenFindSunLog();
 
             var (raHours, decDeg) = SunPosition.GetApparentRaDecJNow(DateTime.UtcNow);
 
             StatusText = $"Find Sun: slewing to RA {raHours:F3}h, Dec {decDeg:F2}°…";
-            await _mount.SlewToCoordinatesAsync(raHours, decDeg);
+            _findSunLog?.Info($"Slewing to computed Sun position RA {raHours:F5}h, Dec {decDeg:F4}° (camera live: {IsLive && _connectedCamera is not null}).");
+            await _mount.SlewToCoordinatesAsync(raHours, decDeg, ct);
             StatusText = $"Find Sun: slewed to the computed position (RA {raHours:F3}h, Dec {decDeg:F2}°).";
+            await LogMountPositionAsync("After slew", raHours, decDeg);
 
             if (!(IsLive && _connectedCamera is not null))
             {
@@ -828,7 +863,8 @@ public partial class CaptureViewModel : ObservableObject
             }
 
             var fineTune = MessageBox.Show(
-                "Slewed to the Sun's computed position. Fine-tune pointing now using the live camera view?",
+                "Slewed to the Sun's computed position. Search for the Sun and centre it using the live camera view?\n\n"
+                + "If the view is dark this will change the camera's exposure and gain, and move the mount in a spiral around this position.",
                 "Find Sun",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question) == MessageBoxResult.Yes;
@@ -839,11 +875,25 @@ public partial class CaptureViewModel : ObservableObject
                 return;
             }
 
-            StatusText = "Find Sun: fine-tuning using the live camera view…";
-            var improved = await RunFineTuneAsync();
-            StatusText = improved
-                ? "Find Sun: fine-tune improved centring on the live view."
-                : "Find Sun: fine-tune made no further improvement (already well centred).";
+            StatusText = "Find Sun: checking the live view for signal…";
+            var outcome = await RunFineTuneAsync(ct);
+            var settingsNote = $" (Exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0}.)";
+            StatusText = outcome switch
+            {
+                FineTuneOutcome.Improved => "Find Sun: Sun located and centred on the live view." + settingsNote,
+                FineTuneOutcome.NoImprovement => "Find Sun: Sun located; centring found no better position." + settingsNote,
+                FineTuneOutcome.NoSignal => "Find Sun: signal found, but brightness never changed measurably as the mount moved "
+                     + "(the frame may be saturated or showing sky, not the Sun). Check the live view." + settingsNote,
+                _ => "Find Sun: no Sun found within the search area. Camera settings restored; the mount is back at the computed "
+                     + "position. Check the mount's alignment and that the slit is uncovered."
+            };
+            _findSunLog?.Info($"Fine-tune outcome: {outcome}.");
+
+            if (outcome == FineTuneOutcome.SunNotFound || outcome == FineTuneOutcome.NoSignal)
+            {
+                // Syncing the mount to the ephemeris position only makes sense when the Sun really is centred.
+                return;
+            }
 
             var doSync = MessageBox.Show(
                 "Sync the mount's pointing to this position via Alpaca now?",
@@ -857,103 +907,769 @@ public partial class CaptureViewModel : ObservableObject
                 return;
             }
 
+            await LogMountPositionAsync("Before sync", null, null);
             var (syncRaHours, syncDecDeg) = await SyncMountToSunPositionAsync();
+            _findSunLog?.Info($"Synced mount to RA {syncRaHours:F5}h, Dec {syncDecDeg:F4}°.");
             StatusText = $"Find Sun: mount synced to RA {syncRaHours:F3}h, Dec {syncDecDeg:F2}°.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Find Sun: cancelled.";
+            _findSunLog?.Info("Cancelled by the user.");
+            await StopMountMotionAsync();
         }
         catch (Exception ex)
         {
             StatusText = $"Find Sun failed: {ex.Message}";
+            _findSunLog?.Error($"Find Sun failed: {ex}");
+            await StopMountMotionAsync();
         }
         finally
         {
+            _findSunCts = null;
             IsFindingSun = false;
+            if (_findSunLog is not null)
+            {
+                StatusText += $" (Log: {_findSunLogPath})";
+                _findSunLog.Dispose();
+                _findSunLog = null;
+            }
         }
     }
 
-    /// <summary>Two coarse-then-fine hill-climb passes over RA then Dec - see
-    /// <see cref="ClimbAxisAsync"/>. Returns whether any pass actually improved brightness.</summary>
-    private async Task<bool> RunFineTuneAsync()
+    [RelayCommand(CanExecute = nameof(CanCancelFindSun))]
+    private void CancelFindSun()
     {
-        double maxRateDegPerSec;
+        StatusText = "Find Sun: cancelling…";
+        _findSunCts?.Cancel();
+    }
+
+    private bool CanCancelFindSun => IsFindingSun;
+
+    /// <summary>Best-effort stop of any mount motion - used when Find Sun is cancelled or fails mid-run.</summary>
+    private async Task StopMountMotionAsync()
+    {
+        try { await _mount.AbortSlewAsync(); } catch { /* best effort */ }
+        try { await _mount.MoveAxisAsync(TelescopeAxis.Primary, 0); } catch { /* best effort */ }
+        try { await _mount.MoveAxisAsync(TelescopeAxis.Secondary, 0); } catch { /* best effort */ }
+    }
+
+    private enum FineTuneOutcome
+    {
+        /// <summary>The Sun was located and centring moved things to a better position.</summary>
+        Improved,
+        /// <summary>The Sun was located; brightness/centring varied but nothing beat the position it started at.</summary>
+        NoImprovement,
+        /// <summary>Signal was present but never changed by more than noise wherever the mount went - it
+        /// carries no positional information (saturated frame, sky glow, ...).</summary>
+        NoSignal,
+        /// <summary>The spiral search covered its whole area without finding the Sun.</summary>
+        SunNotFound
+    }
+
+    /// <summary>A brightness reading: the mean of several fresh preview frames' average values and how
+    /// noisy that is, plus the frame-shape figures Find Sun's other decisions need (saturation, and
+    /// where the light is concentrated). Centre values are NaN when no frame had a usable centroid.</summary>
+    private readonly record struct BrightnessMeasurement(
+        double Mean, double StdError, double FrameStdDev, int Frames, double MaxValue, int BitDepth,
+        double SaturatedFraction, double CentreX, double CentreY)
+    {
+        public double FullScale => BitDepth > 0 ? Math.Pow(2, BitDepth) - 1 : 0;
+        public bool HasCentre => !double.IsNaN(CentreX);
+    }
+
+    /// <summary>Running range of every measurement made in one fine-tune run - used to tell "no usable
+    /// signal" (never varied beyond noise) from "already at the peak" (varied, but the start was best).</summary>
+    private sealed class SignalRange
+    {
+        public double Min = double.MaxValue;
+        public double Max = double.MinValue;
+        public double MaxStdError;
+
+        public void Add(BrightnessMeasurement m)
+        {
+            Min = Math.Min(Min, m.Mean);
+            Max = Math.Max(Max, m.Mean);
+            MaxStdError = Math.Max(MaxStdError, m.StdError);
+        }
+
+        public bool IsFlat => Max - Min <= Math.Max(FindSunNoiseSigmas * MaxStdError, FindSunMinRelativeImprovement * Max);
+    }
+
+    // Search / auto-exposure / centring tuning - all first guesses, to be adjusted from real logs.
+    private const double FindSunSearchExposureMicroseconds = 500_000;
+    private const double FindSunSearchGainFraction = 0.75; // of the camera's own gain range
+    private const double FindSunSearchStepDeg = 0.35; // a little under the Sun's ~0.53° diameter, so a slit line can't slip between points
+    private const int FindSunSearchMaxRings = 6; // +/- 2.1° each way = up to 168 points
+    private const double FindSunSearchRateFraction = 0.15; // of max slew rate; faster than the fine-tune nudges
+    private const int FindSunSearchFramesPerPoint = 2;
+    private const double FindSunSaturatedFractionLimit = 0.005; // >0.5% of pixels at full scale = saturated (hot pixels are far fewer)
+    private const double FindSunSearchDetectFractionOfFullScale = 0.02;
+    private const double FindSunSearchDetectSigmas = 6;
+    private const double FindSunSearchBaselineMaxFraction = 0.08;
+    // If the search-settings frame is so bright it needs cutting by more than this to be usable, the
+    // Sun is already on the slit: sky glow alone is nowhere near that much brighter than the user's
+    // own (dark) starting frame, the Sun through the slit is thousands of times brighter.
+    private const double FindSunAlreadyOnSunReductionFactor = 30;
+    private const double FindSunTargetMeanFraction = 0.12;
+    private const double FindSunDimMeanFraction = 0.04;
+    private const double FindSunBrightMeanFraction = 0.30;
+    private const double FindSunExposureCeilingMicroseconds = 100_000; // keeps measurements quick once the Sun is found
+    private const int FindSunMaxAutoExposeIterations = 8;
+    private const double FindSunGainUnitsPerDecade = 200; // ASI gain is in 0.1 dB units: +200 = x10 (a first guess for other cameras; the loop iterates anyway)
+    private const double FindSunAxisCalibrationStepDeg = 0.15;
+    private const double FindSunMinCalibrationShift = 0.02; // fraction of frame width the along-slit axis must move the centroid
+    private const double FindSunCentreToleranceFraction = 0.02;
+    private const int FindSunMaxCentreIterations = 4;
+    private const double FindSunMaxCentreMoveDeg = 1.0;
+
+    private string? _findSunLogPath;
+    private CancellationTokenSource? _findSunCts;
+
+    private void OpenFindSunLog()
+    {
         try
         {
-            maxRateDegPerSec = await _mount.GetMaxSlewRateDegPerSecAsync();
+            var folder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SolScan", "logs");
+            _findSunLogPath = Path.Combine(folder, $"FindSun_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+            _findSunLog = ProcessingLog.OpenAt(_findSunLogPath);
+            _findSunLog.Info($"Find Sun started. Mount connected: {IsMountConnected}; tracking: {_mountState.IsTracking}.");
+            _findSunLog.Info(
+                $"Camera: {_connectedCamera?.Name ?? "(none)"}; live: {IsLive}; gain {Gain:0} (range {MinGain:0}-{MaxGain:0}){(IsGainAuto ? " (auto)" : "")}; "
+                + $"exposure {ExposureMicroseconds / 1000.0:0.###}ms{(IsExposureAuto ? " (auto)" : "")}; "
+                + $"{SelectedColorSpace}, bin {SelectedBinning}, ROI {RoiWidth}x{RoiHeight}.");
         }
         catch
         {
-            // GetMaxSlewRateDegPerSecAsync already falls back internally on failure (see its own
-            // doc comment) - reaching here means something else entirely went wrong; fall back the
-            // same way HandControlViewModel does rather than aborting the whole fine-tune.
-            maxRateDegPerSec = FindSunFallbackMaxSlewRateDegPerSec;
+            // A diagnostic log must never stop Find Sun itself from working.
+            _findSunLog = null;
+            _findSunLogPath = null;
         }
+    }
 
-        var coarseRate = maxRateDegPerSec * FindSunCoarseNudgeFraction;
-        var fineRate = coarseRate * FindSunFineNudgeFraction;
+    /// <summary>Logs where the mount says it's pointing now and (if given) how far that is from the
+    /// intended target - the readout is one of the few objective checks that a slew/nudge really moved.</summary>
+    private async Task LogMountPositionAsync(string label, double? targetRaHours, double? targetDecDeg)
+    {
+        if (_findSunLog is null)
+            return;
 
-        var improved = await ClimbAxisAsync(TelescopeAxis.Primary, coarseRate);
-        improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, coarseRate);
-        improved |= await ClimbAxisAsync(TelescopeAxis.Primary, fineRate);
-        improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, fineRate);
-        return improved;
+        try
+        {
+            var (ra, dec) = await _mount.GetCurrentPositionAsync();
+            var line = $"{label}: mount reports RA {ra:F5}h, Dec {dec:F4}°";
+            if (targetRaHours is { } tRa && targetDecDeg is { } tDec)
+            {
+                var raErrArcsec = (ra - tRa) * 15 * 3600 * Math.Cos(tDec * Math.PI / 180);
+                var decErrArcsec = (dec - tDec) * 3600;
+                line += $" (target error: RA {raErrArcsec:+0;-0;0}\", Dec {decErrArcsec:+0;-0;0}\")";
+            }
+            _findSunLog.Info(line + $"; tracking {_mountState.IsTracking}, slewing {_mountState.IsSlewing}.");
+        }
+        catch (Exception ex)
+        {
+            _findSunLog.Error($"{label}: could not read mount position: {ex.Message}");
+        }
+    }
+
+    // -----------------------------
+    // Camera settings helpers
+    // -----------------------------
+
+    /// <summary>Sets exposure and/or gain directly (the view model's setters clamp/quantize and push to
+    /// the camera). Auto is switched off first - a camera-driven value would fight these.</summary>
+    private void ApplyCameraSettings(double? exposureMicroseconds, double? gain)
+    {
+        if (IsExposureAuto) IsExposureAuto = false;
+        if (IsGainAuto) IsGainAuto = false;
+        if (exposureMicroseconds is { } e)
+            ExposureMicroseconds = Math.Clamp(e, ExposureScale.MinMicroseconds, ExposureScale.MaxMicroseconds);
+        if (gain is { } g)
+            Gain = Math.Clamp(g, MinGain, MaxGain);
+    }
+
+    /// <summary>Scales the camera's overall sensitivity by roughly <paramref name="factor"/>: exposure
+    /// first (up to <see cref="FindSunExposureCeilingMicroseconds"/> when brightening), then gain for
+    /// whatever exposure couldn't absorb. Returns the factor actually achieved (1 = at a limit, nothing changed).</summary>
+    private double ApplyBrightnessFactor(double factor)
+    {
+        var exposure = ExposureMicroseconds;
+        var gain = Gain;
+
+        var newExposure = Math.Clamp(
+            exposure * factor, ExposureScale.MinMicroseconds, Math.Max(FindSunExposureCeilingMicroseconds, exposure));
+        var exposureFactor = newExposure / exposure;
+
+        var leftover = factor / exposureFactor;
+        var newGain = Math.Abs(leftover - 1) > 0.05
+            ? Math.Clamp(gain + FindSunGainUnitsPerDecade * Math.Log10(leftover), MinGain, MaxGain)
+            : gain;
+        var gainFactor = Math.Pow(10, (newGain - gain) / FindSunGainUnitsPerDecade);
+
+        ApplyCameraSettings(newExposure, newGain);
+        return exposureFactor * gainFactor;
+    }
+
+    /// <summary>Waits long enough after a mount move or a settings change for frames captured
+    /// beforehand to have flushed through: at least 400ms, and two exposures (one to finish the frame
+    /// in flight, one for the first good frame) - which matters at the 500ms search exposure.</summary>
+    private Task SettleAsync(CancellationToken ct) =>
+        Task.Delay(TimeSpan.FromMilliseconds(Math.Max(400, 2 * ExposureMicroseconds / 1000.0 + 200)), ct);
+
+    // -----------------------------
+    // The run
+    // -----------------------------
+
+    /// <summary>
+    /// 1. If the live frame has no signal, set the search exposure/gain and spiral outward until it does
+    ///    (<see cref="SearchForSunAsync"/>). 2. Bring exposure/gain into a usable range for the Sun
+    ///    (<see cref="AutoExposeAsync"/>). 3. Centre it (<see cref="RefinePointingAsync"/>). The camera's
+    /// original settings are put back if the Sun isn't found (or on cancel/failure); otherwise the tuned
+    /// settings are left in place, since they're what suits the Sun.
+    /// </summary>
+    private async Task<FineTuneOutcome> RunFineTuneAsync(CancellationToken ct)
+    {
+        var originalExposure = ExposureMicroseconds;
+        var originalGain = Gain;
+        var originalExposureAuto = IsExposureAuto;
+        var originalGainAuto = IsGainAuto;
+        var keepTuned = false;
+        _findSunMeasuringCentroid = true;
+
+        try
+        {
+            double maxRateDegPerSec;
+            try
+            {
+                maxRateDegPerSec = await _mount.GetMaxSlewRateDegPerSecAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // GetMaxSlewRateDegPerSecAsync already falls back internally on failure (see its own
+                // doc comment) - reaching here means something else entirely went wrong; fall back the
+                // same way HandControlViewModel does rather than aborting the whole fine-tune.
+                maxRateDegPerSec = FindSunFallbackMaxSlewRateDegPerSec;
+            }
+
+            var nudgeRate = maxRateDegPerSec * FindSunNudgeRateFraction;
+            _findSunLog?.Info(
+                $"Mount max rate {maxRateDegPerSec:0.####}°/s; fine-tune nudge rate {nudgeRate:0.####}°/s, "
+                + $"search rate {maxRateDegPerSec * FindSunSearchRateFraction:0.####}°/s.");
+
+            var pre = await MeasureBrightnessAsync("Pre-check", ct);
+            if (pre.Mean < pre.FullScale * FindSunDarkFractionOfFullScale)
+            {
+                _findSunLog?.Info(
+                    $"No signal at the current settings (average {pre.Mean:0.##} = {pre.Mean / pre.FullScale:P2} of full scale, "
+                    + $"limit {FindSunDarkFractionOfFullScale:P1}) - starting the spiral search.");
+
+                var found = await SearchForSunAsync(maxRateDegPerSec, ct);
+                if (!found)
+                {
+                    var (ra, dec) = SunPosition.GetApparentRaDecJNow(DateTime.UtcNow);
+                    _findSunLog?.Info("Sun not found; slewing back to the computed position and restoring camera settings.");
+                    StatusText = "Find Sun: not found - returning to the computed position…";
+                    await _mount.SlewToCoordinatesAsync(ra, dec, ct);
+                    await LogMountPositionAsync("After return slew", ra, dec);
+                    return FineTuneOutcome.SunNotFound;
+                }
+
+                // Back to the user's own settings as the starting point for auto-exposure - the search
+                // settings (500ms, high gain) are far too sensitive for the Sun itself.
+                ApplyCameraSettings(originalExposure, originalGain);
+                await SettleAsync(ct);
+            }
+            else
+            {
+                _findSunLog?.Info($"Signal present at the current settings (average {pre.Mean:0.##}) - no search needed.");
+                ApplyCameraSettings(null, null); // switches Auto off, leaves the values
+            }
+
+            StatusText = "Find Sun: adjusting exposure and gain…";
+            await AutoExposeAsync(ct);
+
+            var outcome = await RefinePointingAsync(maxRateDegPerSec, ct);
+            keepTuned = true;
+            return outcome;
+        }
+        finally
+        {
+            _findSunMeasuringCentroid = false;
+            if (!keepTuned)
+            {
+                ApplyCameraSettings(originalExposure, originalGain);
+                IsExposureAuto = originalExposureAuto;
+                IsGainAuto = originalGainAuto;
+                _findSunLog?.Info($"Restored camera settings: exposure {originalExposure / 1000.0:0.###}ms, gain {originalGain:0}.");
+            }
+            else
+            {
+                _findSunLog?.Info($"Leaving camera settings as tuned: exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0} (auto off).");
+            }
+        }
     }
 
     /// <summary>
-    /// One-dimensional brightness hill-climb on a single mount axis: nudges in one direction while
-    /// <see cref="_lastFrameAverageBrightness"/> keeps improving, backs off the final (non-improving)
-    /// step so the axis ends up at the peak rather than one step past it, and tries the opposite
-    /// direction first if the very first nudge didn't help at all. Bounded by
-    /// <see cref="FindSunMaxStepsPerAxis"/> so a flat/noisy signal can't loop indefinitely.
+    /// Square spiral outward from the current pointing, one <see cref="FindSunSearchStepDeg"/> step at a
+    /// time (Primary/Secondary axis moves, so it doesn't depend on which way the slit runs), measuring
+    /// each point at the search exposure/gain. Stops at the first point that's clearly brighter than the
+    /// baseline (confirmed by a second measurement). Returns false, at some offset from the start, if the
+    /// whole area is covered without a detection - the caller returns the mount.
     /// </summary>
-    private async Task<bool> ClimbAxisAsync(TelescopeAxis axis, double rateDegPerSec)
+    private async Task<bool> SearchForSunAsync(double maxRateDegPerSec, CancellationToken ct)
     {
-        var direction = 1.0;
-        var best = _lastFrameAverageBrightness;
+        var rate = maxRateDegPerSec * FindSunSearchRateFraction;
+        var step = FindSunSearchStepDeg;
 
-        var first = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
-        if (!IsBrighterThan(first, best))
+        var searchGain = MinGain + FindSunSearchGainFraction * (MaxGain - MinGain);
+        ApplyCameraSettings(FindSunSearchExposureMicroseconds, searchGain);
+        _findSunLog?.Info(
+            $"Search settings: exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0}; step {step}°, "
+            + $"up to +/-{FindSunSearchMaxRings * step:0.##}°.");
+        StatusText = "Find Sun: no signal - searching (exposure and gain raised)…";
+        await SettleAsync(ct);
+
+        var baseline = await MeasureBrightnessAsync("Search baseline", ct, FindSunSearchFramesPerPoint + 1);
+
+        // A frame already bright/saturated at these very sensitive settings is either sky glow or the
+        // Sun itself. Cut the settings until it isn't; if that took a huge cut it can't have been sky.
+        double totalReduction = 1;
+        for (var i = 0; i < FindSunMaxAutoExposeIterations
+            && (baseline.SaturatedFraction > FindSunSaturatedFractionLimit
+                || baseline.Mean > baseline.FullScale * FindSunSearchBaselineMaxFraction); i++)
         {
-            // That direction didn't help - undo it and try the opposite one instead.
-            await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
-            direction = -1.0;
-            first = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
+            var achieved = ApplyBrightnessFactor(0.25);
+            if (Math.Abs(achieved - 1) < 0.05)
+                break;
+            totalReduction /= achieved;
+            _findSunLog?.Info($"Search baseline too bright (mean {baseline.Mean:0.##}, saturated {baseline.SaturatedFraction:P2}); "
+                + $"settings cut x{1 / achieved:0.#} (total x{totalReduction:0.#}) -> exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0}.");
+            await SettleAsync(ct);
+            baseline = await MeasureBrightnessAsync("Search baseline (reduced)", ct, FindSunSearchFramesPerPoint + 1);
+        }
 
-            if (!IsBrighterThan(first, best))
+        if (totalReduction > FindSunAlreadyOnSunReductionFactor)
+        {
+            _findSunLog?.Info(
+                $"The frame needed its sensitivity cut x{totalReduction:0.#} to be usable - far more than sky glow would need, "
+                + "so the Sun is already on the slit. Skipping the spiral.");
+            return true;
+        }
+
+        var dirs = new (int Dx, int Dy)[] { (1, 0), (0, 1), (-1, 0), (0, -1) };
+        var maxPoints = ((2 * FindSunSearchMaxRings) + 1) * ((2 * FindSunSearchMaxRings) + 1) - 1;
+        int x = 0, y = 0, visited = 0, dir = 0, leg = 1;
+
+        while (visited < maxPoints)
+        {
+            for (var rep = 0; rep < 2 && visited < maxPoints; rep++)
             {
-                // Neither direction helped - undo and give up on this axis for this pass.
-                await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
+                for (var i = 0; i < leg && visited < maxPoints; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var (dx, dy) = dirs[dir];
+                    x += dx;
+                    y += dy;
+                    visited++;
+
+                    StatusText = $"Find Sun: searching… point {visited}/{maxPoints} (offset {x * step:+0.0;-0.0;0}°, {y * step:+0.0;-0.0;0}°)";
+                    await PulseAsync(dx != 0 ? TelescopeAxis.Primary : TelescopeAxis.Secondary, (dx != 0 ? dx : dy) * step, rate, ct);
+
+                    var m = await MeasureBrightnessAsync($"Search {visited} ({x},{y})", ct, FindSunSearchFramesPerPoint);
+                    if (!SunDetected(m, baseline))
+                        continue;
+
+                    var confirm = await MeasureBrightnessAsync($"Search {visited} confirm", ct, FindSunSearchFramesPerPoint);
+                    if (SunDetected(confirm, baseline))
+                    {
+                        _findSunLog?.Info($"Signal found at search point {visited}: offset ({x * step:+0.##;-0.##;0}°, {y * step:+0.##;-0.##;0}°) (Primary, Secondary axes).");
+                        await LogMountPositionAsync("At search hit", null, null);
+                        return true;
+                    }
+                    _findSunLog?.Info("Detection not confirmed by the second measurement - carrying on.");
+                }
+                dir = (dir + 1) % 4;
+            }
+            leg++;
+        }
+
+        _findSunLog?.Info($"Search finished: {visited} points covered with no detection.");
+        return false;
+    }
+
+    private bool SunDetected(BrightnessMeasurement m, BrightnessMeasurement baseline)
+    {
+        var threshold = Math.Max(
+            FindSunSearchDetectSigmas * Math.Max(m.FrameStdDev, baseline.FrameStdDev),
+            FindSunSearchDetectFractionOfFullScale * m.FullScale);
+        return m.Mean - baseline.Mean > threshold;
+    }
+
+    /// <summary>Brings the live frame into a usable range for the Sun: not saturated (>0.5% of pixels at
+    /// full scale) and with an average of roughly 4-30% of full scale, aiming for ~12%. Adjusts exposure
+    /// first, then gain (see <see cref="ApplyBrightnessFactor"/>), re-measuring after each change.</summary>
+    private async Task AutoExposeAsync(CancellationToken ct)
+    {
+        for (var i = 0; i < FindSunMaxAutoExposeIterations; i++)
+        {
+            var m = await MeasureBrightnessAsync($"Auto-expose {i}", ct);
+            var meanFraction = m.Mean / m.FullScale;
+
+            double factor;
+            if (m.SaturatedFraction > FindSunSaturatedFractionLimit)
+                factor = 0.25;
+            else if (meanFraction < FindSunDimMeanFraction)
+                factor = Math.Min(8, FindSunTargetMeanFraction / Math.Max(meanFraction, 1e-4));
+            else if (meanFraction > FindSunBrightMeanFraction)
+                factor = FindSunTargetMeanFraction / meanFraction;
+            else
+            {
+                _findSunLog?.Info($"Exposure/gain fine: exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0}, mean {meanFraction:P1} of full scale.");
+                return;
+            }
+
+            var achieved = ApplyBrightnessFactor(factor);
+            _findSunLog?.Info(
+                $"Auto-expose: mean {meanFraction:P1}, saturated {m.SaturatedFraction:P2}; wanted x{factor:0.##}, achieved x{achieved:0.##} "
+                + $"-> exposure {ExposureMicroseconds / 1000.0:0.###}ms, gain {Gain:0}.");
+            if (Math.Abs(achieved - 1) < 0.05)
+            {
+                _findSunLog?.Info("Auto-expose: at an exposure/gain limit - stopping.");
+                return;
+            }
+            await SettleAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Centres the Sun. Brightness alone can't do it: through a slit, moving the disc *along* the slit
+    /// leaves total brightness unchanged (seen on real hardware: RA nudges did nothing, Dec nudges did),
+    /// so the along-slit axis is found by pulsing each axis and seeing which one shifts the brightness
+    /// centroid sideways (<see cref="CalibrateAlongSlitAxisAsync"/>), and is then driven to put the
+    /// centroid at the middle of the frame (<see cref="CentreAlongSlitAsync"/>). The other (across-slit)
+    /// axis is hill-climbed on brightness, which peaks when the slit passes through the disc's centre.
+    /// If the axes can't be told apart, both are just hill-climbed as before.
+    /// </summary>
+    private async Task<FineTuneOutcome> RefinePointingAsync(double maxRateDegPerSec, CancellationToken ct)
+    {
+        var nudgeRate = maxRateDegPerSec * FindSunNudgeRateFraction;
+        var fastRate = maxRateDegPerSec * FindSunSearchRateFraction;
+        var range = new SignalRange();
+        var improved = false;
+
+        StatusText = "Find Sun: working out which axis runs along the slit…";
+        var along = await CalibrateAlongSlitAxisAsync(nudgeRate, ct);
+
+        if (along is { } slit)
+        {
+            var across = slit.Axis == TelescopeAxis.Primary ? TelescopeAxis.Secondary : TelescopeAxis.Primary;
+            StatusText = "Find Sun: centring across the slit (brightness)…";
+            await AutoExposeAsync(ct);
+            improved |= await ClimbAxisAsync(across, nudgeRate, FindSunCoarseStepDeg, range, ct);
+            StatusText = "Find Sun: centring along the slit (position)…";
+            improved |= await CentreAlongSlitAsync(slit.Axis, slit.SlopePerDeg, nudgeRate, fastRate, range, ct);
+            StatusText = "Find Sun: fine-centring across the slit…";
+            await AutoExposeAsync(ct);
+            improved |= await ClimbAxisAsync(across, nudgeRate, FindSunFineStepDeg, range, ct);
+            improved |= await CentreAlongSlitAsync(slit.Axis, slit.SlopePerDeg, nudgeRate, fastRate, range, ct);
+        }
+        else
+        {
+            StatusText = "Find Sun: fine-tuning on brightness…";
+            await AutoExposeAsync(ct);
+            improved |= await ClimbAxisAsync(TelescopeAxis.Primary, nudgeRate, FindSunCoarseStepDeg, range, ct);
+            improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, nudgeRate, FindSunCoarseStepDeg, range, ct);
+            improved |= await ClimbAxisAsync(TelescopeAxis.Primary, nudgeRate, FindSunFineStepDeg, range, ct);
+            improved |= await ClimbAxisAsync(TelescopeAxis.Secondary, nudgeRate, FindSunFineStepDeg, range, ct);
+        }
+
+        var final = await MeasureBrightnessAsync("Final", ct);
+        _findSunLog?.Info(
+            $"Final: mean {final.Mean:0.##}, brightness centre X {final.CentreX:0.000}, Y {final.CentreY:0.000} (0.5 = frame centre). "
+            + $"Signal range over the run: min {range.Min:0.##}, max {range.Max:0.##}, flat: {range.IsFlat}.");
+        await LogMountPositionAsync("Final position", null, null);
+
+        return improved ? FineTuneOutcome.Improved
+            : range.IsFlat && along is null ? FineTuneOutcome.NoSignal
+            : FineTuneOutcome.NoImprovement;
+    }
+
+    /// <summary>Pulses each axis a known angle and watches how far the brightness centroid moves
+    /// sideways. The axis with the big shift runs along the slit; the other barely moves it. Returns the
+    /// axis and its slope (centroid fraction per degree), or null if it can't be told (no centroid, or
+    /// no axis moved it clearly more than the other).</summary>
+    private async Task<(TelescopeAxis Axis, double SlopePerDeg)?> CalibrateAlongSlitAxisAsync(double rate, CancellationToken ct)
+    {
+        var step = FindSunAxisCalibrationStepDeg;
+        var shifts = new Dictionary<TelescopeAxis, double>();
+
+        foreach (var axis in new[] { TelescopeAxis.Primary, TelescopeAxis.Secondary })
+        {
+            var before = await MeasureBrightnessAsync($"Calibrate {axis} before", ct);
+            if (!before.HasCentre)
+            {
+                _findSunLog?.Info($"Calibration: no brightness centroid available ({axis}); can't tell the slit axis.");
+                return null;
+            }
+
+            await PulseAsync(axis, step, rate, ct);
+            var after = await MeasureBrightnessAsync($"Calibrate {axis} after", ct);
+            await PulseAsync(axis, -step, rate, ct);
+            if (!after.HasCentre)
+            {
+                _findSunLog?.Info($"Calibration: lost the brightness centroid after moving {axis}; can't tell the slit axis.");
+                return null;
+            }
+
+            shifts[axis] = (after.CentreX - before.CentreX) / step;
+            _findSunLog?.Info($"Calibration {axis}: centre X {before.CentreX:0.000} -> {after.CentreX:0.000} for {step}° = {shifts[axis]:+0.000;-0.000} per degree.");
+        }
+
+        var primary = Math.Abs(shifts[TelescopeAxis.Primary]);
+        var secondary = Math.Abs(shifts[TelescopeAxis.Secondary]);
+        var (axisChosen, big, small) = primary >= secondary
+            ? (TelescopeAxis.Primary, primary, secondary)
+            : (TelescopeAxis.Secondary, secondary, primary);
+
+        if (big * step < FindSunMinCalibrationShift || big < 3 * small)
+        {
+            _findSunLog?.Info($"Calibration inconclusive (shifts {primary:0.000} vs {secondary:0.000} per degree) - falling back to brightness only.");
+            return null;
+        }
+
+        _findSunLog?.Info($"Slit runs along the {axisChosen} axis ({shifts[axisChosen]:+0.000;-0.000} centroid-fraction per degree).");
+        return (axisChosen, shifts[axisChosen]);
+    }
+
+    /// <summary>Drives <paramref name="axis"/> until the brightness centroid sits at the middle of the
+    /// frame (proportional moves from the calibrated slope, re-measured each time). Returns whether it moved.</summary>
+    private async Task<bool> CentreAlongSlitAsync(
+        TelescopeAxis axis, double slopePerDeg, double slowRate, double fastRate, SignalRange range, CancellationToken ct)
+    {
+        var moved = false;
+        for (var i = 0; i < FindSunMaxCentreIterations; i++)
+        {
+            var m = await MeasureBrightnessAsync($"Centre {axis} {i}", ct);
+            range.Add(m);
+            if (!m.HasCentre)
+            {
+                _findSunLog?.Info("Centring: no brightness centroid - stopping.");
+                return moved;
+            }
+
+            var error = m.CentreX - 0.5;
+            if (Math.Abs(error) < FindSunCentreToleranceFraction)
+            {
+                _findSunLog?.Info($"Centred along the slit: centre X {m.CentreX:0.000} (within {FindSunCentreToleranceFraction:0.##} of the middle).");
+                return moved;
+            }
+
+            var moveDeg = Math.Clamp(-error / slopePerDeg, -FindSunMaxCentreMoveDeg, FindSunMaxCentreMoveDeg);
+            _findSunLog?.Info($"Centring {axis}: centre X {m.CentreX:0.000} (error {error:+0.000;-0.000}) -> move {moveDeg:+0.###;-0.###}°.");
+            await PulseAsync(axis, moveDeg, Math.Abs(moveDeg) > 0.3 ? fastRate : slowRate, ct);
+            moved = true;
+        }
+
+        var last = await MeasureBrightnessAsync($"Centre {axis} last", ct);
+        _findSunLog?.Info($"Centring stopped after {FindSunMaxCentreIterations} moves: centre X {last.CentreX:0.000}.");
+        return moved;
+    }
+
+    /// <summary>
+    /// One-dimensional brightness hill-climb on a single mount axis, in steps of <paramref name="stepDeg"/>:
+    /// steps in one direction while brightness keeps improving (beyond noise - see
+    /// <see cref="IsBetter"/>), backs off the final non-improving step so the axis ends up at the peak
+    /// rather than one step past it, and tries the opposite direction if the very first step didn't
+    /// help at all. Bounded by <see cref="FindSunMaxStepsPerAxis"/> so a flat/noisy signal can't loop
+    /// indefinitely. Returns whether the axis ended up somewhere brighter than it started.
+    /// </summary>
+    private async Task<bool> ClimbAxisAsync(TelescopeAxis axis, double rateDegPerSec, double stepDeg, SignalRange range, CancellationToken ct)
+    {
+        _findSunLog?.Info($"--- Climb {axis}, step {stepDeg}° ---");
+
+        var best = await MeasureBrightnessAsync($"{axis} start", ct);
+        range.Add(best);
+
+        var direction = 1.0;
+        await PulseAsync(axis, direction * stepDeg, rateDegPerSec, ct);
+        var first = await MeasureBrightnessAsync($"{axis} step +1", ct);
+        range.Add(first);
+
+        if (!IsBetter(first, best))
+        {
+            // That direction didn't help - go past the start to the other side in one move (undo + one step).
+            direction = -1.0;
+            await PulseAsync(axis, direction * 2 * stepDeg, rateDegPerSec, ct);
+            first = await MeasureBrightnessAsync($"{axis} step -1", ct);
+            range.Add(first);
+
+            if (!IsBetter(first, best))
+            {
+                // Neither direction helped - return to where the axis started and give up on it for this pass.
+                await PulseAsync(axis, -direction * stepDeg, rateDegPerSec, ct);
+                _findSunLog?.Info($"{axis}: neither direction improved on the start position; returned to it.");
                 return false;
             }
         }
 
         best = first;
-        for (var step = 0; step < FindSunMaxStepsPerAxis; step++)
+        for (var step = 2; step <= FindSunMaxStepsPerAxis; step++)
         {
-            var after = await NudgeAndMeasureAsync(axis, direction, rateDegPerSec);
-            if (!IsBrighterThan(after, best))
+            await PulseAsync(axis, direction * stepDeg, rateDegPerSec, ct);
+            var after = await MeasureBrightnessAsync($"{axis} step {(direction > 0 ? "+" : "-")}{step}", ct);
+            range.Add(after);
+            if (!IsBetter(after, best))
             {
                 // Overshot the peak - undo this last step and stop.
-                await NudgeAndMeasureAsync(axis, -direction, rateDegPerSec);
-                break;
+                await PulseAsync(axis, -direction * stepDeg, rateDegPerSec, ct);
+                _findSunLog?.Info($"{axis}: passed the peak after {step - 1} step(s); backed off.");
+                return true;
             }
             best = after;
         }
 
+        _findSunLog?.Info($"{axis}: hit the {FindSunMaxStepsPerAxis}-step limit while still improving.");
         return true;
     }
 
-    private static bool IsBrighterThan(double after, double before) =>
-        after > before * (1 + FindSunRelativeImprovementThreshold);
-
-    /// <summary>Pulses <paramref name="axis"/> at <paramref name="rateDegPerSec"/> * <paramref name="direction"/>
-    /// for <see cref="FindSunPulseDuration"/>, stops it, waits <see cref="FindSunSettleDelay"/> for a
-    /// couple of throttled preview frames to catch up, then returns the freshly-measured brightness.</summary>
-    private async Task<double> NudgeAndMeasureAsync(TelescopeAxis axis, double direction, double rateDegPerSec)
+    /// <summary>True when <paramref name="after"/> beats <paramref name="before"/> by more than noise:
+    /// at least <see cref="FindSunNoiseSigmas"/> combined standard errors, and at least
+    /// <see cref="FindSunMinRelativeImprovement"/> of the starting brightness.</summary>
+    private bool IsBetter(BrightnessMeasurement after, BrightnessMeasurement before)
     {
-        await _mount.MoveAxisAsync(axis, direction * rateDegPerSec);
-        await Task.Delay(FindSunPulseDuration);
-        await _mount.MoveAxisAsync(axis, 0);
-        await Task.Delay(FindSunSettleDelay);
-        return _lastFrameAverageBrightness;
+        var noise = FindSunNoiseSigmas * Math.Sqrt(after.StdError * after.StdError + before.StdError * before.StdError);
+        var threshold = Math.Max(noise, FindSunMinRelativeImprovement * before.Mean);
+        var better = after.Mean - before.Mean > threshold;
+        _findSunLog?.Detail(
+            $"compare: {before.Mean:0.##} -> {after.Mean:0.##} (delta {after.Mean - before.Mean:+0.##;-0.##}, "
+            + $"threshold {threshold:0.##}) => {(better ? "better" : "not better")}");
+        return better;
+    }
+
+    /// <summary>Moves <paramref name="axis"/> by roughly <paramref name="signedDeg"/> (sign = direction)
+    /// by running it at <paramref name="rateDegPerSec"/> for the matching duration, then stopping it.
+    /// Timed, so the actual travel is only approximate - the log records the real elapsed time and the
+    /// mount's own position readout before and after, to check the timing model against reality.
+    /// Always sends a stop, even if cancelled or something throws mid-pulse.</summary>
+    private async Task PulseAsync(TelescopeAxis axis, double signedDeg, double rateDegPerSec, CancellationToken ct)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Abs(signedDeg) / rateDegPerSec);
+        if (duration > FindSunMaxPulseDuration)
+        {
+            duration = FindSunMaxPulseDuration;
+        }
+
+        var sign = Math.Sign(signedDeg);
+        (double RaHours, double DecDeg)? before = null;
+        try { before = await _mount.GetCurrentPositionAsync(ct); }
+        catch (OperationCanceledException) { throw; }
+        catch { /* logged below as missing */ }
+
+        var stopwatch = new System.Diagnostics.Stopwatch();
+        try
+        {
+            await _mount.MoveAxisAsync(axis, sign * rateDegPerSec, ct);
+            stopwatch.Start();
+            await Task.Delay(duration, ct);
+        }
+        finally
+        {
+            var elapsedAtStop = stopwatch.Elapsed;
+            await _mount.MoveAxisAsync(axis, 0, CancellationToken.None);
+            _findSunLog?.Info(
+                $"Pulse {axis} {signedDeg:+0.###;-0.###}° at {sign * rateDegPerSec:+0.####;-0.####}°/s: "
+                + $"planned {duration.TotalMilliseconds:0}ms, ran {elapsedAtStop.TotalMilliseconds:0}ms "
+                + $"(~{rateDegPerSec * elapsedAtStop.TotalSeconds:0.####}° by timing).");
+        }
+
+        await SettleAsync(ct);
+
+        if (_findSunLog is not null)
+        {
+            if (before is { } b)
+            {
+                try
+                {
+                    var (ra, dec) = await _mount.GetCurrentPositionAsync(ct);
+                    var raArcsec = (ra - b.RaHours) * 15 * 3600 * Math.Cos(b.DecDeg * Math.PI / 180);
+                    var decArcsec = (dec - b.DecDeg) * 3600;
+                    _findSunLog.Detail(
+                        $"mount readout moved RA {raArcsec:+0.#;-0.#;0}\", Dec {decArcsec:+0.#;-0.#;0}\" "
+                        + $"(now RA {ra:F5}h, Dec {dec:F4}°)");
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _findSunLog.Detail($"mount position readout after pulse failed: {ex.Message}");
+                }
+            }
+            else
+            {
+                _findSunLog.Detail("mount position readout before pulse was unavailable.");
+            }
+        }
+    }
+
+    /// <summary>Waits for genuinely new preview frames (<paramref name="frames"/>, or a default that's
+    /// smaller at long exposures) and returns their mean brightness with its noise, plus saturation and
+    /// centroid. Gives up (with whatever it has) after a timeout so a stalled preview can't hang Find Sun.</summary>
+    private async Task<BrightnessMeasurement> MeasureBrightnessAsync(string label, CancellationToken ct, int? frames = null)
+    {
+        var target = frames ?? (ExposureMicroseconds >= 200_000 ? 3 : FindSunFramesPerMeasurement);
+        var means = new List<double>(target);
+        var saturated = new List<double>(target);
+        var centreXs = new List<double>(target);
+        var centreYs = new List<double>(target);
+        var lastSeen = _previewFrameCounter;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var timeout = TimeSpan.FromSeconds(3 + target * (1 + ExposureMicroseconds / 1_000_000.0));
+
+        while (means.Count < target && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(15, ct);
+            if (_previewFrameCounter != lastSeen)
+            {
+                lastSeen = _previewFrameCounter;
+                means.Add(_lastFrameAverageBrightness);
+                saturated.Add(_lastFrameSaturatedFraction);
+                if (!double.IsNaN(_lastFrameCentreX))
+                    centreXs.Add(_lastFrameCentreX);
+                if (!double.IsNaN(_lastFrameCentreY))
+                    centreYs.Add(_lastFrameCentreY);
+            }
+        }
+
+        if (means.Count == 0)
+        {
+            // No fresh preview frame at all - fall back to the last value so the caller still has a number.
+            means.Add(_lastFrameAverageBrightness);
+            saturated.Add(_lastFrameSaturatedFraction);
+            if (!double.IsNaN(_lastFrameCentreX))
+                centreXs.Add(_lastFrameCentreX);
+            if (!double.IsNaN(_lastFrameCentreY))
+                centreYs.Add(_lastFrameCentreY);
+            _findSunLog?.Error($"{label}: no new preview frames arrived within {timeout.TotalSeconds:0}s - using the last value.");
+        }
+
+        var mean = means.Average();
+        var variance = means.Count > 1 ? means.Sum(s => (s - mean) * (s - mean)) / (means.Count - 1) : 0;
+        var result = new BrightnessMeasurement(
+            mean, Math.Sqrt(variance / means.Count), Math.Sqrt(variance), means.Count, _lastFrameMaxValue, _lastFrameBitDepth,
+            saturated.Average(),
+            centreXs.Count > 0 ? centreXs.Average() : double.NaN,
+            centreYs.Count > 0 ? centreYs.Average() : double.NaN);
+
+        _findSunLog?.Info(
+            $"Brightness [{label}]: mean {mean:0.##} +/- {result.StdError:0.###} ({mean / Math.Max(1, result.FullScale):P2} of full scale; "
+            + $"n={means.Count} in {stopwatch.ElapsedMilliseconds}ms, ~{means.Count * 1000.0 / Math.Max(1, stopwatch.ElapsedMilliseconds):0.#} frames/s); "
+            + $"frame max {_lastFrameMaxValue:0}, saturated pixels {result.SaturatedFraction:P2}; "
+            + $"centre X {result.CentreX:0.000} Y {result.CentreY:0.000}; exposure {ExposureMicroseconds / 1000.0:0.###}ms gain {Gain:0}.");
+        return result;
     }
 
     [RelayCommand]
@@ -1411,6 +2127,7 @@ public partial class CaptureViewModel : ObservableObject
         StartRecordingCommand.NotifyCanExecuteChanged();
         FindSunCommand.NotifyCanExecuteChanged();
         SyncMountCommand.NotifyCanExecuteChanged();
+        CancelFindSunCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Clamps to <see cref="MinGain"/>-<see cref="MaxGain"/> and rounds to the nearest
@@ -2082,6 +2799,12 @@ public partial class CaptureViewModel : ObservableObject
             // TryStartSpectralAnalysis's own doc comment for the measured numbers).
             TryStartSpectralAnalysis(frame, stretchMaxDimension);
 
+            // Find Sun's centring needs to know where the light sits in the frame, and its search /
+            // auto-exposure need to know how much of it is saturated - see FindSunAsync.
+            var centroid = _findSunMeasuringCentroid ? FrameCentroid.Measure(frame) : FrameCentroidStats.None;
+            var histogramTotal = stats.Histogram.Sum(count => (long)count);
+            var saturatedFraction = histogramTotal > 0 ? (double)stats.Histogram[^1] / histogramTotal : 0;
+
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
             // so read it back here (cheap; already off the capture thread) and reflect it on the
             // slider, guarded so OnXChanged doesn't immediately push it right back.
@@ -2095,6 +2818,12 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
                 _lastFrameAverageBrightness = stats.AverageValue; // see FindSunAsync's fine-tune hill-climb
+                _lastFrameMaxValue = stats.MaxValue;
+                _lastFrameBitDepth = stats.BitDepth;
+                _lastFrameSaturatedFraction = saturatedFraction;
+                _lastFrameCentreX = centroid.CentreX;
+                _lastFrameCentreY = centroid.CentreY;
+                _previewFrameCounter++;
                 if (focusStats is { } edgeFocus)
                 {
                     if (edgeFocus.HasEdge)

@@ -45,6 +45,14 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
+                <!-- Tells the mount it is now pointing at the Sun (for when it's been centred by hand). -->
+                <Button x:Name="SyncButton" Grid.Row="0" Grid.Column="2" Width="56" Height="56" Margin="0"
+                        Style="{StaticResource ToolbarIconButtonStyle}"
+                        ToolTip="Sync: tell the mount it is now pointing at the Sun - use once the Sun is centred."
+                        IsEnabled="{Binding IsConnected}" Click="OnSyncClick">
+                    <Image Source="/Assets/Icons/SyncTelescope.png" Width="28" Height="28" Stretch="Uniform"/>
+                </Button>
+
                 <Button x:Name="UpButton" Grid.Row="0" Grid.Column="1" Width="56" Height="56" Margin="0"
                         Style="{StaticResource ToolbarIconButtonStyle}" ToolTip="North (Dec+)"
                         IsEnabled="{Binding IsConnected}"

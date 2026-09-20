@@ -51,6 +51,8 @@ public partial class HandControlWindow : Window
         }
     }
 
+    private void OnSyncClick(object sender, RoutedEventArgs e) => _ = _viewModel.SyncToSunAsync();
+
     private void OnStopClick(object sender, RoutedEventArgs e)
     {
         _heldAxis = null;

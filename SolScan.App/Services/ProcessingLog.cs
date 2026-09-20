@@ -53,6 +53,14 @@ public sealed class ProcessingLog : IDisposable
         return new ProcessingLog(path);
     }
 
+    /// <summary>Opens (creating its folder if needed) a log at an explicit <paramref name="path"/> -
+    /// for callers outside the per-recording numbered scheme above, e.g. Capture's Find Sun log.</summary>
+    public static ProcessingLog OpenAt(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        return new ProcessingLog(path);
+    }
+
     private ProcessingLog(string path)
     {
         _writer = new StreamWriter(path, append: false) { AutoFlush = true };
