@@ -18,6 +18,7 @@ using SolScan.Core.Equipment;
 using SolScan.Core.Processing;
 using SolScan.Core.Telescope;
 using SolScan.Processing.Spectrum;
+using QuadraticPolynomial = SolScan.Processing.Math.QuadraticPolynomial;
 
 namespace SolScan.App.ViewModels;
 
@@ -35,13 +36,19 @@ public partial class CaptureViewModel : ObservableObject
     private static readonly TimeSpan PreviewRedrawInterval = TimeSpan.FromMilliseconds(50); // ~20fps cap
     private static readonly TimeSpan FrameRateUpdateInterval = TimeSpan.FromSeconds(1);
 
-    // Live spectral-line overlay (see ProcessPreviewFrame) - deliberately slower than the preview
-    // redraw itself: a person turning a grating by hand doesn't need 20fps responsiveness, and the
-    // analysis (a real curvature fit + 12-candidate correlation over the frame's own full resolution -
-    // 3840x2160 on real ASI678MM hardware) is real work worth not repeating on every single throttled
-    // preview tick. NOT YET VALIDATED against real hardware timing - a starting value, not a measured one.
-    private static readonly TimeSpan SpectralOverlayUpdateInterval = TimeSpan.FromMilliseconds(400);
-    private DateTime _lastSpectralOverlayUtc = DateTime.MinValue;
+    // Spectral analysis (the live line overlay + the camera-focus aid - see TryStartSpectralAnalysis):
+    // one shared cadence and one shared curvature fit per pass, deliberately slower than the preview
+    // redraw - a person turning a grating or focus ring by hand doesn't need 20fps from these, and each
+    // pass is real work at the ASI678MM's 3840x2160. Read/written only from the preview-processing
+    // thread (single-flight via _previewProcessingInFlight), or reset from the UI thread by
+    // LoadTestImage before it starts that thread. NOT YET VALIDATED against real hardware - a starting value.
+    private static readonly TimeSpan SpectralAnalysisInterval = TimeSpan.FromMilliseconds(300);
+    private DateTime _lastSpectralAnalysisUtc = DateTime.MinValue;
+
+    /// <summary>1 while a spectral-analysis pass is running on its own worker. Deliberately separate
+    /// from <see cref="_previewProcessingInFlight"/>: sharing that flag was what let a slow analysis
+    /// stall the preview itself (see <see cref="TryStartSpectralAnalysis"/>).</summary>
+    private int _spectralAnalysisInFlight;
 
     /// <summary>The most recently *confident* live spectral-line identification (see
     /// <see cref="SpectralOverlayAnalyzer"/>/<see cref="SpectralLineIdentifier"/>) - null until the
@@ -53,8 +60,8 @@ public partial class CaptureViewModel : ObservableObject
     /// recording has nowhere near enough spectral context to identify its own line after the fact -
     /// see this session's own investigation), rather than trying to recover it from an already-cropped
     /// file later. Written only from the background preview-processing thread (<see cref="ProcessPreviewFrame"/>),
-    /// same single-writer-via-<see cref="_previewProcessingInFlight"/> threading rationale as
-    /// <see cref="_lastSpectralOverlayUtc"/> - a plain field is safe here for the same reason.
+    /// written only by the single-flight spectral-analysis worker (<see cref="_spectralAnalysisInFlight"/>) -
+    /// a plain reference write is safe here.
     /// Deliberately never cleared just because a later tick turns unconfident - it's "the last line
     /// the overlay was sure about", which stays a reasonable answer through a few noisy/ambiguous
     /// frames. Can go stale if the user changes lines and starts recording before a fresh confident
@@ -105,6 +112,13 @@ public partial class CaptureViewModel : ObservableObject
     /// "Hand Control…" brings the existing one to front instead of opening a duplicate (two windows
     /// independently sending MoveAxis would race each other).</summary>
     private HandControlWindow? _handControlWindow;
+
+    /// <summary>The pop-out focus-graph window (see <see cref="OpenFocusGraph"/>), if open. While it is,
+    /// both focus aids run regardless of the Focus Aid Expander (the graphs need their data) and build
+    /// their plot data. <see cref="_isFocusGraphOpen"/> mirrors it as a volatile flag because the preview
+    /// and analysis threads read it.</summary>
+    private FocusGraphWindow? _focusGraphWindow;
+    private volatile bool _isFocusGraphOpen;
 
     private ICameraDevice? _connectedCamera;
 
@@ -525,6 +539,40 @@ public partial class CaptureViewModel : ObservableObject
     /// from the UI thread, same threading rationale as <see cref="_bestEdgeWidthPixels"/>.</summary>
     private readonly List<double> _recentEdgeWidthsPixels = new(RecentEdgeWidthWindowSize);
 
+    /// <summary>Camera-focus aid readout - see <see cref="SpectralLineFocusAnalyzer"/>. The full width
+    /// at half depth of the studied spectral line, in pixels: the number to *minimize* while adjusting
+    /// the camera's own focus, distinct from <see cref="EdgeWidthText"/>, which tracks the collimator.</summary>
+    [ObservableProperty]
+    private string lineWidthText = "—";
+
+    /// <summary>Running low-water mark of <see cref="LineWidthText"/>'s underlying value - the camera-
+    /// focus counterpart to <see cref="BestEdgeWidthText"/>, same reasoning.</summary>
+    [ObservableProperty]
+    private string bestLineWidthText = "—";
+
+    /// <summary>How deep the measured line's dip is, as a percentage of its local continuum - context
+    /// for <see cref="LineWidthText"/>, since a very shallow dip makes the width less trustworthy.</summary>
+    [ObservableProperty]
+    private string lineDepthText = "—";
+
+    /// <summary>See <see cref="_bestEdgeWidthPixels"/> - same UI-thread-only threading rationale.</summary>
+    private double _bestLineWidthPixels = double.PositiveInfinity;
+
+    /// <summary>Rolling-median window for the line-width reading. Smaller than
+    /// <see cref="RecentEdgeWidthWindowSize"/> because this aid updates less often (see
+    /// <see cref="LineFocusUpdateInterval"/>), so five readings would lag a real focus change by over a second.</summary>
+    private const int RecentLineWidthWindowSize = 3;
+
+    private readonly List<double> _recentLineWidthsPixels = new(RecentLineWidthWindowSize);
+
+    /// <summary>Latest camera-focus (line profile) and collimator-focus (edge profile) graph data for
+    /// <see cref="FocusGraphWindow"/> - only populated while that window is open.</summary>
+    [ObservableProperty]
+    private ProfilePlotData? lineProfilePlot;
+
+    [ObservableProperty]
+    private ProfilePlotData? edgeProfilePlot;
+
     [ObservableProperty]
     private int frameCount;
 
@@ -610,6 +658,79 @@ public partial class CaptureViewModel : ObservableObject
         OpenHandControlCommand.NotifyCanExecuteChanged();
         FindSunCommand.NotifyCanExecuteChanged();
         SyncMountCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Opens the pop-out, modeless focus-graph window (see Views/FocusGraphWindow.xaml) - a live
+    /// plot of what each focus aid is measuring, in the spirit of sunscan-app's Spectrum chart. Brings the
+    /// existing one to front rather than opening a second. While open, both aids run and feed it
+    /// regardless of the Focus Aid Expander (see <see cref="_isFocusGraphOpen"/>).</summary>
+    [RelayCommand]
+    private void OpenFocusGraph()
+    {
+        if (_focusGraphWindow is not null)
+        {
+            _focusGraphWindow.Activate();
+            return;
+        }
+
+        // The analysis worker is throttled by _lastSpectralAnalysisUtc - clear it so the graph doesn't
+        // sit empty for a cadence tick after opening.
+        _lastSpectralAnalysisUtc = DateTime.MinValue;
+
+        _focusGraphWindow = new FocusGraphWindow { DataContext = this };
+        _isFocusGraphOpen = true;
+        _focusGraphWindow.Closed += (_, _) =>
+        {
+            _focusGraphWindow = null;
+            _isFocusGraphOpen = false;
+            LineProfilePlot = null;
+            EdgeProfilePlot = null;
+        };
+        _focusGraphWindow.Show();
+    }
+
+    private static readonly Color PlotAccent = Color.FromRgb(0xFF, 0xB3, 0x47);
+    private static readonly Color PlotReference = Color.FromRgb(0x88, 0x88, 0x88);
+
+    /// <summary>The edge profile plus, per measured edge, its 10%/90% crossing points and the two plateau
+    /// levels it was measured between - what the "Edge width" number was derived from.</summary>
+    private static ProfilePlotData BuildEdgePlot(EdgeFocusDetail detail)
+    {
+        var lines = new List<PlotLine>();
+        foreach (var edge in detail.Edges)
+        {
+            lines.Add(PlotLine.Horizontal(edge.LowLevel, PlotReference));
+            lines.Add(PlotLine.Horizontal(edge.HighLevel, PlotReference));
+            lines.Add(PlotLine.Vertical(edge.LeftCrossing, PlotAccent));
+            lines.Add(PlotLine.Vertical(edge.RightCrossing, PlotAccent));
+        }
+
+        return new ProfilePlotData(detail.Profile, 0, lines);
+    }
+
+    /// <summary>The straightened line profile plus its continuum level and the half-depth bar between the
+    /// two crossings - what the FWHM number was derived from. With no confident line, whatever reference
+    /// levels could still be worked out are drawn dashed, to show why it was rejected.</summary>
+    private static ProfilePlotData BuildLinePlot(SpectralLineFocusDetail detail)
+    {
+        var lines = new List<PlotLine>();
+        if (detail.Continuum is { } continuum)
+        {
+            lines.Add(PlotLine.Horizontal(continuum, PlotReference));
+        }
+
+        if (detail is { HalfLevel: { } half, LeftCrossingShift: { } left, RightCrossingShift: { } right })
+        {
+            lines.Add(PlotLine.Segment(left, right, half, PlotAccent));
+            lines.Add(PlotLine.Vertical(left, PlotAccent));
+            lines.Add(PlotLine.Vertical(right, PlotAccent));
+        }
+        else if (detail.HalfLevel is { } unconfirmedHalf)
+        {
+            lines.Add(PlotLine.Horizontal(unconfirmedHalf, PlotAccent));
+        }
+
+        return new ProfilePlotData(detail.Profile.Values, detail.Profile.MinShiftPixels, lines);
     }
 
     /// <summary>Opens the pop-out, modeless Hand Control window (see Views/HandControlWindow.xaml) -
@@ -994,7 +1115,7 @@ public partial class CaptureViewModel : ObservableObject
 
         _frameArrivalCount = 0;
         _lastFrameRateUpdateUtc = DateTime.UtcNow;
-        ResetBestEdgeWidth(); // a "best" carried over from a previous live-view session isn't meaningful for this one
+        ResetAllBestFocus(); // a "best" carried over from a previous live-view session isn't meaningful for this one
         _lastConfidentSpectralRay = null; // same reasoning - a confident line from a previous session/line isn't meaningful for this one
         SelectedCamera.FrameCaptured += OnFrameCaptured;
         await SelectedCamera.StartStreamingAsync();
@@ -1120,7 +1241,13 @@ public partial class CaptureViewModel : ObservableObject
 
         // A deliberate one-shot test action should show its result immediately, not wait out
         // whatever's left of the normal ~400ms spectral-overlay throttle window.
-        _lastSpectralOverlayUtc = DateTime.MinValue;
+        _lastSpectralAnalysisUtc = DateTime.MinValue;
+
+        if (Volatile.Read(ref _spectralAnalysisInFlight) != 0)
+        {
+            StatusText = "Still analysing the previous frame - try again in a moment.";
+            return;
+        }
 
         if (Interlocked.CompareExchange(ref _previewProcessingInFlight, 1, 0) != 0)
         {
@@ -1453,16 +1580,34 @@ public partial class CaptureViewModel : ObservableObject
         RoiHeight = 0;
     }
 
-    /// <summary>The "Reset" button on the Focus Aid panel - clears the running best-so-far low-water
-    /// mark, e.g. before starting a fresh collimator adjustment pass. Also called automatically
-    /// whenever live view (re)starts (see <see cref="ToggleLiveViewAsync"/>) - a "best" carried over
-    /// from a previous session/camera/ROI isn't a meaningful target for a new one.</summary>
+    /// <summary>The collimator "Reset Best" button - clears its running best-so-far low-water mark, e.g.
+    /// before starting a fresh collimator adjustment pass. The camera-focus aid has its own
+    /// (<see cref="ResetBestLineWidthCommand"/>): the two are adjusted independently, so resetting one
+    /// shouldn't throw away the other's best.</summary>
     [RelayCommand]
     private void ResetBestEdgeWidth()
     {
         _bestEdgeWidthPixels = double.PositiveInfinity;
         BestEdgeWidthText = "—";
         _recentEdgeWidthsPixels.Clear();
+    }
+
+    /// <summary>The camera-focus "Reset Best" button - see <see cref="ResetBestEdgeWidth"/>.</summary>
+    [RelayCommand]
+    private void ResetBestLineWidth()
+    {
+        _bestLineWidthPixels = double.PositiveInfinity;
+        BestLineWidthText = "—";
+        _recentLineWidthsPixels.Clear();
+    }
+
+    /// <summary>Resets both - called automatically whenever live view (re)starts (see
+    /// <see cref="ToggleLiveViewAsync"/>): a "best" carried over from a previous session/camera/ROI isn't
+    /// a meaningful target for a new one.</summary>
+    private void ResetAllBestFocus()
+    {
+        ResetBestEdgeWidth();
+        ResetBestLineWidth();
     }
 
     /// <summary>Rolling-median smoothing over the last <see cref="RecentEdgeWidthWindowSize"/> valid
@@ -1472,15 +1617,22 @@ public partial class CaptureViewModel : ObservableObject
     /// set a new "Best". Frames where <see cref="EdgeFocusStats.HasEdge"/> is false don't get added
     /// here at all - the window just keeps showing the last confident reading rather than being
     /// diluted by "no measurement" frames.</summary>
-    private double SmoothEdgeWidth(double edgeWidthPixels)
+    private double SmoothEdgeWidth(double edgeWidthPixels) =>
+        RollingMedian(_recentEdgeWidthsPixels, RecentEdgeWidthWindowSize, edgeWidthPixels);
+
+    /// <summary>The camera-focus counterpart to <see cref="SmoothEdgeWidth"/>.</summary>
+    private double SmoothLineWidth(double lineWidthPixels) =>
+        RollingMedian(_recentLineWidthsPixels, RecentLineWidthWindowSize, lineWidthPixels);
+
+    private static double RollingMedian(List<double> window, int windowSize, double newValue)
     {
-        _recentEdgeWidthsPixels.Add(edgeWidthPixels);
-        if (_recentEdgeWidthsPixels.Count > RecentEdgeWidthWindowSize)
+        window.Add(newValue);
+        if (window.Count > windowSize)
         {
-            _recentEdgeWidthsPixels.RemoveAt(0);
+            window.RemoveAt(0);
         }
 
-        var sorted = _recentEdgeWidthsPixels.OrderBy(v => v).ToList();
+        var sorted = window.OrderBy(v => v).ToList();
         var n = sorted.Count;
         return n % 2 == 1 ? sorted[n / 2] : (sorted[(n / 2) - 1] + sorted[n / 2]) / 2.0;
     }
@@ -1917,74 +2069,18 @@ public partial class CaptureViewModel : ObservableObject
             // Collimator-focus aid (see FocusAnalyzer's own doc comment) - operates on frame at its
             // own native resolution, not a downsampled copy: sub-pixel edge-width measurement needs
             // full column resolution, and downsampling the width would blur exactly the edge
-            // transition this is trying to measure.
-            var focusStats = FocusAnalyzer.MeasureEdgeSteepness(frame);
+            // transition this is trying to measure. That's ~60-80ms per full-size frame on this
+            // (single-flight) preview thread, so it only runs while something is actually showing it:
+            // the Focus Aid Expander or the pop-out graph window. Null when skipped.
+            var focusStats = IsFocusAidExpanded || _isFocusGraphOpen
+                ? FocusAnalyzer.MeasureEdgeSteepness(frame)
+                : (EdgeFocusStats?)null;
 
-            // Live spectral-line overlay (labels + colour gradient band - see SolScan.Processing.
-            // Spectrum.SpectralOverlayAnalyzer) - gated on its own slower cadence than the preview
-            // redraw itself (SpectralOverlayUpdateInterval's own doc comment explains why), and only
-            // attempted once a live instrument is actually resolved. Pixel size prefers the connected
-            // camera's own real value, falling back to SpectralOverlayFallbackPixelSizeMicrons when
-            // that's unknown - the normal case for a loaded test image (see LoadTestImage), which
-            // isn't tied to any real camera at all. Reading/writing _lastSpectralOverlayUtc here (a
-            // plain field, not Interlocked) is safe because _previewProcessingInFlight already
-            // guarantees at most one ProcessPreviewFrame call is ever running at a time.
-            List<SpectralLineLabel>? spectralLabels = null;
-            GradientStopCollection? spectralGradientStops = null;
-            string? spectralOverlayDiagnostics = null;
-            var overlayNow = DateTime.UtcNow;
-            if ((ShowSpectralLineLabels || ShowSpectralColorBand)
-                && _connectedInstrument is { } instrument
-                && overlayNow - _lastSpectralOverlayUtc >= SpectralOverlayUpdateInterval)
-            {
-                var pixelSizeMicrons = _connectedCameraProfile?.PixelSizeMicrons ?? SpectralOverlayFallbackPixelSizeMicrons;
-                _lastSpectralOverlayUtc = overlayNow;
-                try
-                {
-                    var maxShiftPixels = Math.Max(1, frame.Height / 2) - 1;
-                    var overlay = SpectralOverlayAnalyzer.Analyze(frame, instrument, pixelSizeMicrons, SelectedBinning, maxShiftPixels);
-                    var downsampleScale = FramePreview.ComputeDownsampleScale(frame.Width, frame.Height, stretchMaxDimension);
-
-                    // See _lastConfidentSpectralRay's own doc comment - this is what actually closes
-                    // the "no metadata for the scan" gap, by capturing a confident live identification
-                    // (made against the wide, uncropped preview, where there's real spectral context)
-                    // before a recording ever gets cropped down to just the studied line.
-                    if (overlay.Identification.IdentifiedRay is { } confidentRay)
-                    {
-                        _lastConfidentSpectralRay = confidentRay;
-                    }
-
-                    // Diagnostic-only (shown in the "Spectral Overlay" Expander) - real numbers to check
-                    // against rather than guessing from what's on screen, same reasoning as
-                    // SolScan.Tools annotate's own console output.
-                    var best = overlay.Identification.AllCandidates.Count > 0 ? overlay.Identification.AllCandidates[0] : null;
-                    spectralOverlayDiagnostics = best is null
-                        ? "No candidates scored."
-                        : $"Best: {best.Ray.Label} (score {best.Score:F3}, {(overlay.Identification.IdentifiedRay is not null ? "confident" : "not confident")}) | "
-                            + $"centreRow={overlay.CentreRowInFrame:F1}/{frame.Height} | "
-                            + $"Å/px={overlay.AnchorDispersionAngstromsPerPixel:F4} | "
-                            + $"maxShift={maxShiftPixels}px | visibleLines={overlay.VisibleLines.Count} | "
-                            + $"downsampleScale={downsampleScale}";
-
-                    if (ShowSpectralLineLabels)
-                    {
-                        spectralLabels = BuildSpectralLineLabels(overlay, downsampleScale);
-                    }
-                    if (ShowSpectralColorBand)
-                    {
-                        spectralGradientStops = BuildSpectralGradientStops(overlay, maxShiftPixels);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Best-effort - a failed overlay pass (e.g. a genuinely blank/degenerate frame)
-                    // shouldn't break the live preview itself; this throttled tick's overlay is just
-                    // skipped, the previous one stays on screen until the next successful pass. Still
-                    // surfaced in the diagnostics text, though - a silently-skipped pass otherwise looks
-                    // identical to "nothing changed" from the UI, hiding a real failure.
-                    spectralOverlayDiagnostics = $"Overlay pass failed: {ex.Message}";
-                }
-            }
+            // The camera-focus aid and the spectral overlay both need a curvature fit over the full
+            // frame - hundreds of ms of work - so they run on their own worker rather than here: this
+            // method is single-flight, and anything slow in it drops preview frames (see
+            // TryStartSpectralAnalysis's own doc comment for the measured numbers).
+            TryStartSpectralAnalysis(frame, stretchMaxDimension);
 
             // While Auto is on, the camera's own algorithm - not the user - is driving that value,
             // so read it back here (cheap; already off the capture thread) and reflect it on the
@@ -1999,37 +2095,29 @@ public partial class CaptureViewModel : ObservableObject
                 HistogramStatsText = $"{stats.BitDepth}-bit  Min:{stats.MinValue}  Max:{stats.MaxValue}  Avg:{stats.AverageValue:0}";
                 DroppedFrameCount = droppedFrames;
                 _lastFrameAverageBrightness = stats.AverageValue; // see FindSunAsync's fine-tune hill-climb
-                if (focusStats.HasEdge)
+                if (focusStats is { } edgeFocus)
                 {
-                    var smoothedEdgeWidth = SmoothEdgeWidth(focusStats.EdgeWidthPixels);
-                    EdgeWidthText = $"{smoothedEdgeWidth:0.00} px";
-                    if (smoothedEdgeWidth < _bestEdgeWidthPixels)
+                    if (edgeFocus.HasEdge)
                     {
-                        _bestEdgeWidthPixels = smoothedEdgeWidth;
-                        BestEdgeWidthText = $"{_bestEdgeWidthPixels:0.00} px";
+                        var smoothedEdgeWidth = SmoothEdgeWidth(edgeFocus.EdgeWidthPixels);
+                        EdgeWidthText = $"{smoothedEdgeWidth:0.00} px";
+                        if (smoothedEdgeWidth < _bestEdgeWidthPixels)
+                        {
+                            _bestEdgeWidthPixels = smoothedEdgeWidth;
+                            BestEdgeWidthText = $"{_bestEdgeWidthPixels:0.00} px";
+                        }
+                    }
+                    else
+                    {
+                        EdgeWidthText = "No edge detected";
+                    }
+
+                    if (_isFocusGraphOpen && edgeFocus.Detail is { } edgeDetail)
+                    {
+                        EdgeProfilePlot = BuildEdgePlot(edgeDetail);
                     }
                 }
-                else
-                {
-                    EdgeWidthText = "No edge detected";
-                }
                 RenderPreview(previewWidth, previewHeight, stretchedPixels);
-
-                // Only overwritten on a throttled tick that actually ran the analysis (see above) -
-                // otherwise the previous overlay stays on screen rather than flickering empty between
-                // updates.
-                if (spectralLabels is not null)
-                {
-                    SpectralLineLabels = new ObservableCollection<SpectralLineLabel>(spectralLabels);
-                }
-                if (spectralGradientStops is not null)
-                {
-                    SpectralGradientStops = spectralGradientStops;
-                }
-                if (spectralOverlayDiagnostics is not null)
-                {
-                    SpectralOverlayDiagnosticsText = spectralOverlayDiagnostics;
-                }
 
                 if (isContrastAuto)
                 {
@@ -2063,6 +2151,206 @@ public partial class CaptureViewModel : ObservableObject
         finally
         {
             Interlocked.Exchange(ref _previewProcessingInFlight, 0);
+        }
+    }
+
+    /// <summary>
+    /// Starts a spectral-analysis pass (live line overlay and/or camera-focus aid) on its own worker if
+    /// one is wanted, due, and none is already running - always on a *copy* of the frame.
+    ///
+    /// Why this isn't inline in <see cref="ProcessPreviewFrame"/>: measured on a full 3840x2160 frame in
+    /// a Release build, the plain curvature fit alone took ~790ms (see <see cref="LiveCurvatureFitter"/>).
+    /// <see cref="ProcessPreviewFrame"/> is single-flight, so anything that slow inside it silently
+    /// drops every preview frame that arrives meanwhile - reported as a very laggy preview while
+    /// adjusting focus even though the capture rate read fine. Here it only ever delays the analysis
+    /// readouts themselves, never the preview.
+    ///
+    /// The copy matters because the ASI driver rotates through a small ring of reused frame buffers
+    /// (see <c>AsiCameraDevice.CaptureLoop</c>) - fine for the millisecond-scale preview work, but an
+    /// analysis this long could otherwise read a buffer the camera has since overwritten mid-measurement.
+    /// The one shared curvature fit feeds both consumers, so having both on costs one fit, not two.
+    /// </summary>
+    private void TryStartSpectralAnalysis(CameraFrame frame, int stretchMaxDimension)
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastSpectralAnalysisUtc < SpectralAnalysisInterval)
+        {
+            return;
+        }
+
+        // Only while the Focus Aid Expander is open for the camera-focus aid (it's the only place the
+        // number is shown), and only once a live instrument is resolved for the overlay.
+        var wantLineFocus = IsFocusAidExpanded || _isFocusGraphOpen;
+        var instrument = ShowSpectralLineLabels || ShowSpectralColorBand ? _connectedInstrument : null;
+        if (!wantLineFocus && instrument is null)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _spectralAnalysisInFlight, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _lastSpectralAnalysisUtc = now;
+
+        // Pixel size prefers the connected camera's own real value, falling back to
+        // SpectralOverlayFallbackPixelSizeMicrons when that's unknown - the normal case for a loaded
+        // test image (see LoadTestImage), which isn't tied to any real camera at all.
+        var pixelSizeMicrons = _connectedCameraProfile?.PixelSizeMicrons ?? SpectralOverlayFallbackPixelSizeMicrons;
+        var binning = SelectedBinning;
+        var wantLabels = ShowSpectralLineLabels;
+        var wantBand = ShowSpectralColorBand;
+        var frameCopy = frame with { Data = (byte[])frame.Data.Clone() };
+
+        Task.Run(() => RunSpectralAnalysis(frameCopy, instrument, pixelSizeMicrons, binning, wantLabels, wantBand, wantLineFocus, stretchMaxDimension));
+    }
+
+    private void RunSpectralAnalysis(
+        CameraFrame frame,
+        SpectrographProfile? instrument,
+        double pixelSizeMicrons,
+        int binning,
+        bool wantLabels,
+        bool wantBand,
+        bool wantLineFocus,
+        int stretchMaxDimension)
+    {
+        try
+        {
+            SpectralLineFocusStats? lineFocusStats = null;
+            List<SpectralLineLabel>? spectralLabels = null;
+            GradientStopCollection? spectralGradientStops = null;
+            string? spectralOverlayDiagnostics = null;
+
+            // One fit shared by both consumers. A failure here (e.g. a degenerate frame) is reported
+            // by each consumer below rather than breaking anything.
+            QuadraticPolynomial? curvature = null;
+            Exception? fitFailure = null;
+            try
+            {
+                curvature = LiveCurvatureFitter.Fit(frame);
+            }
+            catch (Exception ex)
+            {
+                fitFailure = ex;
+            }
+
+            // Camera-focus aid - a failed pass is reported as "no line" so the UI doesn't sit on a stale reading.
+            if (wantLineFocus)
+            {
+                try
+                {
+                    lineFocusStats = fitFailure is null
+                        ? SpectralLineFocusAnalyzer.Measure(frame, curvature)
+                        : new SpectralLineFocusStats(false, 0, 0);
+                }
+                catch (Exception)
+                {
+                    lineFocusStats = new SpectralLineFocusStats(false, 0, 0);
+                }
+            }
+
+            // Live spectral-line overlay (labels + colour gradient band - see SpectralOverlayAnalyzer).
+            if (instrument is not null)
+            {
+                try
+                {
+                    if (fitFailure is not null)
+                    {
+                        throw fitFailure;
+                    }
+
+                    var maxShiftPixels = Math.Max(1, frame.Height / 2) - 1;
+                    var overlay = SpectralOverlayAnalyzer.Analyze(frame, instrument, pixelSizeMicrons, binning, maxShiftPixels, curvature: curvature);
+                    var downsampleScale = FramePreview.ComputeDownsampleScale(frame.Width, frame.Height, stretchMaxDimension);
+
+                    // See _lastConfidentSpectralRay's own doc comment - this is what actually closes
+                    // the "no metadata for the scan" gap, by capturing a confident live identification
+                    // (made against the wide, uncropped preview, where there's real spectral context)
+                    // before a recording ever gets cropped down to just the studied line.
+                    if (overlay.Identification.IdentifiedRay is { } confidentRay)
+                    {
+                        _lastConfidentSpectralRay = confidentRay;
+                    }
+
+                    // Diagnostic-only (shown in the "Spectral Overlay" Expander) - real numbers to check
+                    // against rather than guessing from what's on screen, same reasoning as
+                    // SolScan.Tools annotate's own console output.
+                    var best = overlay.Identification.AllCandidates.Count > 0 ? overlay.Identification.AllCandidates[0] : null;
+                    spectralOverlayDiagnostics = best is null
+                        ? "No candidates scored."
+                        : $"Best: {best.Ray.Label} (score {best.Score:F3}, {(overlay.Identification.IdentifiedRay is not null ? "confident" : "not confident")}) | "
+                            + $"centreRow={overlay.CentreRowInFrame:F1}/{frame.Height} | "
+                            + $"Å/px={overlay.AnchorDispersionAngstromsPerPixel:F4} | "
+                            + $"maxShift={maxShiftPixels}px | visibleLines={overlay.VisibleLines.Count} | "
+                            + $"downsampleScale={downsampleScale}";
+
+                    if (wantLabels)
+                    {
+                        spectralLabels = BuildSpectralLineLabels(overlay, downsampleScale);
+                    }
+                    if (wantBand)
+                    {
+                        spectralGradientStops = BuildSpectralGradientStops(overlay, maxShiftPixels);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort - a failed overlay pass shouldn't break anything; the previous overlay
+                    // stays on screen until the next successful pass. Still surfaced in the diagnostics
+                    // text, though - a silently-skipped pass otherwise looks identical to "nothing
+                    // changed" from the UI, hiding a real failure.
+                    spectralOverlayDiagnostics = $"Overlay pass failed: {ex.Message}";
+                }
+            }
+
+            _dispatcher.BeginInvoke(() =>
+            {
+                if (lineFocusStats is { } lineFocus)
+                {
+                    if (lineFocus.HasLine)
+                    {
+                        var smoothedLineWidth = SmoothLineWidth(lineFocus.FwhmPixels);
+                        LineWidthText = $"{smoothedLineWidth:0.00} px";
+                        LineDepthText = $"{lineFocus.DepthFraction:P0}";
+                        if (smoothedLineWidth < _bestLineWidthPixels)
+                        {
+                            _bestLineWidthPixels = smoothedLineWidth;
+                            BestLineWidthText = $"{_bestLineWidthPixels:0.00} px";
+                        }
+                    }
+                    else
+                    {
+                        LineWidthText = "No line detected";
+                        LineDepthText = "—";
+                    }
+
+                    if (_isFocusGraphOpen && lineFocus.Detail is { } lineDetail)
+                    {
+                        LineProfilePlot = BuildLinePlot(lineDetail);
+                    }
+                }
+
+                // Only overwritten by a pass that actually produced them - otherwise the previous
+                // overlay stays on screen rather than flickering empty between updates.
+                if (spectralLabels is not null)
+                {
+                    SpectralLineLabels = new ObservableCollection<SpectralLineLabel>(spectralLabels);
+                }
+                if (spectralGradientStops is not null)
+                {
+                    SpectralGradientStops = spectralGradientStops;
+                }
+                if (spectralOverlayDiagnostics is not null)
+                {
+                    SpectralOverlayDiagnosticsText = spectralOverlayDiagnostics;
+                }
+            });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _spectralAnalysisInFlight, 0);
         }
     }
 

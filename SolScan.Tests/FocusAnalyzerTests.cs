@@ -186,6 +186,36 @@ public class FocusAnalyzerTests
     }
 
     [Fact]
+    public void MeasureEdgeSteepness_DetailMatchesTheReportedNumbers_SoTheGraphShowsWhatWasMeasured()
+    {
+        var hump = HumpProfile(width: 700, riseStart: 200, riseWidth: 12, plateauWidth: 100, fallWidth: 12, lowLevel: 20, highLevel: 200);
+
+        var stats = FocusAnalyzer.MeasureEdgeSteepness(MakeFrame(hump, height: 4));
+
+        var detail = Assert.IsType<EdgeFocusDetail>(stats.Detail);
+        Assert.Equal(700, detail.Profile.Length);
+        Assert.Equal(stats.EdgeCount, detail.Edges.Count);
+        Assert.Equal(stats.EdgeWidthPixels, detail.Edges.Average(e => e.Width), precision: 6);
+        foreach (var edge in detail.Edges)
+        {
+            Assert.Equal(edge.Width, Math.Abs(edge.RightCrossing - edge.LeftCrossing), precision: 6);
+            Assert.True(edge.HighLevel > edge.LowLevel);
+        }
+    }
+
+    [Fact]
+    public void MeasureEdgeSteepness_ANoEdgeResultStillCarriesTheProfile_SoTheGraphCanShowWhy()
+    {
+        var flat = Enumerable.Repeat(100.0, 400).ToArray();
+
+        var stats = FocusAnalyzer.MeasureEdgeSteepness(MakeFrame(flat, height: 4));
+
+        Assert.False(stats.HasEdge);
+        Assert.NotNull(stats.Detail);
+        Assert.Empty(stats.Detail!.Edges);
+    }
+
+    [Fact]
     public void MeasureEdgeSteepness_DetectsASingleSlitEdge()
     {
         // Only one real transition in frame (low-to-high, no matching fall back down) - the slit-edge

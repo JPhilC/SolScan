@@ -1,0 +1,63 @@
+<Window x:Class="SolScan.App.Views.FocusGraphWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:SolScan.App.Views"
+        Title="Focus Graphs" Width="620" Height="700" MinWidth="360" MinHeight="420"
+        Background="#FF1E1E1E" Foreground="#FFE8E8E8" Topmost="True"
+        WindowStartupLocation="CenterOwner">
+    <!-- Pop-out, modeless graph view of what the two focus aids are measuring - modelled on sunscan-app's
+         Spectrum chart, but showing both profiles at once with each measurement's own reference lines
+         overlaid. DataContext is the (singleton) CaptureViewModel itself - see CaptureViewModel.OpenFocusGraph.
+         While this window is open both aids run regardless of whether the Focus Aid Expander is open. -->
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#FFE8E8E8"/>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="12"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Camera focus: the straightened spectral-line profile along the dispersion axis. -->
+        <DockPanel Grid.Row="0">
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <Button DockPanel.Dock="Right" Content="Reset Best" Command="{Binding ResetBestLineWidthCommand}" VerticalAlignment="Center"/>
+                <StackPanel>
+                    <TextBlock Text="Camera focus - spectral line profile" FontWeight="Bold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding LineWidthText, StringFormat='FWHM: {0}'}" FontSize="18" FontWeight="Bold" Foreground="#FFFFB347"/>
+                        <TextBlock Text="{Binding BestLineWidthText, StringFormat='   Best: {0}'}" VerticalAlignment="Bottom" Margin="0,0,0,2"/>
+                        <TextBlock Text="{Binding LineDepthText, StringFormat='   Depth: {0}'}" VerticalAlignment="Bottom" Margin="0,0,0,2" Opacity="0.7"/>
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                       Text="Horizontal axis: pixels above/below the line centre. Orange bar: half-depth width (FWHM); grey dashed: continuum. Narrower is sharper."/>
+            <Border BorderBrush="#FF333333" BorderThickness="1">
+                <local:ProfilePlot Data="{Binding LineProfilePlot}"/>
+            </Border>
+        </DockPanel>
+
+        <!-- Collimator focus: the horizontal (spatial-axis) intensity profile across the disk/slit edge. -->
+        <DockPanel Grid.Row="2">
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <Button DockPanel.Dock="Right" Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" VerticalAlignment="Center"/>
+                <StackPanel>
+                    <TextBlock Text="Collimator focus - edge profile" FontWeight="Bold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding EdgeWidthText, StringFormat='Edge width: {0}'}" FontSize="18" FontWeight="Bold" Foreground="#FFFFB347"/>
+                        <TextBlock Text="{Binding BestEdgeWidthText, StringFormat='   Best: {0}'}" VerticalAlignment="Bottom" Margin="0,0,0,2"/>
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                       Text="Horizontal axis: columns across the frame. Orange dashed: the 10% and 90% points of each measured edge; grey dashed: its low/high levels. Narrower is sharper."/>
+            <Border BorderBrush="#FF333333" BorderThickness="1">
+                <local:ProfilePlot Data="{Binding EdgeProfilePlot}"/>
+            </Border>
+        </DockPanel>
+    </Grid>
+</Window>

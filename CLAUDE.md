@@ -965,7 +965,7 @@ turns out to matter.
 
 Also real: the collimator-focus aid - `SolScan.Core.Camera.FocusAnalyzer.MeasureEdgeSteepness` (see
 CLAUDE.md's sunscan-app entry above for why this is a *second*, distinct focus aid from the
-still-unbuilt camera-focus/FWHM one), now on its fourth design, each revision driven by a concrete
+camera-focus/FWHM one, `SpectralLineFocusAnalyzer`, described in its own entry further down), now on its fourth design, each revision driven by a concrete
 real-hardware failure rather than by guesswork:
 
 1. A method-for-method port of sunscan-backend's `focus_analyzer.py`'s `measure_focus_two_edges` - a
@@ -1486,7 +1486,7 @@ which now calls it too rather than duplicating the same `AppSettings.SelectedEqu
 kept live for the preview loop to use. Inside `ProcessPreviewFrame` (the same already-throttled,
 already-offloaded-to-the-thread-pool step `FocusAnalyzer.MeasureEdgeSteepness` already established as
 the precedent for non-trivial full-resolution per-frame analysis - see the collimator-focus-aid entry
-above), the spectral overlay runs on its *own*, slower cadence (`SpectralOverlayUpdateInterval`, ~400ms -
+above), the spectral overlay runs on its *own*, slower cadence (`SpectralOverlayUpdateInterval`, ~400ms - since replaced by the shared 300ms `SpectralAnalysisInterval` and moved onto its own worker, see the camera-focus-aid entry -
 a person turning a grating by hand doesn't need 20fps responsiveness, and this is real work given the
 real 3840x2160 frame size confirmed on the user's own hardware) rather than every throttled preview tick,
 gated by a plain (not `Interlocked`) `_lastSpectralOverlayUtc` field - safe without extra locking since
@@ -2084,9 +2084,101 @@ worth keeping on record: **future performance testing/comparisons in this codeba
 Release build** - Debug can hide, or even invert, a real improvement, particularly for parallelized/
 CPU-bound work like this.
 
+Also real: the **camera-focus aid** - `SolScan.Processing.Spectrum.SpectralLineFocusAnalyzer`, the
+second of the two focus aids sunscan-app has (see its entry above), measuring how sharply the *camera*
+has resolved a spectral line rather than the collimator's edge sharpness. Reports the FWHM (full width
+at half depth, in pixels) of the line the frame is centred on - the number to *minimize*, with a running
+"Best" low-water mark, in the same "Focus Aid" Expander as the collimator's edge width (now split into
+"Collimator"/"Camera" sub-sections; one "Reset Best" button resets both, `ResetBestFocusCommand`,
+renamed from `ResetBestEdgeWidthCommand`). Deliberately not a port of sunscan-backend's `calculate_fwhm`,
+which takes the span of samples at or above half the profile's *maximum* - right for a bright peak, wrong
+for a Fraunhofer *absorption* dip, and with no allowance for curvature. Instead it reuses the already-
+validated `SpectralLineCurvatureDetector` + `SpectralProfileExtractor` (the same pair the live overlay
+uses) to *straighten* the line first - the "smile" is an optics property, not a focus one, and a plain
+per-row average across a curved line would inflate the width - then finds the dip minimum near the fitted
+centre, takes the local continuum as the *lower* of the highest values either side (so half-depth is
+always crossable on both), and linearly interpolates the two half-depth crossings for a sub-pixel width.
+Depth-relative, so stable across Gain/Exposure; comparable only at the same binning and on the same line
+(the line locked onto is whichever the curvature detector picks - the darkest at the centre column).
+Reports "no line" rather than a doubtful number: a flat frame, a dip under 3% of its continuum, a missing
+crossing, or - found while writing the tests, not anticipated - a sampled window truncated close to the
+dip (line near the frame's top/bottom edge), where the shrunken "continuum" gives a plausible but far too
+narrow width that would set a false "Best"; each side must extend at least 2x as far as its own half-depth
+crossing (`MinSideExtentOverHalfWidth`). Only measured while the Focus Aid Expander is open, smoothed by a
+3-reading rolling median (shorter than the collimator's 5, since it updates less often).
+
+**Preview-lag bug found on first real use, and its fix.** The first version ran this inline in
+`ProcessPreviewFrame`, and the user reported a very laggy preview while adjusting focus (even though the
+capture rate read ~9.3fps). Measured in a Release build on a 3840x2160 Mono16 frame: the plain
+`SpectralLineCurvatureDetector.Detect` costs ~790ms (it walks every column, allocating lists and striding
+down a 2D array - fine for the offline pipeline's one averaged frame, not for live use), and
+`ProcessPreviewFrame` is single-flight, so that stalled every preview frame arriving meanwhile. The
+spectral overlay ran the same fit inline too, so it had the same latent problem. Two fixes:
+1. `SolScan.Processing.Spectrum.LiveCurvatureFitter` fits on a column-decimated copy (stride ~width/960, so
+   4 on the real sensor; every row kept, since the sub-pixel line centre depends on vertical resolution) and
+   rescales the polynomial back to full-frame columns - ~143ms vs ~808ms, and a stride of 1 (narrow frames)
+   is exactly the plain detector's fit. `SpectralOverlayAnalyzer.Analyze` uses it now too (new optional
+   `curvature` parameter to share a fit; the offline pipeline is untouched and still uses the full detector).
+2. `CaptureViewModel.TryStartSpectralAnalysis`/`RunSpectralAnalysis` move both consumers onto their own
+   single-flight worker (`_spectralAnalysisInFlight`, separate from `_previewProcessingInFlight`), on a
+   *copy* of the frame (the ASI driver reuses a ring of 8 buffers, so a long analysis could otherwise read one
+   the camera has since overwritten), sharing one fit per pass and one cadence (`SpectralAnalysisInterval`,
+   300ms - replaces the overlay's old separate 400ms interval). A slow analysis can now only delay its own
+   readouts, never the preview. Measured after: fit ~143ms, a full line-focus measurement ~170ms (~33ms given
+   a shared fit). `LoadTestImage` now refuses with a status message if a pass is still running (previously it
+   could rely on the inline path).
+The collimator's `FocusAnalyzer.MeasureEdgeSteepness` is still inline on the preview thread (~60-80ms per frame
+in Release), but is now *gated* (see the follow-up below) so it only costs that while something is showing it.
+
+**Follow-up: gating, separate resets, and the focus-graph window.** Requested after the above:
+- **Gating.** Both focus aids now run only while their readout is visible: the Focus Aid Expander is open *or*
+  the pop-out graph window is (`IsFocusAidExpanded || _isFocusGraphOpen`). Before this the collimator maths ran
+  on every preview frame regardless. Note the Expander's state is persisted and closing the options drawer doesn't
+  collapse it, so an Expander left open still runs with the panel hidden - gating on real panel visibility is a
+  possible further step, not done. The spectral *overlay* is independent of all this (its own toggles).
+- **Separate resets.** `ResetBestEdgeWidthCommand`/`ResetBestLineWidthCommand` replace the single
+  `ResetBestFocusCommand` - the two aids are adjusted independently, so resetting one shouldn't discard the other's
+  best. Live-view start still resets both (`ResetAllBestFocus`).
+- **Focus-graph window** (`Views/FocusGraphWindow.xaml`, opened by "Graphs…" in the Focus Aid Expander via
+  `CaptureViewModel.OpenFocusGraph`) - the counterpart of sunscan-app's `Spectrum.js` chart, which plots a live 1D
+  profile with its FWHM (the vertical/dispersion-axis profile for camera focus; the horizontal/intensity profile for
+  the spatial axis). Relevant to SolScan's approach because both aids already build exactly those profiles
+  internally; the graph exposes them and, beyond sunscan's, overlays what each number was derived from: for the
+  camera aid the continuum level and the half-depth bar between the two FWHM crossings; for the collimator each
+  measured edge's 10%/90% crossing points and its low/high plateau levels. A no-line/no-edge result still plots the
+  trace (plus whatever reference levels were found), so you can see *why* it was rejected. To support this,
+  `EdgeFocusStats`/`SpectralLineFocusStats` gained an optional trailing `Detail` (`EdgeFocusDetail`/
+  `SpectralLineFocusDetail`); existing positional construction and every prior test are unaffected. Drawn by a small
+  dependency-free `ProfilePlot` control (`OnRender`, same draw-our-own-geometry approach as the Capture histogram -
+  no charting library added) from `ProfilePlotData`/`PlotLine` in `SolScan.App.ViewModels`. Modeless, `Topmost`
+  like Hand Control, DataContext is the singleton `CaptureViewModel` itself (no separate view model - it's a pure
+  view over properties that already existed plus `LineProfilePlot`/`EdgeProfilePlot`, populated only while the
+  window is open). Covered by new tests asserting the detail agrees with the reported numbers (crossings' distance
+  = width, half level midway between floor and continuum) and that no-line/no-edge results still carry the profile.
+  NOT YET VALIDATED visually against the running app or real hardware - `ProfilePlot`'s layout/labels are
+  build-verified only. Also shows the line's depth as context (a very shallow line makes the
+width less reliable). Covered by `SpectralLineFocusAnalyzerTests`: analytic Gaussian FWHM recovered for
+three widths, sharper-vs-softer ordering, brightness-scale independence, an off-centre dip, and the
+no-line cases above, plus a full-frame case proving a strongly curved line measures the same as a
+straight one. NOT YET VALIDATED against real hardware/optics - synthetic data only; the 3% depth floor,
+window size (a fraction of frame height, min 48 rows) and the 300ms cadence are starting values, not calibrated
+ones - expect the same real-hardware iteration the collimator aid went through. The overlay and this aid share one curvature fit per pass (see above).
+
+Also real: **app-wide scrollbar style.** The Capture preview's scrollbars (shown when zoomed past the viewport)
+were invisible: the preview is dark but the MaterialDesign *Light* theme merged into that view draws the thumb
+dark grey. Fixed first for that ScrollViewer alone (confirmed by the user in the running app), then promoted to
+every scrollbar so the app is consistent: `Themes/ScrollBarStyles.xaml` - orange `#FFFFB347` thumb (same accent
+as the focus graphs), own templates for both orientations, deliberately not based on MaterialDesign's style.
+The track is a semi-transparent *grey* (`#26808080`), not the white tint of the preview-only version, so it reads
+on the app's light views as well as its dark surfaces. It's merged in **two** places, both required: `App.xaml`
+(plain-WPF views, windows, popups) and `MaterialDesignScoped.xaml` after the MaterialDesign dictionaries - a view
+merging that theme into its own `UserControl.Resources` resolves MaterialDesign's implicit `ScrollBar` style
+first (closer scope), so App-level alone would leave Capture/Process on the old look. The all-scrollbars version
+on the light views is build-verified only.
+
 Placeholder: within Phase 4 itself: no exposure/fps calculator, no wide/ROI *view
-toggle* (see the centred ROI note above for what's real there instead), no camera-focus/FWHM aid,
-no live line-ID overlay yet (see the Phase 4 sub-items below). Phase 2's mount control also
+toggle* (see the centred ROI note above for what's real there instead). (The live line-ID overlay
+and both focus aids are real now - see their "Also real" entries.) Phase 2's mount control also
 doesn't yet cover Az/Alt slewing or custom tracking rates/FindHome/AtHome; Phase 3's ephemeris slew
 doesn't yet include a lead-offset, and its fine-tune is the simple hill-climb described above, not yet
 the full spiral-search-then-hill-climb design - all later phases per the build plan below.
@@ -2291,8 +2383,8 @@ the full spiral-search-then-hill-climb design - all later phases per the build p
      continuum margin) into pixels, plus a small smile-curvature allowance - sized to the *smallest*
      value that reaches the reconstruction goal, since every extra row costs frame-rate/USB-bandwidth
      budget the scan-sampling fps target also needs
-   - a camera focus aid (port `calculate_fwhm`'s spectral-line-width measurement - narrower FWHM
-     means sharper camera focus) - still outstanding
+   - a camera focus aid (spectral-line-width measurement - narrower FWHM means sharper camera focus) -
+     **done**, see the "camera-focus aid" entry under "Also real" (`SpectralLineFocusAnalyzer`)
    - a collimator focus aid (port `focus_analyzer.py`'s disk-edge-sharpness measurement - sharper
      disk edges mean better collimator alignment) - **done**, see the "Also real" note above
      (`FocusAnalyzer`/CaptureView.xaml's "Focus Aid" panel)

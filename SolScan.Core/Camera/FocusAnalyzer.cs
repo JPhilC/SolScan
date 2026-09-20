@@ -21,7 +21,21 @@ namespace SolScan.Core.Camera;
 /// <see cref="FocusAnalyzer.IsSeparationTrustworthy"/>); <see cref="EdgeWidthPixels"/> is the average
 /// across whichever of those were found.
 /// </summary>
-public readonly record struct EdgeFocusStats(bool HasEdge, double EdgeWidthPixels, int EdgeCount);
+public readonly record struct EdgeFocusStats(bool HasEdge, double EdgeWidthPixels, int EdgeCount, EdgeFocusDetail? Detail = null);
+
+/// <summary>
+/// What a caller needs to *draw* a <see cref="FocusAnalyzer.MeasureEdgeSteepness"/> reading (the focus-aid
+/// graph): the denoised horizontal profile the measurement ran on - present even when no edge was found,
+/// since seeing why is the point - plus each edge that was measured. <see cref="Profile"/> is indexed by
+/// column (full native resolution) and shared with the analyzer, so callers must treat it as read-only.
+/// </summary>
+public sealed record EdgeFocusDetail(double[] Profile, IReadOnlyList<EdgeMeasurement> Edges);
+
+/// <summary>One measured edge: its sub-pixel width and where its 10% and 90% threshold crossings fell
+/// (<see cref="LeftCrossing"/>/<see cref="RightCrossing"/> are positions in columns, whichever order
+/// the edge's direction puts them in - the width is their distance), plus the two flat plateau levels
+/// they were measured between.</summary>
+public readonly record struct EdgeMeasurement(double Width, double LeftCrossing, double RightCrossing, double LowLevel, double HighLevel);
 
 /// <summary>
 /// Collimator-focus aid - see SolScan CLAUDE.md's "Collimator focus" note under Phase 4. Distinct
@@ -167,7 +181,7 @@ public static class FocusAnalyzer
         var range = max - min;
         if (range <= 0)
         {
-            return new EdgeFocusStats(false, 0, 0); // perfectly flat frame - nothing to measure
+            return new EdgeFocusStats(false, 0, 0, new EdgeFocusDetail(profile, [])); // perfectly flat frame - nothing to measure
         }
 
         var gradient = ComputeGradient(profile);
@@ -207,24 +221,22 @@ public static class FocusAnalyzer
         var risingMagnitude = gradient[risingIndex];
         var fallingMagnitude = -gradient[fallingIndex];
 
-        double widthSum = 0;
-        var edgeCount = 0;
+        var edges = new List<EdgeMeasurement>(2);
 
-        if (risingMagnitude > 0 && MeasureRisingEdgeWidth(profile, risingIndex, range) is { } risingWidth)
+        if (risingMagnitude > 0 && MeasureRisingEdge(profile, risingIndex, range) is { } rising)
         {
-            widthSum += risingWidth;
-            edgeCount++;
+            edges.Add(rising);
         }
 
-        if (fallingMagnitude > 0 && MeasureFallingEdgeWidth(profile, fallingIndex, range) is { } fallingWidth)
+        if (fallingMagnitude > 0 && MeasureFallingEdge(profile, fallingIndex, range) is { } falling)
         {
-            widthSum += fallingWidth;
-            edgeCount++;
+            edges.Add(falling);
         }
 
-        return edgeCount == 0
-            ? new EdgeFocusStats(false, 0, 0) // no candidate edge could be confidently characterized
-            : new EdgeFocusStats(true, widthSum / edgeCount, edgeCount);
+        var detail = new EdgeFocusDetail(profile, edges);
+        return edges.Count == 0
+            ? new EdgeFocusStats(false, 0, 0, detail) // no candidate edge could be confidently characterized
+            : new EdgeFocusStats(true, edges.Average(e => e.Width), edges.Count, detail);
     }
 
     /// <summary>Builds one per-column profile from <paramref name="rowSampleCount"/> rows, evenly
@@ -346,10 +358,10 @@ public static class FocusAnalyzer
         return gradient;
     }
 
-    /// <summary>Sub-pixel width of a rising (low-to-high) transition centred near <paramref name="index"/> -
+    /// <summary>Sub-pixel measurement of a rising (low-to-high) transition centred near <paramref name="index"/> -
     /// the low side is to its left, the high side to its right. See <see cref="FindPlateau"/> for when
     /// this declines to measure at all.</summary>
-    private static double? MeasureRisingEdgeWidth(double[] profile, int index, double globalRange)
+    private static EdgeMeasurement? MeasureRisingEdge(double[] profile, int index, double globalRange)
     {
         var low = FindPlateau(profile, index, sideDirection: -1, globalRange);
         var high = FindPlateau(profile, index, sideDirection: +1, globalRange);
@@ -366,12 +378,14 @@ public static class FocusAnalyzer
         // needed, rather than a separate fixed cap.
         var xLow = FindCrossing(profile, index, direction: -1, lowThreshold, findAtOrBelow: true, lowPlateau.Distance + PlateauWindowSize);
         var xHigh = FindCrossing(profile, index, direction: +1, highThreshold, findAtOrBelow: false, highPlateau.Distance + PlateauWindowSize);
-        return xLow is { } lo && xHigh is { } hi ? Math.Abs(hi - lo) : null;
+        return xLow is { } lo && xHigh is { } hi
+            ? new EdgeMeasurement(Math.Abs(hi - lo), lo, hi, lowPlateau.Level, highPlateau.Level)
+            : null;
     }
 
-    /// <summary>See <see cref="MeasureRisingEdgeWidth"/> - a falling (high-to-low) transition, high
+    /// <summary>See <see cref="MeasureRisingEdge"/> - a falling (high-to-low) transition, high
     /// side to the left of <paramref name="index"/>, low side to the right.</summary>
-    private static double? MeasureFallingEdgeWidth(double[] profile, int index, double globalRange)
+    private static EdgeMeasurement? MeasureFallingEdge(double[] profile, int index, double globalRange)
     {
         var high = FindPlateau(profile, index, sideDirection: -1, globalRange);
         var low = FindPlateau(profile, index, sideDirection: +1, globalRange);
@@ -385,7 +399,9 @@ public static class FocusAnalyzer
 
         var xHigh = FindCrossing(profile, index, direction: -1, highThreshold, findAtOrBelow: false, highPlateau.Distance + PlateauWindowSize);
         var xLow = FindCrossing(profile, index, direction: +1, lowThreshold, findAtOrBelow: true, lowPlateau.Distance + PlateauWindowSize);
-        return xLow is { } lo && xHigh is { } hi ? Math.Abs(hi - lo) : null;
+        return xLow is { } lo && xHigh is { } hi
+            ? new EdgeMeasurement(Math.Abs(hi - lo), hi, lo, lowPlateau.Level, highPlateau.Level)
+            : null;
     }
 
     /// <summary>See <see cref="MinPlateauSeparationFraction"/> - true only if the two found plateaus
@@ -395,7 +411,7 @@ public static class FocusAnalyzer
 
     /// <summary>One side's found flat reference level - <see cref="Level"/> is its median value,
     /// <see cref="Distance"/> how far from the edge (in columns) it took to find it, which
-    /// <see cref="MeasureRisingEdgeWidth"/>/<see cref="MeasureFallingEdgeWidth"/> use to bound the
+    /// <see cref="MeasureRisingEdge"/>/<see cref="MeasureFallingEdge"/> use to bound the
     /// matching threshold-crossing search on that side.</summary>
     private readonly record struct PlateauResult(double Level, int Distance);
 

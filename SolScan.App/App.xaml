@@ -9,6 +9,12 @@
          OnStartup as the app's "last window" once it closes - Application.MainWindow is set
          explicitly to the real MainWindow in App.xaml.cs before that happens. -->
     <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- App-wide scrollbar look - see that file's own doc comment (it's also merged into
+                     MaterialDesignScoped.xaml, which would otherwise shadow it in the views using that). -->
+                <ResourceDictionary Source="/Themes/ScrollBarStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
         <!-- Implicit style (no x:Key) so every Window - MainWindow, SplashWindow, and any added
              later - picks up the app icon without having to set it individually. Mirrors
              RASTA.App/App.xaml's equivalent style. -->
@@ -31,5 +37,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

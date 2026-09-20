@@ -305,11 +305,28 @@
                      adjusting still leaves the best (narrowest) point actually reached visible. -->
                 <Expander Style="{StaticResource FlatExpanderStyle}" Header="Focus Aid" IsExpanded="{Binding IsFocusAidExpanded, Mode=TwoWay}" Margin="0,0,0,12">
                     <StackPanel Margin="0,8,0,0">
-                        <TextBlock Text="{Binding EdgeWidthText, StringFormat='Edge Width: {0}'}" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding BestEdgeWidthText, StringFormat='Best: {0}'}" Margin="0,4,0,8"/>
-                        <Button Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Collimator" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding EdgeWidthText, StringFormat='Edge Width: {0}'}" FontWeight="Bold"
+                                   ToolTip="Width over which the solar disk's (or slit's) edge transitions from dark to bright. Adjust the collimator focus to minimize it."/>
+                        <TextBlock Text="{Binding BestEdgeWidthText, StringFormat='Best: {0}'}" Margin="0,4,0,4"/>
                         <TextBlock Text="Minimize the edge width while adjusting the collimator - smaller is sharper."
-                                   Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                   Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <Button Content="Reset Best" Command="{Binding ResetBestEdgeWidthCommand}" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <TextBlock Text="Camera" FontWeight="SemiBold" Opacity="0.7" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding LineWidthText, StringFormat='Line Width: {0}'}" FontWeight="Bold"
+                                   ToolTip="Full width, at half its depth, of the spectral line the frame is centred on (FWHM). A better-focused camera resolves the same line more narrowly."/>
+                        <TextBlock Text="{Binding BestLineWidthText, StringFormat='Best: {0}'}" Margin="0,4,0,0"/>
+                        <TextBlock Text="{Binding LineDepthText, StringFormat='Line depth: {0}'}" Margin="0,4,0,4"
+                                   ToolTip="How deep the line's dip is compared with the continuum either side. A very shallow line makes the width less reliable."/>
+                        <TextBlock Text="Minimize the line width while adjusting the camera's focus - a narrower line is sharper. Only comparable at the same binning and on the same line."
+                                   Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <Button Content="Reset Best" Command="{Binding ResetBestLineWidthCommand}" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <Button Content="Graphs…" Command="{Binding OpenFocusGraphCommand}" HorizontalAlignment="Left"
+                                ToolTip="Open a pop-out window plotting the line profile and the edge profile these readings are measured from."/>
+                        <TextBlock Text="Both readings are only measured while this section (or the graph window) is open."
+                                   Opacity="0.7" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Expander>
 

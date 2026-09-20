@@ -1,6 +1,7 @@
 using SolScan.Core.Camera;
 using SolScan.Core.Equipment;
 using SolScan.Core.Processing;
+using SolScan.Processing.Math;
 using SolScan.Processing.Shg;
 
 namespace SolScan.Processing.Spectrum;
@@ -25,16 +26,22 @@ public static class SpectralOverlayAnalyzer
     /// as <c>SolScan.Tools</c>' own <c>annotate</c> command.</param>
     /// <param name="referenceWindows">Defaults to the bundled resource - overridable so tests (and any
     /// future caller with its own reference data) can supply synthetic windows instead.</param>
+    /// <param name="curvature">An already-fitted line-curvature polynomial for <paramref name="frame"/>,
+    /// in full-frame column coordinates - fitted here via <see cref="LiveCurvatureFitter"/> if null.</param>
     public static SpectralOverlayResult Analyze(
         CameraFrame frame,
         SpectrographProfile instrument,
         double pixelSizeMicrons,
         int binning = 1,
         int? maxShiftPixels = null,
-        IReadOnlyList<ReferenceWindow>? referenceWindows = null)
+        IReadOnlyList<ReferenceWindow>? referenceWindows = null,
+        QuadraticPolynomial? curvature = null)
     {
         var floatFrame = FrameConversion.ToFloatArray(frame);
-        var polynomial = new SpectralLineCurvatureDetector().Detect(floatFrame);
+        // LiveCurvatureFitter, not the plain detector: this runs repeatedly on live full-resolution
+        // frames, where the plain detector alone measured ~790ms - see LiveCurvatureFitter's own doc
+        // comment. A caller that has already fitted this frame can pass it in to avoid doing it twice.
+        var polynomial = curvature ?? LiveCurvatureFitter.Fit(frame);
         // A single representative row for the whole line, at the frame's own horizontal centre - the
         // fitted curve's row position varies slightly across columns (the "smile"), but a live overlay
         // places one label per line, not one per column, so this is the one Y a caller needs.

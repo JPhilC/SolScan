@@ -17,6 +17,9 @@
         <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesignTheme.Defaults.xaml" />
         <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Primary/MaterialDesignColor.Grey.xaml" />
         <ResourceDictionary Source="pack://application:,,,/MaterialDesignColors;component/Themes/Recommended/Accent/MaterialDesignColor.Blue.xaml" />
+        <!-- After the MaterialDesign dictionaries so its implicit ScrollBar style wins over
+             MaterialDesign's own - the app-wide scrollbar look, see that file's doc comment. -->
+        <ResourceDictionary Source="/Themes/ScrollBarStyles.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
     <!-- MaterialDesignThemes' own MaterialDesignHamburgerToggleButton animates its hamburger icon into
